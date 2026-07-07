@@ -40,6 +40,12 @@ pub struct SearchResult {
 
     /// File extension.
     pub extension: Option<String>,
+
+    /// Number of times this file has been run (launched).
+    pub run_count: Option<u32>,
+
+    /// Last run date (ISO 8601 UTC).
+    pub date_run: Option<String>,
 }
 
 /// Collection of search results.
@@ -50,6 +56,15 @@ pub struct SearchResults {
 
     /// Total number of matching items (may be larger than results.len()).
     pub total: u64,
+
+    /// Number of results returned in this page (equals results.len()).
+    pub returned: usize,
+
+    /// The offset value used for this page (0 for the first page).
+    pub offset: u32,
+
+    /// Information about any automatic exclusions applied to the query.
+    pub note: String,
 }
 
 /// Overall status of the Everything IPC connection.
@@ -78,16 +93,28 @@ pub struct EverythingStatus {
 pub fn search(params: SearchParams) -> Result<SearchResults> {
     let client = create_client()?;
 
-    // Build search text: optionally scope to path and exclude path
-    let search_text = build_search_text(&params.query, params.path.as_deref(), params.exclude_path.as_deref());
+    let (search_text, note) = build_search_query(
+        &params.query,
+        params.path.as_deref(),
+        params.exclude_path.as_deref(),
+        params.include_all.unwrap_or(false),
+    );
 
     // Gather all optional parameters first (avoids type-state reassignment)
     let flags = parse_fields(params.fields.as_deref());
-    let search_flags = if params.regex.unwrap_or(false) {
-        SearchFlags::Regex
-    } else {
-        SearchFlags::empty()
-    };
+    let mut search_flags = SearchFlags::empty();
+    if params.regex.unwrap_or(false) {
+        search_flags |= SearchFlags::Regex;
+    }
+    if params.match_case.unwrap_or(false) {
+        search_flags |= SearchFlags::MatchCase;
+    }
+    if params.match_whole_word.unwrap_or(false) {
+        search_flags |= SearchFlags::MatchWholeWord;
+    }
+    if params.match_path.unwrap_or(false) {
+        search_flags |= SearchFlags::MatchPath;
+    }
     let sort = params
         .sort
         .as_deref()
@@ -100,6 +127,7 @@ pub fn search(params: SearchParams) -> Result<SearchResults> {
         .search_flags(search_flags)
         .sort(sort)
         .maybe_max_results(params.max_results)
+        .maybe_offset(params.offset)
         .call()
         .map_err(|e| anyhow::anyhow!("Everything query failed: {e}"))?;
 
@@ -135,6 +163,11 @@ pub fn search(params: SearchParams) -> Result<SearchResults> {
                 .get_u32(RequestFlags::Attributes)
                 .map(format_attributes);
             let extension = item.get_string(RequestFlags::Extension);
+            let run_count = item.get_u32(RequestFlags::RunCount);
+            let date_run = item
+                .get_time(RequestFlags::DateRun)
+                .map(|ft| ((ft.dwHighDateTime as u64) << 32) | (ft.dwLowDateTime as u64))
+                .and_then(ns100_to_iso_string);
 
             SearchResult {
                 filename,
@@ -145,25 +178,47 @@ pub fn search(params: SearchParams) -> Result<SearchResults> {
                 date_accessed,
                 attributes,
                 extension,
+                run_count,
+                date_run,
             }
         })
         .collect();
 
     let total = list.total_len() as u64;
-    Ok(SearchResults { results, total })
+    let returned = results.len();
+    let offset = params.offset.unwrap_or(0);
+    Ok(SearchResults {
+        results,
+        total,
+        returned,
+        offset,
+        note,
+    })
 }
 
 /// Count matching files without retrieving result items.
-pub fn count(params: CountParams) -> Result<u64> {
+///
+/// Returns (total_count, exclusion_note).
+pub fn count(params: CountParams) -> Result<(u64, String)> {
     let client = create_client()?;
 
-    let search_flags = if params.regex.unwrap_or(false) {
-        SearchFlags::Regex
-    } else {
-        SearchFlags::empty()
-    };
+    let mut search_flags = SearchFlags::empty();
+    if params.regex.unwrap_or(false) {
+        search_flags |= SearchFlags::Regex;
+    }
+    if params.match_case.unwrap_or(false) {
+        search_flags |= SearchFlags::MatchCase;
+    }
+    if params.match_whole_word.unwrap_or(false) {
+        search_flags |= SearchFlags::MatchWholeWord;
+    }
 
-    let search_text = build_search_text(&params.query, None, params.exclude_path.as_deref());
+    let (search_text, note) = build_search_query(
+        &params.query,
+        None,
+        params.exclude_path.as_deref(),
+        params.include_all.unwrap_or(false),
+    );
 
     let list = client
         .query_wait(&search_text)
@@ -173,7 +228,7 @@ pub fn count(params: CountParams) -> Result<u64> {
         .call()
         .map_err(|e| anyhow::anyhow!("Everything count query failed: {e}"))?;
 
-    Ok(list.total_len() as u64)
+    Ok((list.total_len() as u64, note))
 }
 
 /// Quick check whether Everything is running, IPC is available, and the DB
@@ -229,50 +284,84 @@ fn create_client() -> Result<EverythingClient> {
     })
 }
 
-/// Build the search text string: concat path scope + query + exclusion pattern.
-///
-/// Supports Everything's `!` exclusion syntax: prepends `!<exclude_path> `
-/// to exclude a folder/prefix from results.
-fn build_search_text(query: &str, path: Option<&str>, exclude_path: Option<&str>) -> String {
-    let mut parts: Vec<String> = Vec::with_capacity(3);
+/// Default directory patterns excluded when include_all is false.
+const DEFAULT_EXCLUDES: &[&str] = &["node_modules", ".git", "WinSxS"];
 
-    // Path scope: prepend as a prefix to the query
-    if let Some(p) = path {
-        if !p.is_empty() {
-            let normalised = Path::new(p)
-                .to_string_lossy()
-                .trim_end_matches('\\')
-                .to_string();
-            parts.push(normalised);
-        }
-    }
+/// Build the Everything search query string with smart defaults.
+///
+/// Concatenates: search term, optional path scope, default exclusions
+/// (unless include_all), and user's explicit exclusions.
+/// Returns the query string and a human-readable exclusion note.
+fn build_search_query(
+    query: &str,
+    path: Option<&str>,
+    exclude_path: Option<&str>,
+    include_all: bool,
+) -> (String, String) {
+    let mut parts: Vec<String> = Vec::new();
+    let mut excluded_dirs: Vec<&str> = Vec::new();
 
     parts.push(query.to_string());
 
-    // Exclusion: Everything uses ! prefix for NOT
-    if let Some(ep) = exclude_path {
-        if !ep.is_empty() {
-            let normalised = Path::new(ep)
-                .to_string_lossy()
-                .trim_end_matches('\\')
-                .to_string();
-            parts.push(format!("!{}", normalised));
+    if let Some(p) = path.filter(|s| !s.is_empty()) {
+        let normalised = Path::new(p)
+            .to_string_lossy()
+            .trim_end_matches('\\')
+            .to_string();
+        parts.push(normalised);
+    }
+
+    if !include_all {
+        for excl in DEFAULT_EXCLUDES {
+            parts.push(format!("!{}", excl));
+            excluded_dirs.push(excl);
         }
     }
 
-    parts.join(" ")
+    if let Some(ep) = exclude_path.filter(|s| !s.is_empty()) {
+        for part in ep.split(';') {
+            let trimmed = part.trim();
+            if !trimmed.is_empty() {
+                parts.push(format!("!{}", trimmed));
+                excluded_dirs.push(trimmed);
+            }
+        }
+    }
+
+    let note = if excluded_dirs.is_empty() {
+        String::new()
+    } else {
+        format!("Excluded directories: {}", excluded_dirs.join(", "))
+    };
+
+    (parts.join(" "), note)
 }
 
 /// Map a sort string to the corresponding `Sort` enum value.
 fn parse_sort(s: &str) -> Option<Sort> {
     match s {
         "name" => Some(Sort::NameAscending),
+        "name_desc" => Some(Sort::NameDescending),
         "path" => Some(Sort::PathAscending),
+        "path_desc" => Some(Sort::PathDescending),
         "size" => Some(Sort::SizeDescending),
+        "size_asc" => Some(Sort::SizeAscending),
         "date_modified" => Some(Sort::DateModifiedDescending),
+        "date_modified_asc" => Some(Sort::DateModifiedAscending),
         "date_created" => Some(Sort::DateCreatedDescending),
+        "date_created_asc" => Some(Sort::DateCreatedAscending),
         "date_accessed" => Some(Sort::DateAccessedDescending),
+        "date_accessed_asc" => Some(Sort::DateAccessedAscending),
         "extension" => Some(Sort::ExtensionAscending),
+        "extension_desc" => Some(Sort::ExtensionDescending),
+        "run_count" => Some(Sort::RunCountDescending),
+        "run_count_asc" => Some(Sort::RunCountAscending),
+        "date_run" => Some(Sort::DateRunDescending),
+        "date_run_asc" => Some(Sort::DateRunAscending),
+        "type_name" => Some(Sort::TypeNameAscending),
+        "type_name_desc" => Some(Sort::TypeNameDescending),
+        "date_recently_changed" => Some(Sort::DateRecentlyChangedDescending),
+        "date_recently_changed_asc" => Some(Sort::DateRecentlyChangedAscending),
         _ => None,
     }
 }
@@ -306,6 +395,10 @@ fn parse_fields(fields: Option<&str>) -> RequestFlags {
             "date_accessed" => flags |= RequestFlags::DateAccessed,
             "attributes" => flags |= RequestFlags::Attributes,
             "extension" => flags |= RequestFlags::Extension,
+            "run_count" => flags |= RequestFlags::RunCount,
+            "date_run" => flags |= RequestFlags::DateRun,
+            "date_recently_changed" => flags |= RequestFlags::DateRecentlyChanged,
+            "file_list_filename" => flags |= RequestFlags::FileListFileName,
             _ => {}
         }
     }
