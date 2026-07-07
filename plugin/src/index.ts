@@ -14,12 +14,12 @@ const BINARY_PATH: string =
 
 const CALL_TIMEOUT_MS = 30_000;
 
-// ── MCP stdio transport ──────────────────────────────────────────
+// ── MCP stdio transport (NDJSON — newline-delimited JSON) ────────
+// The rmcp crate's transport-io uses NDJSON, NOT Content-Length framing.
+// Each message is a single JSON line terminated by \n.
 
 function sendFrame(child: ChildProcess, msg: object): void {
-  const json = JSON.stringify(msg);
-  const header = `Content-Length: ${Buffer.byteLength(json, "utf8")}\r\n\r\n`;
-  child.stdin!.write(header + json);
+  child.stdin!.write(JSON.stringify(msg) + "\n");
 }
 
 function readNextMessage(
@@ -35,14 +35,11 @@ function readNextMessage(
 
     const onData = (chunk: Buffer) => {
       buf += chunk.toString();
-      const m = buf.match(/^Content-Length: (\d+)\r\n\r\n/);
-      if (!m) return;
-      const len = Number.parseInt(m[1], 10);
-      const headerLen = m[0].length;
-      if (buf.length < headerLen + len) return;
+      const idx = buf.indexOf("\n");
+      if (idx === -1) return;
       clearTimeout(timer);
       cleanup();
-      resolve(buf.slice(headerLen, headerLen + len));
+      resolve(buf.slice(0, idx));
     };
 
     const onError = (err: Error) => {
