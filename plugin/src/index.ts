@@ -215,7 +215,7 @@ const plugin: Plugin = async (_input, _options) => {
         },
         execute: async (args, _context) => {
           const text = await callMCP("find_files", args as Record<string, unknown>);
-          return JSON.parse(text);
+          return text;
         },
       }),
 
@@ -261,7 +261,7 @@ const plugin: Plugin = async (_input, _options) => {
         },
         execute: async (args, _context) => {
           const text = await callMCP("count_files", args as Record<string, unknown>);
-          return JSON.parse(text);
+          return text;
         },
       }),
 
@@ -274,7 +274,7 @@ const plugin: Plugin = async (_input, _options) => {
         args: {},
         execute: async (_args, _context) => {
           const text = await callMCP("search_status", {});
-          return JSON.parse(text);
+          return text;
         },
       }),
     },
