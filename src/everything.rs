@@ -56,11 +56,20 @@ pub struct SearchResults {
 #[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct EverythingStatus {
-    /// Whether the IPC client was successfully created (Everything is reachable).
+    /// Whether Everything is connected and fully usable (IPC available + DB loaded).
     pub connected: bool,
 
     /// Whether the Everything GUI window was found.
     pub window_found: bool,
+
+    /// Whether the IPC message channel is functional (SendMessageW responds).
+    pub ipc_available: bool,
+
+    /// Whether Everything's database is fully loaded (indexing complete).
+    pub db_loaded: bool,
+
+    /// Everything version string, if available.
+    pub version: Option<String>,
 }
 
 // ---- Public API ------------------------------------------------------------
@@ -174,26 +183,43 @@ pub fn count(params: CountParams) -> Result<u64> {
     Ok(list.total_len() as u64)
 }
 
-/// Quick check whether Everything is running and IPC is available.
-///
-/// Returns `true` if `EverythingClient::new()` succeeds.
+/// Quick check whether Everything is running, IPC is available, and the DB
+/// is loaded.  This is stricter than `EverythingClient::new()` alone — it
+/// also verifies the IPC message channel responds and the database is ready.
+#[allow(dead_code)]
 pub fn is_running() -> bool {
-    EverythingClient::new().is_ok()
+    let Ok(client) = EverythingClient::new() else {
+        return false;
+    };
+    client.is_ipc_available() && client.is_db_loaded()
 }
 
 /// Return detailed status of the Everything IPC connection.
 #[allow(dead_code)]
 pub fn status() -> Result<EverythingStatus> {
-    match EverythingClient::new() {
-        Ok(_client) => Ok(EverythingStatus {
-            connected: true,
-            window_found: true,
-        }),
-        Err(e) => Ok(EverythingStatus {
-            connected: false,
-            window_found: matches!(e, everything_ipc::wm::IpcError::NoIpcWindow),
-        }),
-    }
+    let client = match EverythingClient::new() {
+        Ok(c) => c,
+        Err(e) => {
+            return Ok(EverythingStatus {
+                connected: false,
+                window_found: matches!(e, everything_ipc::wm::IpcError::NoIpcWindow),
+                ipc_available: false,
+                db_loaded: false,
+                version: None,
+            })
+        }
+    };
+
+    let ipc_available = client.is_ipc_available();
+    let db_loaded = client.is_db_loaded();
+
+    Ok(EverythingStatus {
+        connected: ipc_available && db_loaded,
+        window_found: true,
+        ipc_available,
+        db_loaded,
+        version: None,
+    })
 }
 
 // ---- Internal helpers ------------------------------------------------------

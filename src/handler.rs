@@ -49,16 +49,18 @@ impl EverythingHandler {
         Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
 
-    #[tool(description = "Check if Everything search engine is running and IPC is connected. Call this BEFORE using find_files or count_files to verify the engine is available.")]
+    #[tool(description = "Check if Everything search engine is running and IPC is connected. Returns detailed diagnostics including window status, IPC availability, and DB load state. Call this BEFORE using find_files or count_files to verify the engine is available.")]
     async fn search_status(&self) -> Result<CallToolResult, ErrorData> {
-        let connected = tokio::task::spawn_blocking(everything::is_running)
+        let status = tokio::task::spawn_blocking(everything::status)
             .await
             .map_err(|e| {
                 error!("spawn_blocking failed: {e}");
                 ErrorData::internal_error(format!("task join failed: {e}"), None)
-            })?;
+            })?
+            .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
 
-        let text = serde_json::json!({ "connected": connected }).to_string();
+        let text = serde_json::to_string_pretty(&status)
+            .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
         Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
 }
