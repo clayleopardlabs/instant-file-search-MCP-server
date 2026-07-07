@@ -2,15 +2,31 @@
 
 An [MCP](https://modelcontextprotocol.io) server that exposes the [Everything](https://www.voidtools.com) search engine (NTFS index) as AI-agent tools. Provides sub-millisecond file searches across your entire filesystem.
 
-## Installation
+## Prerequisites
 
-### Requirements
+**You must have [Everything](https://www.voidtools.com) by Voidtools installed and running on your PC.** This tool is a bridge to Everything's NTFS index — it does not include a search engine itself.
 
-- [Everything](https://www.voidtools.com) desktop app (v1.5 or later) — must be running (background, no GUI needed)
-- [Rust toolchain](https://rustup.rs) to build the binary
-- Node.js 18+ (only for the OpenCode plugin adapter)
+- Everything v1.5 or later (the "alpha" branch supports the HTTP/JSON API, but this server uses the IPC interface available in all versions)
+- Everything must be running (can run minimized to system tray, no GUI window needed)
+- Works on Windows only (Everything indexes the NTFS Master File Table)
 
-### Build
+## Who needs what
+
+| You are using... | You need | Why |
+|-----------------|----------|-----|
+| VS Code, Cursor, Claude Desktop, or any MCP client | **MCP binary only** | MCP hosts load tools directly via binary |
+| OpenCode (main agent only) | **MCP binary** (configured as MCP server in opencode.json) | Main session gets tools via MCP |
+| OpenCode (sub-agents — explore, librarian, task workers) | **MCP binary + Plugin adapter** | Sub-agents don't inherit MCP tools; the plugin makes them available to all agents |
+
+**The plugin adapter is OPTIONAL.** If you only need tools in your main chatting session, just configure the MCP server. You only need the plugin if you also want sub-agents (explore, librarian, task workers) to access Everything search.
+
+**OpenCode users need both MCP + plugin** if they want search everywhere. The plugin spawns the binary just like an MCP host would — the binary is always required.
+
+## Build
+
+### 1. Build the MCP Binary (Required for Everyone)
+
+You need the [Rust toolchain](https://rustup.rs):
 
 ```sh
 git clone https://github.com/clayleopardlabs/everything-mcp-server
@@ -18,11 +34,25 @@ cd everything-mcp-server
 cargo build --release
 ```
 
-Binary at `target/release/everything-mcp-server.exe` (Windows) or `target/release/everything-mcp-server` (Linux/Mac).
+Binary at `target/release/everything-mcp-server.exe`.
 
-### MCP Host (VS Code, Cursor, Claude Desktop, etc.)
+### 2. Build the Plugin Adapter (OpenCode Sub-Agent Support — Optional)
 
-Add to your MCP client config:
+You need Node.js 18+:
+
+```sh
+cd plugin
+npm install
+npm run build
+```
+
+Output at `plugin/dist/index.js`.
+
+## Configure
+
+### For MCP Hosts (VS Code, Cursor, Claude Desktop, etc.)
+
+Add to your MCP client configuration:
 
 ```json
 {
@@ -30,7 +60,7 @@ Add to your MCP client config:
     "everything": {
       "type": "local",
       "command": [
-        "/absolute/path/to/everything-mcp-server.exe"
+        "C:/absolute/path/to/everything-mcp-server.exe"
       ],
       "enabled": true
     }
@@ -38,32 +68,50 @@ Add to your MCP client config:
 }
 ```
 
-Available immediately. Tools surface in the main session only — sub-agents (explore, librarian) do not inherit MCP tools.
+**Tools surface in the main conversation only.** Sub-agents do not inherit MCP tools — that limitation is per-host, not from this server.
 
-### OpenCode (Plugin — Sub-Agent Support)
+### For OpenCode — MCP Server (Main Agent Only)
 
-For [OpenCode](https://opencode.ai) users, install the **plugin adapter** to make these tools available to all agents including sub-agents:
+Add to your `~/.config/opencode/opencode.json` under the `mcp` key:
 
-```sh
-# 1. Build the plugin
-cd plugin
-npm install
-npm run build
-
-# 2. Deploy to OpenCode
-mkdir -p ~/.config/opencode/plugins/everything-mcp-plugin/dist
-cp dist/* ~/.config/opencode/plugins/everything-mcp-plugin/dist/
-
-# 3. Register in opencode.json
+```json
+{
+  "mcp": {
+    "everything": {
+      "command": ["C:/absolute/path/to/everything-mcp-server.exe"],
+      "enabled": true
+    }
+  }
+}
 ```
 
-Add to your `~/.config/opencode/opencode.json` `plugin` array:
+### For OpenCode — Plugin (Sub-Agent Support)
+
+Deploy the plugin adapter so it's available to all agents:
+
+```sh
+# Deploy dist + dependencies to OpenCode's plugin directory
+mkdir -p ~/.config/opencode/plugins/everything-mcp-plugin
+cp -r plugin/dist ~/.config/opencode/plugins/everything-mcp-plugin/
+cp -r plugin/node_modules ~/.config/opencode/plugins/everything-mcp-plugin/
+cp plugin/package.json ~/.config/opencode/plugins/everything-mcp-plugin/
+```
+
+Register in the `plugin` array of `~/.config/opencode/opencode.json`:
 
 ```json
 "file:///C:/Users/YOU/.config/opencode/plugins/everything-mcp-plugin/dist/index.js"
 ```
 
-**You can keep the MCP entry too** — both can coexist. The plugin is a thin TypeScript bridge that spawns the same MCP binary internally. Every other MCP host uses the binary directly.
+**You can keep the MCP entry AND add the plugin** — they coexist. The plugin spawns the same MCP binary. The MCP entry is used by the main session; the plugin makes tools available to all sub-agents.
+
+### Plugin Lookup Order
+
+The plugin adapter locates the MCP binary by:
+
+1. `EVERYTHING_MCP_BINARY` environment variable (if set)
+2. Default path: `<plugin-dir>/../../../../target/release/everything-mcp-server.exe` (relative to the plugin's node_modules)
+3. Neither set → binary must be on `PATH` or the plugin will fail
 
 ## Usage
 
