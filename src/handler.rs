@@ -13,7 +13,7 @@ pub struct EverythingHandler;
 
 #[tool_router]
 impl EverythingHandler {
-    #[tool(description = "INSTANT file/directory search using Everything engine (NTFS index). Fastest way to find files on this PC. Supports regex, sort, path filter, and selective fields. Use this INSTEAD of glob/Get-ChildItem for any filesystem search.")]
+    #[tool(description = "INSTANT file/directory search using Everything engine (NTFS index). Fastest way to find files on this PC. Supports regex, sort, path filter, and selective fields. Use this INSTEAD of glob/Get-ChildItem for any filesystem search. IMPORTANT: for broad patterns, call count_files FIRST to gauge result size, then scope with path before calling this.")]
     async fn find_files(
         &self,
         Parameters(params): Parameters<SearchParams>,
@@ -32,7 +32,7 @@ impl EverythingHandler {
         Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
 
-    #[tool(description = "INSTANT count of matching files using Everything engine (NTFS index). Returns total number without transferring file data. Use this INSTEAD of recursive shell commands to count files.")]
+    #[tool(description = "INSTANT count of matching files using Everything engine (NTFS index). Returns total number without transferring file data. Use this FIRST for broad patterns (e.g. *.tmp, *.json) to gauge total before calling find_files. Always prefer this over recursive shell commands to count files.")]
     async fn count_files(
         &self,
         Parameters(params): Parameters<CountParams>,
