@@ -215,7 +215,7 @@ pub fn count(params: CountParams) -> Result<(u64, String)> {
 
     let (search_text, note) = build_search_query(
         &params.query,
-        None,
+        params.path.as_deref(),
         params.exclude_path.as_deref(),
         params.include_all.unwrap_or(false),
     );
@@ -313,7 +313,7 @@ fn build_search_query(
 
     if !include_all {
         for excl in DEFAULT_EXCLUDES {
-            parts.push(format!("!{}", excl));
+            parts.push(format!("!<{}\\>", excl));
             excluded_dirs.push(excl);
         }
     }

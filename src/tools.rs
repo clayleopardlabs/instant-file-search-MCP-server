@@ -30,6 +30,8 @@ pub struct SearchParams {
 #[schemars(description = "Fast count of files matching query using Everything NTFS index. Default scope is ALL indexed drives. By default automatically excludes node_modules, .git, and WinSxS directories. Pass include_all=true to count everything.")]
 pub struct CountParams {
     pub query: String,
+    /// Narrow search to a specific directory. Everything automatically normalises path separators.
+    pub path: Option<String>,
     pub regex: Option<bool>,
     /// Enable case-sensitive matching (default: case-insensitive).
     pub match_case: Option<bool>,
