@@ -78,17 +78,8 @@ pub struct EverythingStatus {
 pub fn search(params: SearchParams) -> Result<SearchResults> {
     let client = create_client()?;
 
-    // Build search text: optionally scope to path
-    let search_text = match params.path {
-        Some(ref p) if !p.is_empty() => {
-            let normalised = Path::new(p)
-                .to_string_lossy()
-                .trim_end_matches('\\')
-                .to_string();
-            format!("{} {}", normalised, params.query)
-        }
-        _ => params.query.clone(),
-    };
+    // Build search text: optionally scope to path and exclude path
+    let search_text = build_search_text(&params.query, params.path.as_deref(), params.exclude_path.as_deref());
 
     // Gather all optional parameters first (avoids type-state reassignment)
     let flags = parse_fields(params.fields.as_deref());
@@ -172,8 +163,10 @@ pub fn count(params: CountParams) -> Result<u64> {
         SearchFlags::empty()
     };
 
+    let search_text = build_search_text(&params.query, None, params.exclude_path.as_deref());
+
     let list = client
-        .query_wait(&params.query)
+        .query_wait(&search_text)
         .request_flags(RequestFlags::FileName)
         .search_flags(search_flags)
         .max_results(1)
@@ -234,6 +227,40 @@ fn create_client() -> Result<EverythingClient> {
              The GUI window must be visible for IPC. (underlying error: {e})"
         )
     })
+}
+
+/// Build the search text string: concat path scope + query + exclusion pattern.
+///
+/// Supports Everything's `!` exclusion syntax: prepends `!<exclude_path> `
+/// to exclude a folder/prefix from results.
+fn build_search_text(query: &str, path: Option<&str>, exclude_path: Option<&str>) -> String {
+    let mut parts: Vec<String> = Vec::with_capacity(3);
+
+    // Path scope: prepend as a prefix to the query
+    if let Some(p) = path {
+        if !p.is_empty() {
+            let normalised = Path::new(p)
+                .to_string_lossy()
+                .trim_end_matches('\\')
+                .to_string();
+            parts.push(normalised);
+        }
+    }
+
+    parts.push(query.to_string());
+
+    // Exclusion: Everything uses ! prefix for NOT
+    if let Some(ep) = exclude_path {
+        if !ep.is_empty() {
+            let normalised = Path::new(ep)
+                .to_string_lossy()
+                .trim_end_matches('\\')
+                .to_string();
+            parts.push(format!("!{}", normalised));
+        }
+    }
+
+    parts.join(" ")
 }
 
 /// Map a sort string to the corresponding `Sort` enum value.
