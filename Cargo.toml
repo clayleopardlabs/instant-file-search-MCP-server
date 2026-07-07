@@ -1,0 +1,16 @@
+[package]
+name = "everything-mcp-server"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+everything-ipc = { version = "0.1", features = ["tokio"] }
+rmcp = { version = ">=0.8", features = ["server", "macros", "schemars", "transport-io"] }
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+schemars = { version = "1", features = ["chrono04"] }
+anyhow = "1"
+windows = { version = "0.62", features = ["Win32_Foundation"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
