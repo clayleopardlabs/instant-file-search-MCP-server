@@ -1,14 +1,14 @@
-# Everything MCP Server — Instant PC File Search
+# Everything MCP Server  -  Instant PC File Search
 
-Your AI agents can search your entire computer for files instantly — like having a supercharged "find" or "search" command on every conversation.
+Your AI agents can search your entire computer for files instantly  -  like having a supercharged "find" or "search" command on every conversation.
 
 Tell your agent "find that config file from last week" or "how many DLLs are in System32?" and it will answer in milliseconds by searching the NTFS index, not by crawling folders. No waiting for directory listings, no recursive `dir` commands.
 
-Works with any MCP-compatible client (VS Code, Cursor, Claude Desktop) and with all agents in OpenCode — including sub-agents.
+Works with any MCP-compatible client (VS Code, Cursor, Claude Desktop) and with all agents in OpenCode  -  including sub-agents.
 
 ## Prerequisites
 
-**You must have [Everything](https://www.voidtools.com) by Voidtools installed and running on your PC.** This tool is a bridge to Everything's NTFS index — it does not include a search engine itself.
+**You must have [Everything](https://www.voidtools.com) by Voidtools installed and running on your PC.** This tool is a bridge to Everything's NTFS index  -  it does not include a search engine itself.
 
 - Everything v1.5 or later (the "alpha" branch supports the HTTP/JSON API, but this server uses the IPC interface available in all versions)
 - Everything must be running (can run minimized to system tray, no GUI window needed)
@@ -20,11 +20,11 @@ Works with any MCP-compatible client (VS Code, Cursor, Claude Desktop) and with 
 |-----------------|----------|-----|
 | VS Code, Cursor, Claude Desktop, or any MCP client | **MCP binary only** | MCP hosts load tools directly via binary |
 | OpenCode (main agent only) | **MCP binary** (configured as MCP server in opencode.json) | Main session gets tools via MCP |
-| OpenCode (sub-agents — explore, librarian, task workers) | **MCP binary + Plugin adapter** | Sub-agents don't inherit MCP tools; the plugin makes them available to all agents |
+| OpenCode (sub-agents  -  explore, librarian, task workers) | **MCP binary + Plugin adapter** | Sub-agents don't inherit MCP tools; the plugin makes them available to all agents |
 
 **The plugin adapter is OPTIONAL.** If you only need tools in your main chatting session, just configure the MCP server. You only need the plugin if you also want sub-agents (explore, librarian, task workers) to access Everything search.
 
-**OpenCode users need both MCP + plugin** if they want search everywhere. The plugin spawns the binary just like an MCP host would — the binary is always required.
+**OpenCode users need both MCP + plugin** if they want search everywhere. The plugin spawns the binary just like an MCP host would  -  the binary is always required.
 
 ## Build
 
@@ -40,7 +40,7 @@ cargo build --release
 
 Binary at `target/release/everything-mcp-server.exe`.
 
-### 2. Build the Plugin Adapter (OpenCode Sub-Agent Support — Optional)
+### 2. Build the Plugin Adapter (OpenCode Sub-Agent Support  -  Optional)
 
 You need Node.js 18+:
 
@@ -72,9 +72,9 @@ Add to your MCP client configuration:
 }
 ```
 
-**Tools surface in the main conversation only.** Sub-agents do not inherit MCP tools — that limitation is per-host, not from this server.
+**Tools surface in the main conversation only.** Sub-agents do not inherit MCP tools  -  that limitation is per-host, not from this server.
 
-### For OpenCode — MCP Server (Main Agent Only)
+### For OpenCode  -  MCP Server (Main Agent Only)
 
 Add to your `~/.config/opencode/opencode.json` under the `mcp` key:
 
@@ -89,7 +89,7 @@ Add to your `~/.config/opencode/opencode.json` under the `mcp` key:
 }
 ```
 
-### For OpenCode — Plugin (Sub-Agent Support)
+### For OpenCode  -  Plugin (Sub-Agent Support)
 
 Deploy the plugin adapter so it's available to all agents:
 
@@ -107,7 +107,7 @@ Register in the `plugin` array of `~/.config/opencode/opencode.json`:
 "file:///C:/Users/YOU/.config/opencode/plugins/everything-mcp-plugin/dist/index.js"
 ```
 
-**You can keep the MCP entry AND add the plugin** — they coexist. The plugin spawns the same MCP binary. The MCP entry is used by the main session; the plugin makes tools available to all sub-agents.
+**You can keep the MCP entry AND add the plugin**  -  they coexist. The plugin spawns the same MCP binary. The MCP entry is used by the main session; the plugin makes tools available to all sub-agents.
 
 ### Plugin Lookup Order
 
