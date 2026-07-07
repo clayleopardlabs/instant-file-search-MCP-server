@@ -1,6 +1,10 @@
 # Everything MCP Server — Instant PC File Search
 
-An [MCP](https://modelcontextprotocol.io) server that exposes the [Everything](https://www.voidtools.com) search engine (NTFS index) as AI-agent tools. Provides sub-millisecond file searches across your entire filesystem.
+Your AI agents can search your entire computer for files instantly — like having a supercharged "find" or "search" command on every conversation.
+
+Tell your agent "find that config file from last week" or "how many DLLs are in System32?" and it will answer in milliseconds by searching the NTFS index, not by crawling folders. No waiting for directory listings, no recursive `dir` commands.
+
+Works with any MCP-compatible client (VS Code, Cursor, Claude Desktop) and with all agents in OpenCode — including sub-agents.
 
 ## Prerequisites
 
