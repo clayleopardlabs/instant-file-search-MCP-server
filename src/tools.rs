@@ -2,7 +2,7 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize, JsonSchema)]
-#[schemars(description = "Search for files matching query")]
+#[schemars(description = "Find files matching query using Everything NTFS index. Supports wildcards (*.txt), regex, path filters, and date/size sorting.")]
 pub struct SearchParams {
     pub query: String,
     pub max_results: Option<u32>,
@@ -13,7 +13,7 @@ pub struct SearchParams {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
-#[schemars(description = "Fast count of matching files")]
+#[schemars(description = "Fast count of files matching query using Everything NTFS index")]
 pub struct CountParams {
     pub query: String,
     pub regex: Option<bool>,

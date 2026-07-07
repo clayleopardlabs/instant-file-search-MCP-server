@@ -13,8 +13,8 @@ pub struct EverythingHandler;
 
 #[tool_router]
 impl EverythingHandler {
-    #[tool(description = "Instant file/directory search using Everything engine. Supports regex, sort, path filter, and selective fields.")]
-    async fn everything_search(
+    #[tool(description = "INSTANT file/directory search using Everything engine (NTFS index). Fastest way to find files on this PC. Supports regex, sort, path filter, and selective fields. Use this INSTEAD of glob/Get-ChildItem for any filesystem search.")]
+    async fn find_files(
         &self,
         Parameters(params): Parameters<SearchParams>,
     ) -> Result<CallToolResult, ErrorData> {
@@ -32,8 +32,8 @@ impl EverythingHandler {
         Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
 
-    #[tool(description = "Fast count of matching files without data transfer")]
-    async fn everything_count(
+    #[tool(description = "INSTANT count of matching files using Everything engine (NTFS index). Returns total number without transferring file data. Use this INSTEAD of recursive shell commands to count files.")]
+    async fn count_files(
         &self,
         Parameters(params): Parameters<CountParams>,
     ) -> Result<CallToolResult, ErrorData> {
@@ -49,8 +49,8 @@ impl EverythingHandler {
         Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
 
-    #[tool(description = "Check if Everything is running and IPC is connected")]
-    async fn everything_status(&self) -> Result<CallToolResult, ErrorData> {
+    #[tool(description = "Check if Everything search engine is running and IPC is connected. Call this BEFORE using find_files or count_files to verify the engine is available.")]
+    async fn search_status(&self) -> Result<CallToolResult, ErrorData> {
         let connected = tokio::task::spawn_blocking(everything::is_running)
             .await
             .map_err(|e| {
