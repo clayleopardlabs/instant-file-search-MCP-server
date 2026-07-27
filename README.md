@@ -1,5 +1,15 @@
 # Everything MCP Server  -  Instant PC File Search
 
+Have you ever needed to find a file on your computer and waited forever while Windows Search churns through folders? Or opened every folder one by one trying to remember where you saved something? This tool solves that.
+
+The Everything MCP Server is a bridge between AI agents and a free Windows program called Everything (by Voidtools). Everything works differently than normal search -- it reads the NTFS index that Windows already keeps on your hard drive. This means it finds files in milliseconds, not minutes. No crawling through folders, no waiting for indexing to catch up.
+
+Without this tool, your AI agents have to search for files the slow way -- by asking the computer to list every folder and file one at a time, like a person manually opening drawers in a filing cabinet. With this tool, agents can find any file on your PC instantly by name, type, location, date, or size.
+
+For example, instead of telling your agent "look for the config file in the projects folder" and waiting while it lists every directory, you can just say "find the config file from last week" and get the answer in a second. Or ask "how many DLLs are in System32?" and get an instant count instead of a recursive crawl.
+
+The best part: Everything is already running on millions of Windows PCs. If you have it installed, you already have the index. This server just opens it up to your AI agents.
+
 Your AI agents can search your entire computer for files instantly  -  like having a supercharged "find" or "search" command on every conversation.
 
 Tell your agent "find that config file from last week" or "how many DLLs are in System32?" and it will answer in milliseconds by searching the NTFS index, not by crawling folders. No waiting for directory listings, no recursive `dir` commands.
