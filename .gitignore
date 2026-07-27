@@ -1,4 +1,22 @@
 # Rust
 /target
 **/*.rs.bk
+
+# Plugin (output built from source)
 plugin/node_modules/
+plugin/dist/
+plugin/package-lock.json
+
+# OpenCode runtime state
+.omo/
+
+# Environment
+.env
+.env.*
+
+# OS artifacts
+Thumbs.db
+.DS_Store
+
+# Logs
+*.log

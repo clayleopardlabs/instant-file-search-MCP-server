@@ -114,7 +114,7 @@ Register in the `plugin` array of `~/.config/opencode/opencode.json`:
 The plugin adapter locates the MCP binary by:
 
 1. `EVERYTHING_MCP_BINARY` environment variable (if set)
-2. Default: `B:\Projects\everything-mcp-server\target\release\everything-mcp-server.exe`
+2. Default: resolved relative to the plugin's `dist/` directory: `../../target/release/everything-mcp-server.exe`
 
 If neither resolves, the plugin will fail.
 

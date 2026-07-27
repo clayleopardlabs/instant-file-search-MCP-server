@@ -1,6 +1,8 @@
 import type { Plugin } from "@opencode-ai/plugin";
 import { tool } from "@opencode-ai/plugin";
 import { spawn, type ChildProcess } from "node:child_process";
+import { fileURLToPath } from "url";
+import path from "path";
 
 const z = tool.schema;
 
@@ -8,9 +10,12 @@ const z = tool.schema;
  * Path to the Everything MCP server binary.
  * Adjust for your environment or use the EVERYTHING_MCP_BINARY env var.
  */
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
 const BINARY_PATH: string =
   process.env.EVERYTHING_MCP_BINARY ??
-  "B:\\Projects\\everything-mcp-server\\target\\release\\everything-mcp-server.exe";
+  path.join(__dirname, "..", "..", "target", "release", "everything-mcp-server.exe");
 
 const CALL_TIMEOUT_MS = 30_000;
 
