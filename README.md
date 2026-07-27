@@ -1,16 +1,12 @@
 # Everything MCP Server  -  Instant PC File Search
 
-Have you ever needed to find a file on your computer and waited forever while Windows Search churns through folders? Or opened every folder one by one trying to remember where you saved something? This tool solves that.
+This MCP server gives AI agents instant filesystem search by bridging to the Everything engine (Voidtools), a Windows utility that queries the NTFS Master File Table directly. Unlike recursive directory traversal, which forces agents to enumerate every folder one at a time, Everything returns results from the already-indexed MFT in milliseconds, regardless of disk size or file count.
 
-The Everything MCP Server is a bridge between AI agents and a free Windows program called Everything (by Voidtools). Everything works differently than normal search - it reads the NTFS index that Windows already keeps on your hard drive. This means it finds files in milliseconds, not minutes. No crawling through folders, no waiting for indexing to catch up.
+Everything by Voidtools is a free Windows application that maintains a real-time index of the NTFS filesystem by reading the Master File Table, the low-level directory structure Windows maintains on every volume. It does not crawl folders, schedule scans, or consume CPU to build its index. The index is always current because the NTFS driver notifies Everything of changes as they happen.
 
-Without this tool, your AI agents have to search for files the slow way - by asking the computer to list every folder and file one at a time, like a person manually opening drawers in a filing cabinet. With this tool, agents can find any file on your PC instantly by name, type, location, date, or size.
+For AI agents, the difference is between a bounded, instant lookup and an unbounded recursive walk. Searching for *.config across a project with node_modules can stall an agent for minutes as it descends every directory and waits for I/O. With this MCP server, the same query resolves in sub-second time, and agents can compose rich filters (date ranges, size constraints, regex patterns, exclusion paths) in a single call.
 
-For example, instead of telling your agent "look for the config file in the projects folder" and waiting while it lists every directory, you can just say "find the config file from last week" and get the answer in a second.
-
-The best part: Everything is already running on millions of Windows PCs. If you have it installed, you already have the index. This server just opens it up to your AI agents.
-
-Works with any MCP-compatible client (VS Code, Cursor, Claude Desktop) and with all agents in OpenCode - including sub-agents.
+Works with any MCP-compatible client including VS Code, Cursor, Claude Desktop, and OpenCode (all agents and sub-agents via the optional plugin adapter).
 
 ## Prerequisites
 
