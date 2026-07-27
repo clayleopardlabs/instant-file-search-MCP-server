@@ -1,20 +1,38 @@
-# Instantaneous Windows File Search MCP Server
+# Instant File Search for AI Agents
 
-This tool lets your AI assistant find files on your computer almost instantly. Instead of making the assistant search folder by folder, which can take a very long time, it uses a free program called Everything by Voidtools that already knows where every file on your PC is.
+A normal file search has to go looking. That is fine for a few folders. It is miserable when an AI agent needs to reason across 30,000 files, 300,000 files, or 3 million.
 
-Everything is a free Windows application that keeps track of every file and folder on your computer at all times. It does not need to scan or crawl your disk because Windows itself tells it when files change. This means the information is always up to date and ready in an instant.
+This server gives the agent the shortcut.
 
-For your AI assistant, this changes searching from a slow wait into a quick answer. You can ask your assistant to "find all PDF files from last week" or "count how many config files are in my projects folder" and get the result in under a second. No waiting. No slowdowns.
+Ask which folders contain `.env` files. Ask for every log touched today. Ask for all Python files outside virtual environments. Ask for the 100 largest files under a workspace. Ask how many PDFs, CSVs, ZIPs, screenshots, installers, exports, backups, or test files are on the machine.
 
-Works with any MCP-compatible client including VS Code, Cursor, Claude Desktop, and OpenCode (all agents and sub-agents via the optional plugin adapter).
+The answer comes back instantly.
 
-## How it works
+## How It Works
 
-This MCP server gives AI agents instant filesystem search by bridging to the Everything engine (Voidtools), a Windows utility that queries the NTFS Master File Table directly. Unlike recursive directory traversal, which forces agents to enumerate every folder one at a time, Everything returns results from the already-indexed MFT in milliseconds, regardless of disk size or file count.
+The slow way is to inspect folders one by one.
 
-Everything maintains a real-time view of the NTFS filesystem by reading the Master File Table, the low-level directory structure Windows keeps on every volume. It does not crawl folders, schedule scans, or consume CPU - the NTFS driver notifies Everything of changes as they happen, so the data is always current.
+The better way is to keep a live map. Your computer already notices when files appear, disappear, move, or change names. This tool lets the agent query that current map instead of crawling the disk from scratch.
 
-For AI agents, the difference is between a bounded instant lookup and an unbounded recursive walk. Searching for *.config across a project with node_modules can stall an agent for minutes as it descends every directory and waits for I/O. With this MCP server, the same query resolves in sub-second time, and agents can compose rich filters (date ranges, size constraints, regex patterns, exclusion paths) in a single call.
+That is the trick: it is not searching harder. It is asking the right list.
+
+## Why Agents Need It
+
+Agents waste time just discovering what exists. Before they can edit code, inspect logs, gather documents, find configs, or understand a repo, they often burn time on recursive scans and partial guesses.
+
+With instant file lookup, the agent can start from the real shape of your machine.
+
+## Technical Layer
+
+This is an MCP server for Windows file search. It lets MCP-compatible clients query local files by name, path, extension, folder, date, size, and count through structured tool calls.
+
+The instant lookup comes from a local NTFS-based filesystem index kept current through file change notifications.
+
+## Final Layer
+
+Under the hood, this server connects MCP clients to Everything by Voidtools, the free Windows search utility known for millisecond filename and path searches across huge drives.
+
+Works with VS Code, Cursor, Claude Desktop, OpenCode, and other MCP-compatible clients, with optional plugin adapter support for agents and sub-agents.
 
 ## Prerequisites
 

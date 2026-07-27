@@ -214,22 +214,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "everything-mcp-server"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "everything-ipc",
- "rmcp",
- "schemars",
- "serde",
- "serde_json",
- "tokio",
- "tracing",
- "tracing-subscriber",
- "windows",
-]
-
-[[package]]
 name = "find-msvc-tools"
 version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -352,6 +336,22 @@ name = "ident_case"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b9e0384b61958566e926dc50660321d12159025e767c18e043daf26b70104c39"
+
+[[package]]
+name = "instantaneous-windows-file-search-mcp-server"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "everything-ipc",
+ "rmcp",
+ "schemars",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "windows",
+]
 
 [[package]]
 name = "itoa"
