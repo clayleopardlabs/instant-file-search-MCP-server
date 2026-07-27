@@ -1,50 +1,35 @@
 # Instant File Search for AI Agents
 
-A normal file search has to go looking.
+An AI agent that can read files but cannot find them is blind in one eye.
 
-That is fine when you are searching one folder. It is not fine when an AI agent needs to reason across 30,000 files, 300,000 files, or 3 million. A simple question like "where are the logs?" or "which projects have config files?" can turn into a slow crawl through the filesystem.
+Ask it to sum up every `.log` file modified today. Ask which folders contain `.env` files. Ask for all Python files outside virtual environments. Ask for the 100 largest files under a workspace. Ask how many PDFs, CSVs, ZIPs, screenshots, installers, exports, backups, or test files are on the machine.
 
-This server gives the agent the shortcut.
+A normal file search crawls. It starts at a folder, opens it, reads the contents, and repeats for every subfolder. That works fine for one folder. It falls apart when the agent needs to reason across 30,000 files, 300,000 files, or 3 million — which is what any real project looks like.
 
-Ask for every `.log` file modified today. Ask which folders contain `.env` files. Ask for all Python files outside virtual environments. Ask for the 100 largest files under a workspace. Ask how many PDFs, CSVs, ZIPs, screenshots, installers, exports, backups, or test files are on the machine.
+The trick is not making the agent search harder. It is letting it read a record the computer already keeps.
 
-The answer comes back instantly.
+## How It Works
 
-## The Simple Idea
+Your filesystem already tracks every file. When a file is created, renamed, moved, or deleted, NTFS logs that change in a structure called the Master File Table — a live catalog of names, paths, sizes, dates, and attributes for everything on every drive.
 
-Imagine trying to find a book in a library by walking down every aisle and reading every spine.
+A search tool like Everything reads this catalog directly. No folder crawling, no recursive `ls`, no directory tree walking. It asks the table, gets the answer, then watches for the next change. Every new search starts from a current index, not from scratch.
 
-That works, but it is the stupid way to do it if the library already has a catalog.
+That is why a query over millions of files returns in milliseconds. It is the difference between asking a librarian and walking every aisle reading spines.
 
-File search has the same problem. The slow method starts at a folder, opens it, checks what is inside, then repeats that for every folder underneath it. That is called crawling the filesystem. It is simple, but it repeats work the computer has already done.
+## What This Server Bridges
 
-The better method is to ask the catalog.
+This project turns that instant index into an MCP tool.
 
-Your computer already keeps records of files: their names, locations, sizes, and modification times. When files are created, renamed, moved, or deleted, those changes are tracked. So the trick is not to make the agent search harder. The trick is to let it query a current map of the filesystem.
+An MCP-compatible AI client (VS Code, Cursor, Claude Desktop, OpenCode, or any MCP host) can ask structured questions about local files — by name, path, extension, folder, date, size, pattern, or count — and get back a usable answer immediately. To the agent it looks like a tool call. Underneath, it is reading the NTFS Master File Table through Everything's IPC interface.
 
-## The Real Mechanism
+That changes what the agent can do before touching a file. It can map the project structure first. It can find every config file before editing one. It can separate source from dependencies, build output, logs, and junk before making changes. It can ask "how many of these exist?" and get a count, not a guess.
 
-On Windows, NTFS stores file records in a structure called the Master File Table. Instead of opening folder after folder, a search tool can read that file table and build an index of names and paths.
+## The Two Pieces
 
-Then it watches for filesystem changes. When a file appears, moves, gets renamed, or disappears, the index updates. So each new search does not begin from zero. It begins from a live index that already knows what exists.
+Under the hood this server connects agents to Everything by Voidtools, a free Windows utility that reads the NTFS index natively. The project has two parts:
 
-That is why a query over millions of files can return in milliseconds. It is not magic. It is the difference between walking the shelves and asking the catalog.
-
-## What This Server Adds
-
-This project turns that instant local file index into an MCP tool.
-
-An MCP-compatible AI client can ask structured questions about local files: name, path, extension, folder, date modified, size, pattern, and count. The agent does not need to run slow recursive shell commands or guess from partial directory listings. It can ask the filesystem what exists and get a usable answer immediately.
-
-That changes agent workflows. Before reading code, the agent can map the project. Before editing configs, it can find every relevant config file. Before summarizing a client folder, it can gather the documents. Before touching a repo, it can separate source files from dependencies, build output, logs, and junk.
-
-## The Final Layer
-
-Under the hood, this server connects MCP clients to Everything by Voidtools.
-
-Everything is a free Windows search utility known for searching huge NTFS drives in milliseconds. This server exposes that capability to AI assistants, coding agents, and sub-agents through MCP.
-
-Works with VS Code, Cursor, Claude Desktop, OpenCode, and other MCP-compatible clients, with optional plugin adapter support for agents and sub-agents.
+- **The MCP binary** (Rust, required for everyone) — speaks MCP stdio transport to any host
+- **The plugin adapter** (TypeScript, optional) — lets OpenCode sub-agents (explore, librarian, task workers) use the same tools. Sub-agents do not inherit MCP tools by default; the plugin bridges that gap.
 
 ## Prerequisites
 
