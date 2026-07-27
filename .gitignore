@@ -9,6 +9,7 @@ plugin/package-lock.json
 
 # OpenCode runtime state
 .omo/
+.codegraph/
 
 # Environment
 .env

@@ -2,6 +2,10 @@
 name = "everything-mcp-server"
 version = "0.1.0"
 edition = "2021"
+license = "MIT"
+authors = ["Clay Leopard Labs"]
+description = "MCP server providing instant PC file search via the Everything NTFS index engine"
+repository = "https://github.com/clayleopardlabs/everything-mcp-server"
 
 [dependencies]
 everything-ipc = { version = "0.1", features = ["tokio"] }

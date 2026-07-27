@@ -277,9 +277,9 @@ pub fn status() -> Result<EverythingStatus> {
 fn create_client() -> Result<EverythingClient> {
     EverythingClient::new().map_err(|e| {
         anyhow::anyhow!(
-            "Everything is not running. Please start Everything \
-             (C:\\Program Files\\Everything\\Everything.exe). \
-             The GUI window must be visible for IPC. (underlying error: {e})"
+            "Everything is not running. Please start Everything from your installation directory. \
+             The GUI must be running (minimized to system tray is fine) \
+             for IPC to work. (underlying error: {e})"
         )
     })
 }
