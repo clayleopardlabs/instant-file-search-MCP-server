@@ -155,7 +155,7 @@ const plugin: Plugin = async (_input, _options) => {
           exclude_path: z
             .string()
             .optional()
-            .describe('Exclude directory paths (e.g. "node_modules,WinSxS,.git").'),
+            .describe('Exclude directory paths (e.g. "node_modules;WinSxS;.git").'),
           include_all: z
             .boolean()
             .optional()
@@ -239,7 +239,7 @@ const plugin: Plugin = async (_input, _options) => {
           exclude_path: z
             .string()
             .optional()
-            .describe('Exclude paths (e.g. "node_modules,WinSxS,.git").'),
+            .describe('Exclude paths (e.g. "node_modules;WinSxS;.git").'),
           include_all: z
             .boolean()
             .optional()

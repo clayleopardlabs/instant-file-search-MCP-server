@@ -114,8 +114,9 @@ Register in the `plugin` array of `~/.config/opencode/opencode.json`:
 The plugin adapter locates the MCP binary by:
 
 1. `EVERYTHING_MCP_BINARY` environment variable (if set)
-2. Default path: `<plugin-dir>/../../../../target/release/everything-mcp-server.exe` (relative to the plugin's node_modules)
-3. Neither set → binary must be on `PATH` or the plugin will fail
+2. Default: `B:\Projects\everything-mcp-server\target\release\everything-mcp-server.exe`
+
+If neither resolves, the plugin will fail.
 
 ## Usage
 
@@ -150,7 +151,7 @@ The `query` parameter supports Everything's built-in modifiers:
 |-------|------|-------------|
 | `query` | string (required) | Search query with Everything modifiers |
 | `path` | string | Scope to directory (e.g. `B:\\Projects`) |
-| `exclude_path` | string | Exclude paths (e.g. `node_modules,.git`) |
+| `exclude_path` | string | Exclude paths (e.g. `node_modules;.git`) |
 | `include_all` | boolean | Disable auto-exclusion of noise folders |
 | `regex` | boolean | Enable regex parsing |
 | `match_case` | boolean | Case-sensitive search |
@@ -166,7 +167,7 @@ The `query` parameter supports Everything's built-in modifiers:
 |-------|------|-------------|
 | `query` | string (required) | Search query |
 | `path` | string | Scope to directory |
-| `exclude_path` | string | Exclude paths |
+| `exclude_path` | string | Exclude paths (e.g. `node_modules;.git`) |
 | `include_all` | boolean | Disable auto-exclusion |
 | `regex` | boolean | Enable regex |
 | `match_case` | boolean | Case-sensitive |
