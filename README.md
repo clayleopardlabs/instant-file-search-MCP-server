@@ -1,4 +1,4 @@
-# Everything MCP Server  -  Instant PC File Search
+# Instantaneous Windows File Search MCP Server
 
 This tool lets your AI assistant find files on your computer almost instantly. Instead of making the assistant search folder by folder, which can take a very long time, it uses a free program called Everything by Voidtools that already knows where every file on your PC is.
 
