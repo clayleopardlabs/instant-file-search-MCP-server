@@ -1,12 +1,20 @@
 # Everything MCP Server  -  Instant PC File Search
 
-This MCP server gives AI agents instant filesystem search by bridging to the Everything engine (Voidtools), a Windows utility that queries the NTFS Master File Table directly. Unlike recursive directory traversal, which forces agents to enumerate every folder one at a time, Everything returns results from the already-indexed MFT in milliseconds, regardless of disk size or file count.
+This tool lets your AI assistant find files on your computer almost instantly. Instead of making the assistant search folder by folder, which can take a very long time, it uses a free program called Everything by Voidtools that already knows where every file on your PC is.
 
-Everything by Voidtools is a free Windows application that maintains a real-time index of the NTFS filesystem by reading the Master File Table, the low-level directory structure Windows maintains on every volume. It does not crawl folders, schedule scans, or consume CPU to build its index. The index is always current because the NTFS driver notifies Everything of changes as they happen.
+Everything is a free Windows application that keeps track of every file and folder on your computer at all times. It does not need to scan or crawl your disk because Windows itself tells it when files change. This means the information is always up to date and ready in an instant.
 
-For AI agents, the difference is between a bounded, instant lookup and an unbounded recursive walk. Searching for *.config across a project with node_modules can stall an agent for minutes as it descends every directory and waits for I/O. With this MCP server, the same query resolves in sub-second time, and agents can compose rich filters (date ranges, size constraints, regex patterns, exclusion paths) in a single call.
+For your AI assistant, this changes searching from a slow wait into a quick answer. You can ask your assistant to "find all PDF files from last week" or "count how many config files are in my projects folder" and get the result in under a second. No waiting. No slowdowns.
 
 Works with any MCP-compatible client including VS Code, Cursor, Claude Desktop, and OpenCode (all agents and sub-agents via the optional plugin adapter).
+
+## How it works
+
+This MCP server gives AI agents instant filesystem search by bridging to the Everything engine (Voidtools), a Windows utility that queries the NTFS Master File Table directly. Unlike recursive directory traversal, which forces agents to enumerate every folder one at a time, Everything returns results from the already-indexed MFT in milliseconds, regardless of disk size or file count.
+
+Everything maintains a real-time view of the NTFS filesystem by reading the Master File Table, the low-level directory structure Windows keeps on every volume. It does not crawl folders, schedule scans, or consume CPU - the NTFS driver notifies Everything of changes as they happen, so the data is always current.
+
+For AI agents, the difference is between a bounded instant lookup and an unbounded recursive walk. Searching for *.config across a project with node_modules can stall an agent for minutes as it descends every directory and waits for I/O. With this MCP server, the same query resolves in sub-second time, and agents can compose rich filters (date ranges, size constraints, regex patterns, exclusion paths) in a single call.
 
 ## Prerequisites
 
