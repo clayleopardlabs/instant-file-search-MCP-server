@@ -1,61 +1,51 @@
 # Instant File Search for AI Agents
 
-An AI agent that can read files but cannot find them is blind in one eye.
+Here is what happens when you ask an AI agent to find every config file in a project:
 
-Ask it to sum up every `.log` file modified today. Ask which folders contain `.env` files. Ask for all Python files outside virtual environments. Ask for the 100 largest files under a workspace. Ask how many PDFs, CSVs, ZIPs, screenshots, installers, exports, backups, or test files are on the machine.
+The agent picks a folder and asks the operating system what is inside. It gets back a list of entries. It picks a subfolder and asks again. Then again. For every directory, one round trip to the filesystem. A project with ten thousand folders means ten thousand trips.
 
-A normal file search crawls. It starts at a folder, opens it, reads the contents, and repeats for every subfolder. That works fine for one folder. It falls apart when the agent needs to reason across 30,000 files, 300,000 files, or 3 million — which is what any real project looks like.
+That finds the files eventually. But it is slow, and it is unnecessary, because the computer already keeps a complete list.
 
-The trick is not making the agent search harder. It is letting it read a record the computer already keeps.
+## The Record the Filesystem Already Keeps
 
-## How It Works
+Every time you save a file, Windows writes its name, its location, its size, and the current time into a master record on the drive. When you move or rename the file, the record updates. When you delete it, the slot marks free.
 
-Your filesystem already tracks every file. When a file is created, renamed, moved, or deleted, NTFS logs that change in a structure called the Master File Table — a live catalog of names, paths, sizes, dates, and attributes for everything on every drive.
+This record is not a separate index you have to build and maintain. It is part of how NTFS works - the filesystem cannot function without it. The data is always there, always current, always covering every file on every drive.
 
-A search tool like Everything reads this catalog directly. No folder crawling, no recursive `ls`, no directory tree walking. It asks the table, gets the answer, then watches for the next change. Every new search starts from a current index, not from scratch.
+Normal search tools - `find`, `Get-ChildItem`, a recursive glob - ignore this record. They start from wherever you point them and walk the directory tree one node at a time. That works fine when you need one file in one folder. It is wasteful when the answer already lives in a single table the computer updates for you.
 
-That is why a query over millions of files returns in milliseconds. It is the difference between asking a librarian and walking every aisle reading spines.
+## Reading the Table Directly
 
-## What This Server Bridges
+A tool like Everything by Voidtools reads this master record directly. It connects to the running Everything desktop application through a standard Windows messaging channel (WM_COPYDATA - the mechanism two windows use to exchange text). It sends a query, the desktop app looks up the answer in its in-memory index, and sends back the results. No directory walking. No recursive calls. One round trip.
 
-This project turns that instant index into an MCP tool.
+Everything keeps its index current by registering for filesystem notifications. When a file appears, disappears, or changes, the index updates in near real time. So every query starts from a complete picture of what exists, not from a snapshot that was correct the last time you searched.
 
-An MCP-compatible AI client (VS Code, Cursor, Claude Desktop, OpenCode, or any MCP host) can ask structured questions about local files — by name, path, extension, folder, date, size, pattern, or count — and get back a usable answer immediately. To the agent it looks like a tool call. Underneath, it is reading the NTFS Master File Table through Everything's IPC interface.
+This is why a search across every file on a multi-terabyte drive returns in milliseconds. The question goes to a place that already holds the answer.
 
-That changes what the agent can do before touching a file. It can map the project structure first. It can find every config file before editing one. It can separate source from dependencies, build output, logs, and junk before making changes. It can ask "how many of these exist?" and get a count, not a guess.
+## What This Project Does
 
-## The Two Pieces
+This project wraps that query channel into three tools that speak the Model Context Protocol - a standard that lets AI agents call external capabilities through a simple JSON message exchange over stdin and stdout.
 
-Under the hood this server connects agents to Everything by Voidtools, a free Windows utility that reads the NTFS index natively. The project has two parts:
+The agent calls `find_files` with a pattern and a path. The binary forwards the request to Everything through the Windows messaging channel, collects the structured result, and returns it as JSON. The agent never runs a slow shell command or reads a partial directory listing. It asks the catalog and gets the answer.
 
-- **The MCP binary** (Rust, required for everyone) — speaks MCP stdio transport to any host
-- **The plugin adapter** (TypeScript, optional) — lets OpenCode sub-agents (explore, librarian, task workers) use the same tools. Sub-agents do not inherit MCP tools by default; the plugin bridges that gap.
+Two additional tools come with the same binary:
 
-## Prerequisites
+- `count_files` returns only the number of matches, without transferring file data. Call this first when you are not sure whether a pattern matches ten files or ten million.
+- `search_status` reports whether Everything is running, the IPC channel is responding, and the database is loaded. Call this when the other tools fail unexpectedly to find out whether the engine is the problem.
 
-**You must have [Everything](https://www.voidtools.com) by Voidtools installed and running on your PC.** This tool is a bridge to Everything's NTFS index  -  it does not include a search engine itself.
+## What You Need
 
-- Everything v1.5 or later (the "alpha" branch supports the HTTP/JSON API, but this server uses the IPC interface available in all versions)
-- Everything must be running (can run minimized to system tray, no GUI window needed)
-- Works on Windows only (Everything indexes the NTFS Master File Table)
+**Everything by Voidtools** must be installed and running. This project is a bridge, not a search engine. Everything is free, runs on any modern Windows machine, and works quietly from the system tray. Download it at [voidtools.com](https://www.voidtools.com). Version 1.5 or later, any edition. Windows only - Everything indexes the NTFS Master File Table, which does not exist on other platforms.
 
-## Who needs what
+Everything must be running for the IPC channel to work. It can be minimized to the system tray; no GUI window needs to be visible.
 
-| You are using... | You need | Why |
-|-----------------|----------|-----|
-| VS Code, Cursor, Claude Desktop, or any MCP client | **MCP binary only** | MCP hosts load tools directly via binary |
-| OpenCode (main agent only) | **MCP binary** (configured as MCP server in opencode.json) | Main session gets tools via MCP |
-| OpenCode (sub-agents  -  explore, librarian, task workers) | **MCP binary + Plugin adapter** | Sub-agents don't inherit MCP tools; the plugin makes them available to all agents |
+## Two Pieces, One Binary
 
-**The plugin adapter is OPTIONAL.** If you only need tools in your main chatting session, just configure the MCP server. You only need the plugin if you also want sub-agents (explore, librarian, task workers) to access Everything search.
+**The MCP binary** (Rust, single `.exe`) is all you need for VS Code, Cursor, Claude Desktop, or any MCP host. Point the host at this binary and the three tools appear in the agent's toolbox.
 
-**OpenCode users need both MCP + plugin** if they want search everywhere. The plugin spawns the binary just like an MCP host would  -  the binary is always required.
+**The plugin adapter** (TypeScript, optional) is only needed for OpenCode users who want sub-agents (explore, librarian, task workers) to access the same tools. Sub-agents do not inherit MCP tools automatically. The plugin bridges that gap by spawning the binary as a child process.
 
-## Build
-
-### 1. Build the MCP Binary (Required for Everyone)
-
-You need the [Rust toolchain](https://rustup.rs):
+## Quick Start
 
 ```sh
 git clone https://github.com/clayleopardlabs/instantaneous-windows-file-search-mcp-server
@@ -65,22 +55,6 @@ cargo build --release
 
 Binary at `target/release/instantaneous-windows-file-search-mcp-server.exe`.
 
-### 2. Build the Plugin Adapter (OpenCode Sub-Agent Support  -  Optional)
-
-You need Node.js 18+:
-
-```sh
-cd plugin
-npm install
-npm run build
-```
-
-Output at `plugin/dist/index.js`.
-
-## Configure
-
-### For MCP Hosts (VS Code, Cursor, Claude Desktop, etc.)
-
 Add to your MCP client configuration:
 
 ```json
@@ -88,115 +62,177 @@ Add to your MCP client configuration:
   "mcpServers": {
     "everything": {
       "type": "local",
-      "command": [
-        "C:/absolute/path/to/instantaneous-windows-file-search-mcp-server.exe"
-      ],
+      "command": ["C:/full/path/to/instantaneous-windows-file-search-mcp-server.exe"],
       "enabled": true
     }
   }
 }
 ```
 
-**Tools surface in the main conversation only.** Sub-agents do not inherit MCP tools  -  that limitation is per-host, not from this server.
+Restart the client. Three tools appear in the agent's tool list: `find_files`, `count_files`, `search_status`.
 
-### For OpenCode  -  MCP Server (Main Agent Only)
+## Who Needs What
 
-Add to your `~/.config/opencode/opencode.json` under the `mcp` key:
+| You use... | You need | Why |
+|------------|----------|-----|
+| VS Code, Cursor, Claude Desktop, or any MCP host | MCP binary only | The host loads tools directly |
+| OpenCode main session | MCP binary as MCP server | Configured under `mcp` key in opencode.json |
+| OpenCode sub-agents too | MCP binary + plugin adapter | Sub-agents do not inherit MCP tools |
+
+## Build
+
+### MCP binary (required)
+
+Requires the [Rust toolchain](https://rustup.rs):
+
+```sh
+cargo build --release
+```
+
+Output: `target/release/instantaneous-windows-file-search-mcp-server.exe`
+
+### Plugin adapter (optional)
+
+Requires Node.js 18+:
+
+```sh
+cd plugin
+npm install
+npm run build
+```
+
+Output: `plugin/dist/index.js`
+
+## Configure
+
+### MCP hosts (VS Code, Cursor, Claude Desktop)
+
+```json
+{
+  "mcpServers": {
+    "everything": {
+      "type": "local",
+      "command": ["C:/path/to/instantaneous-windows-file-search-mcp-server.exe"],
+      "enabled": true
+    }
+  }
+}
+```
+
+Tools appear in the main conversation only. Sub-agents do not inherit MCP tools - that is a per-host limitation, not from this server.
+
+### OpenCode - main session
+
+Add to `~/.config/opencode/opencode.json` under the `mcp` key:
 
 ```json
 {
   "mcp": {
     "everything": {
-      "command": ["C:/absolute/path/to/instantaneous-windows-file-search-mcp-server.exe"],
+      "command": ["C:/path/to/instantaneous-windows-file-search-mcp-server.exe"],
       "enabled": true
     }
   }
 }
 ```
 
-### For OpenCode  -  Plugin (Sub-Agent Support)
-
-Deploy the plugin adapter so it's available to all agents:
+### OpenCode - sub-agent support (requires plugin)
 
 ```sh
-# Deploy dist + dependencies to OpenCode's plugin directory
 mkdir -p ~/.config/opencode/plugins/everything-mcp-plugin
 cp -r plugin/dist ~/.config/opencode/plugins/everything-mcp-plugin/
 cp -r plugin/node_modules ~/.config/opencode/plugins/everything-mcp-plugin/
 cp plugin/package.json ~/.config/opencode/plugins/everything-mcp-plugin/
 ```
 
-Register in the `plugin` array of `~/.config/opencode/opencode.json`:
+Register in `~/.config/opencode/opencode.json` under the `plugin` array:
 
 ```json
 "file:///C:/Users/YOU/.config/opencode/plugins/everything-mcp-plugin/dist/index.js"
 ```
 
-**You can keep the MCP entry AND add the plugin**  -  they coexist. The plugin spawns the same MCP binary. The MCP entry is used by the main session; the plugin makes tools available to all sub-agents.
+The MCP entry and the plugin coexist. The MCP entry serves the main session; the plugin serves sub-agents.
 
-### Plugin Lookup Order
+### Plugin binary resolution order
 
-The plugin adapter locates the MCP binary by:
+1. `EVERYTHING_MCP_BINARY` environment variable
+2. Default path relative to `plugin/dist/`: `../../target/release/instantaneous-windows-file-search-mcp-server.exe`
+3. `PATH`
 
-1. `EVERYTHING_MCP_BINARY` environment variable (if set)
-2. Default: resolved relative to the plugin's `dist/` directory: `../../target/release/instantaneous-windows-file-search-mcp-server.exe`
+Set `EVERYTHING_MCP_BINARY` if the default path does not match your layout.
 
-If neither resolves, the plugin will fail.
+## Tools
 
-## Usage
-
-| Tool | Description |
-|------|-------------|
-| `find_files` | Search files by name with wildcards, regex, path filter, sort, pagination, and field selection |
-| `count_files` | Instant count of matching files without transferring file data |
-| `search_status` | Check if Everything engine is connected and working |
+| Tool | Returns | When to call |
+|------|---------|--------------|
+| `find_files` | List of matching files with metadata | You need the actual file list |
+| `count_files` | Total match count only | Before a broad search to check scale |
+| `search_status` | Engine health diagnostics | When tools fail unexpectedly |
 
 ### Search modifiers
 
-The `query` parameter supports Everything's built-in modifiers:
+Embed these in the `query` parameter:
 
 | Modifier | Example | Effect |
 |----------|---------|--------|
-| `file:` | `file:*.ts` | Files only (not directories) |
+| `file:` | `file:*.ts` | Files only |
 | `folder:` | `folder:src` | Directories only |
-| `dm:` | `dm:today` `dm:2days` `dm:2026-01-15` | Date modified filter |
+| `dm:` | `dm:today` `dm:2days` | Date modified filter |
 | `dc:` | `dc:thisweek` | Date created filter |
 | `da:` | `da:yesterday` | Date accessed filter |
 | `size:` | `size:>10mb` `size:1kb..1mb` | File size filter |
 | `dupe:` | `dupe:filename` | Find duplicate filenames |
-| `!` | `!*.tmp` | NOT operator (exclude pattern) |
-| `\|` | `*.ts \| *.tsx` | OR operator |
+| `!` | `!*.tmp` | NOT / exclude pattern |
+| `|` | `*.ts | *.tsx` | OR operator |
 | `" "` | `"exact phrase"` | Literal search |
-| `regex:` | `^app.*\.ts$` | Regex pattern (use `regex=true` param instead) |
 
-### Parameters
+### Important behaviors
 
-**find_files:**
+- **Auto-excluded** by default (bypass with `include_all=true`): `node_modules`, `.git`, `WinSxS`
+- **exclude_path separator**: semicolon (`;`), not comma
+- **Default scope**: all indexed drives - narrow with `path`
+- **Response**: `total` (all matches), `returned` (page count), `offset` (page position), `note` (exclusion info)
+
+### find_files parameters
+
 | Param | Type | Description |
 |-------|------|-------------|
 | `query` | string (required) | Search query with Everything modifiers |
-| `path` | string | Scope to directory (e.g. `B:\\Projects`) |
-| `exclude_path` | string | Exclude paths (e.g. `node_modules;.git`) |
+| `path` | string | Scope to a directory |
+| `max_results` | number | Results per page (max 100) |
+| `offset` | number | Pagination offset |
+| `exclude_path` | string | Paths to exclude (`node_modules;.git`) |
 | `include_all` | boolean | Disable auto-exclusion of noise folders |
-| `regex` | boolean | Enable regex parsing |
+| `regex` | boolean | Enable regex mode |
 | `match_case` | boolean | Case-sensitive search |
 | `match_whole_word` | boolean | Whole word match |
 | `match_path` | boolean | Match against full path |
-| `max_results` | number (max 100) | Results per page |
-| `offset` | number | Pagination offset |
 | `sort` | string | Sort order (22 options) |
-| `fields` | string | Comma-separated field names (12 fields) |
+| `fields` | string | Comma-separated fields to return |
 
-**count_files:**
+### count_files parameters
+
 | Param | Type | Description |
 |-------|------|-------------|
 | `query` | string (required) | Search query |
-| `path` | string | Scope to directory |
-| `exclude_path` | string | Exclude paths (e.g. `node_modules;.git`) |
+| `path` | string | Scope to a directory |
+| `exclude_path` | string | Paths to exclude |
 | `include_all` | boolean | Disable auto-exclusion |
 | `regex` | boolean | Enable regex |
 | `match_case` | boolean | Case-sensitive |
 | `match_whole_word` | boolean | Whole word match |
+
+### Sort options (22)
+
+`name`, `name_desc`, `path`, `path_desc`, `size`, `size_asc`, `date_modified`, `date_modified_asc`, `date_created`, `date_created_asc`, `date_accessed`, `date_accessed_asc`, `extension`, `extension_desc`, `run_count`, `run_count_asc`, `date_run`, `date_run_asc`, `type_name`, `type_name_desc`, `date_recently_changed`, `date_recently_changed_asc`
+
+Default: `name`.
+
+### Field names (12)
+
+`filename`, `path`, `size`, `date_modified`, `date_created`, `date_accessed`, `attributes`, `extension`, `run_count`, `date_run`, `date_recently_changed`, `file_list_filename`
+
+Default (omit `fields`): all common fields.
 
 ### Response format
 
@@ -223,29 +259,38 @@ The `query` parameter supports Everything's built-in modifiers:
 }
 ```
 
-## Architecture
+## How It Connects
 
 ```
-┌─────────────────────────────────────┐
-│  MCP Host (VS Code / Cursor / CD)   │
-│  ┌───────────────────────────────┐  │
-│  │  instantaneous-windows-file-search-mcp-server.exe     │  │
-│  │  (Rust, everything-ipc)        │  │
-│  └───────────────────────────────┘  │
-├─────────────────────────────────────┤
-│  OpenCode (main + sub-agents)      │
-│  ┌───────────────────────────────┐  │
-│  │  plugin/dist/index.js          │  │
-│  │  (spawns binary → MCP proxy)   │  │
-│  └───────────────────────────────┘  │
-└─────────────────────────────────────┘
-         │
-         ▼
-┌─────────────────────────────────────┐
-│  Everything IPC (named pipe)        │
-│  Everything Desktop App (NTFS MFT)  │
-└─────────────────────────────────────┘
+MCP Host (VS Code / Cursor / Claude Desktop)
+  └─ MCP binary (Rust, stdin/stdout)
+       └─ Everything IPC (WM_COPYDATA)
+            └─ Everything Desktop App
+                 └─ NTFS Master File Table
+
+OpenCode (main + sub-agents)
+  └─ Plugin adapter (TypeScript)
+       └─ spawns MCP binary
+            └─ Everything IPC (WM_COPYDATA)
+                 └─ Everything Desktop App
+                      └─ NTFS Master File Table
 ```
+
+All IPC is native Windows messaging. No HTTP, no network, no sockets. The `everything-ipc` Rust crate handles the Win32 window messaging.
+
+## Development
+
+```sh
+cargo test
+```
+
+Unit tests cover sort parsing, field parsing, timestamp formatting, and attribute formatting. No integration tests - Everything must be running for real IPC queries.
+
+Logging is controlled by the `EVERYTHING_MCP_LOG` environment variable (tracing-subscriber env-filter). Unset by default - no log output.
+
+Key dependencies: `rmcp` for MCP transport, `everything-ipc` for WM_COPYDATA IPC, `schemars` for JSON Schema generation, `tokio` for async runtime. Everything calls are blocking and dispatched via `spawn_blocking`. No unsafe blocks, no generated code, no build scripts.
+
+Detailed docs in the `docs/` directory: `architecture.md`, `build.md`, `development.md`, `tools.md`.
 
 ## License
 
