@@ -43,12 +43,12 @@ For AI agents, the difference is between a bounded instant lookup and an unbound
 You need the [Rust toolchain](https://rustup.rs):
 
 ```sh
-git clone https://github.com/clayleopardlabs/everything-mcp-server
-cd everything-mcp-server
+git clone https://github.com/clayleopardlabs/instantaneous-windows-file-search-mcp-server
+cd instantaneous-windows-file-search-mcp-server
 cargo build --release
 ```
 
-Binary at `target/release/everything-mcp-server.exe`.
+Binary at `target/release/instantaneous-windows-file-search-mcp-server.exe`.
 
 ### 2. Build the Plugin Adapter (OpenCode Sub-Agent Support  -  Optional)
 
@@ -74,7 +74,7 @@ Add to your MCP client configuration:
     "everything": {
       "type": "local",
       "command": [
-        "C:/absolute/path/to/everything-mcp-server.exe"
+        "C:/absolute/path/to/instantaneous-windows-file-search-mcp-server.exe"
       ],
       "enabled": true
     }
@@ -92,7 +92,7 @@ Add to your `~/.config/opencode/opencode.json` under the `mcp` key:
 {
   "mcp": {
     "everything": {
-      "command": ["C:/absolute/path/to/everything-mcp-server.exe"],
+      "command": ["C:/absolute/path/to/instantaneous-windows-file-search-mcp-server.exe"],
       "enabled": true
     }
   }
@@ -124,7 +124,7 @@ Register in the `plugin` array of `~/.config/opencode/opencode.json`:
 The plugin adapter locates the MCP binary by:
 
 1. `EVERYTHING_MCP_BINARY` environment variable (if set)
-2. Default: resolved relative to the plugin's `dist/` directory: `../../target/release/everything-mcp-server.exe`
+2. Default: resolved relative to the plugin's `dist/` directory: `../../target/release/instantaneous-windows-file-search-mcp-server.exe`
 
 If neither resolves, the plugin will fail.
 
@@ -214,7 +214,7 @@ The `query` parameter supports Everything's built-in modifiers:
 ┌─────────────────────────────────────┐
 │  MCP Host (VS Code / Cursor / CD)   │
 │  ┌───────────────────────────────┐  │
-│  │  everything-mcp-server.exe     │  │
+│  │  instantaneous-windows-file-search-mcp-server.exe     │  │
 │  │  (Rust, everything-ipc)        │  │
 │  └───────────────────────────────┘  │
 ├─────────────────────────────────────┤

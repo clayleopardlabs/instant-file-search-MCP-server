@@ -15,7 +15,7 @@ const __dirname = path.dirname(__filename);
 
 const BINARY_PATH: string =
   process.env.EVERYTHING_MCP_BINARY ??
-  path.join(__dirname, "..", "..", "target", "release", "everything-mcp-server.exe");
+  path.join(__dirname, "..", "..", "target", "release", "instantaneous-windows-file-search-mcp-server.exe");
 
 const CALL_TIMEOUT_MS = 30_000;
 
@@ -82,7 +82,7 @@ async function callMCP(
         protocolVersion: "2024-11-05",
         capabilities: {},
         clientInfo: {
-          name: "everything-mcp-plugin",
+          name: "instant-windows-search-mcp-plugin",
           version: "1.0.0",
         },
       },

@@ -11,7 +11,7 @@ async fn main() -> anyhow::Result<()> {
         .with_env_filter(EnvFilter::from_env("EVERYTHING_MCP_LOG"))
         .init();
 
-    tracing::info!("everything-mcp-server starting");
+    tracing::info!("instant-windows-search-mcp-server starting");
     let handler = handler::EverythingHandler;
     let transport = rmcp::transport::stdio();
     handler.serve(transport).await?.waiting().await?;

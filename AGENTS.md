@@ -1,7 +1,7 @@
-# Everything MCP Server — Repository Map
+# Instantaneous Windows File Search MCP Server — Repository Map
 
 ```
-everything-mcp-server/
+instantaneous-windows-file-search-mcp-server/
 ├── Cargo.toml              # Rust project manifest (2021 edition, rmcp + everything-ipc)
 ├── Cargo.lock
 ├── src/
