@@ -2,33 +2,46 @@
 
 ![](demo.gif)
 
-Here is what happens when you ask an AI agent to find every config file in a project:
 
-The agent picks a folder and asks the operating system what is inside. It gets back a list of entries. It picks a subfolder and asks again. Then again. For every directory, one round trip to the filesystem. A project with ten thousand folders means ten thousand trips.
+# Instant File Search for AI Agents
 
-That finds the files eventually. But it is slow, and it is unnecessary, because the computer already keeps a complete list.
+Search 30,000 files instantly. Or 300,000. Or 3 million.
 
-## The Record the Filesystem Already Keeps
+Ask your AI assistant to find every PDF edited last week, every `.env` file buried in your repos, every invoice from March, the largest files in a project, or every filename matching a pattern. It can count matching files, return paths, filter by extension, search inside specific folders, and give agents immediate visibility into what actually exists on your machine.
 
-Every time you save a file, Windows writes its name, its location, its size, and the current time into a master record on the drive. When you move or rename the file, the record updates. When you delete it, the slot marks free.
+No folder-by-folder crawling. No waiting while your assistant slowly walks the tree. No turning a simple file lookup into a multi-minute agent detour.
 
-This record is not a separate index you have to build and maintain. It is part of how NTFS works - the filesystem cannot function without it. The data is always there, always current, always covering every file on every drive.
+## How It Works
 
-Normal search tools - `find`, `Get-ChildItem`, a recursive glob - ignore this record. They start from wherever you point them and walk the directory tree one node at a time. That works fine when you need one file in one folder. It is wasteful when the answer already lives in a single table the computer updates for you.
+The ordinary way to search for files is the hard way: start at a folder, open it, look at what is inside, then open the next folder, and keep going. It is simple, but it is wasteful. If you already asked the same computer where all its files are a moment ago, why should it pretend to be surprised every time?
 
-## Reading the Table Directly
+The better way is to keep a map.
 
-A tool like Everything by Voidtools reads this master record directly. It connects to the running Everything desktop application through a standard Windows messaging channel (WM_COPYDATA - the mechanism two windows use to exchange text). It sends a query, the desktop app looks up the answer in its in-memory index, and sends back the results. No directory walking. No recursive calls. One round trip.
+Your computer already knows when a file is created, renamed, moved, or deleted. Those changes are not mysteries. They are recorded as they happen. So instead of sending the assistant out to inspect the disk from scratch, this tool lets it ask a live map of the filesystem.
 
-Everything keeps its index current by registering for filesystem notifications. When a file appears, disappears, or changes, the index updates in near real time. So every query starts from a complete picture of what exists, not from a snapshot that was correct the last time you searched.
+That is the whole trick. The assistant is not searching harder. It is asking a better question.
 
-This is why a search across every file on a multi-terabyte drive returns in milliseconds. The question goes to a place that already holds the answer.
+Once that map exists, useful things become cheap:
 
-## What This Project Does
+* “Show me what changed in this project since yesterday.”
+* “Find files that look like secrets or local config.”
+* “List source files but ignore dependencies and build output.”
+* “Count how many test files exist beside implementation files.”
+* “Find old exports, duplicate downloads, or forgotten installers.”
+* “Give me the project’s shape before reading the code.”
 
-This project wraps that query channel into three tools that speak the Model Context Protocol - a standard that lets AI agents call external capabilities through a simple JSON message exchange over stdin and stdout.
+These are the kinds of file operations agents usually waste time on. Here, they become instant lookups.
 
-The agent calls `find_files` with a pattern and a path. The binary forwards the request to Everything through the Windows messaging channel, collects the structured result, and returns it as JSON. The agent never runs a slow shell command or reads a partial directory listing. It asks the catalog and gets the answer.
+## Technical Details
+
+Under the hood, this server connects your MCP-compatible AI client to the high-speed file index maintained by Everything from Voidtools.
+
+Everything is a free Windows search utility that indexes filenames and paths using the NTFS Master File Table and stays current through filesystem change notifications. Because it does not need to crawl directories on each search, queries that would normally require expensive recursive scans can be answered in milliseconds.
+
+This MCP server exposes that capability to AI assistants and coding agents, allowing them to query the local filesystem through structured tool calls instead of relying on slow shell commands, repeated directory walks, or fragile manual search loops.
+
+It works with any MCP-compatible client, including VS Code, Cursor, Claude Desktop, and OpenCode, with agent and sub-agent support through the optional plugin adapter.
+
 
 Two additional tools come with the same binary:
 
