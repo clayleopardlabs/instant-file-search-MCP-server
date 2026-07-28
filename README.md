@@ -17,7 +17,7 @@ The ordinary way to search for files is the hard way: start at a folder, open it
 
 The better way is to keep a map.
 
-Your computer already knows when a file is created, renamed, moved, or deleted. They're recorded as they happen. So instead of sending the assistant out to inspect the disk from scratch, this tool lets it ask a live map of the filesystem.
+Your computer already knows when a file is created, renamed, moved, or deleted. They're recorded as they happen. So instead of sending the assistant out to inspect the disk from scratch, this tool lets it ask a live map of the filesystem, the NTFS Master File Table.
 
 That's the trick. That map already exists and you can use it to answer anything instantly:
 
@@ -32,9 +32,9 @@ These are the kinds of file operations agents usually waste time on. Here, they 
 
 ## Technical Details
 
-Under the hood, this server connects your MCP-compatible AI client to the high-speed file index maintained by Everything from Voidtools.
+Under the hood, this server connects your MCP-compatible AI client to a version of the high-speed file index.
 
-Everything is a free Windows search utility that indexes filenames and paths using the NTFS Master File Table and stays current through filesystem change notifications. Because it does not need to crawl directories on each search, queries that would normally require expensive recursive scans can be answered in milliseconds.
+It currently uses a free utility called Everything which stores and monitors an index of the NTFS Master File Table in RAM (uses about 0.5-1 gb depending on the size of your disks) and stays current through filesystem change notifications. Because it doesn't need to crawl directories on each search, queries that would normally require expensive recursive scans are answered in milliseconds.
 
 This MCP server exposes that capability to AI assistants and coding agents, allowing them to query the local filesystem through structured tool calls instead of relying on slow shell commands, repeated directory walks, or fragile manual search loops.
 
