@@ -33,9 +33,25 @@ Two additional tools come with the same binary:
 - `count_files` returns only the number of matches, without transferring file data. Call this first when you are not sure whether a pattern matches ten files or ten million.
 - `search_status` reports whether Everything is running, the IPC channel is responding, and the database is loaded. Call this when the other tools fail unexpectedly to find out whether the engine is the problem.
 
+## One-Command Install
+
+```powershell
+powershell -c "irm https://raw.githubusercontent.com/clayleopardlabs/instantaneous-windows-file-search-mcp-server/master/scripts/install.ps1 | iex"
+```
+
+This installs Everything by Voidtools (via winget) and downloads the latest pre-built binary. No Rust toolchain needed.
+
 ## What You Need
 
-**Everything by Voidtools** must be installed and running. This project is a bridge, not a search engine. Everything is free, runs on any modern Windows machine, and works quietly from the system tray. Download it at [voidtools.com](https://www.voidtools.com). Version 1.5 or later, any edition. Windows only - Everything indexes the NTFS Master File Table, which does not exist on other platforms.
+**Everything by Voidtools** must be installed and running. This project is a bridge, not a search engine. Everything is free, runs on any modern Windows machine, and works quietly from the system tray. Version 1.5 or later, any edition. Windows only - Everything indexes the NTFS Master File Table, which does not exist on other platforms.
+
+Everything can be installed silently:
+
+```powershell
+winget install voidtools.Everything --accept-source-agreements --silent
+```
+
+Or download the installer directly: [Everything-1.5.0.1418b.x64-Setup.exe](https://www.voidtools.com/Everything-1.5.0.1418b.x64-Setup.exe)
 
 Everything must be running for the IPC channel to work. It can be minimized to the system tray; no GUI window needs to be visible.
 
@@ -45,7 +61,7 @@ Everything must be running for the IPC channel to work. It can be minimized to t
 
 **The plugin adapter** (TypeScript, optional) is only needed for OpenCode users who want sub-agents (explore, librarian, task workers) to access the same tools. Sub-agents do not inherit MCP tools automatically. The plugin bridges that gap by spawning the binary as a child process.
 
-## Quick Start
+## Quick Start (build from source)
 
 ```sh
 git clone https://github.com/clayleopardlabs/instantaneous-windows-file-search-mcp-server
@@ -54,6 +70,8 @@ cargo build --release
 ```
 
 Binary at `target/release/instantaneous-windows-file-search-mcp-server.exe`.
+
+The project pins the `x86_64-pc-windows-gnu` Rust target by default, so you only need [MSYS2/MinGW-w64](https://www.msys2.org/) (install via `winget install MSYS2.MSYS2`) instead of the full Visual Studio Build Tools. If you prefer MSVC, override the toolchain in `rust-toolchain.toml` or pass `--target x86_64-pc-windows-msvc`.
 
 Add to your MCP client configuration:
 

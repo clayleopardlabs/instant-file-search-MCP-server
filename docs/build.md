@@ -6,11 +6,19 @@
 
 ## Binary
 
+The project pins `x86_64-pc-windows-gnu` as the default Rust target (see `rust-toolchain.toml`). This avoids requiring the full Visual Studio Build Tools with C++ workload — only [MSYS2/MinGW-w64](https://www.msys2.org/) is needed for the GNU linker.
+
 ```sh
 cargo build --release
 ```
 
 Output: `target/release/instantaneous-windows-file-search-mcp-server.exe`
+
+To build with MSVC instead, override the toolchain target:
+
+```sh
+cargo build --release --target x86_64-pc-windows-msvc
+```
 
 ## Plugin (optional — OpenCode sub-agent support)
 
