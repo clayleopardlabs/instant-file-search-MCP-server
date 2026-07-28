@@ -9,7 +9,7 @@ Search 30,000 files instantly. Or 300,000. Or 3 million.
 
 Ask your AI assistant to find every PDF edited last week, every `.env` file buried in your repos, every invoice from March, the largest files in a project, or every filename matching a pattern. It can count matching files, return paths, filter by extension, search inside specific folders, and give agents immediate visibility into what actually exists on your machine.
 
-No folder-by-folder crawling. No waiting while your assistant slowly walks the tree. No turning a simple file lookup into a multi-minute agent detour.
+No folder-by-folder crawling.
 
 ## How It Works
 
