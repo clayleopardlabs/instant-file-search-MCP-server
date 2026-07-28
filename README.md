@@ -1,5 +1,7 @@
 # Instant File Search for AI Agents
 
+![](demo.gif)
+
 Here is what happens when you ask an AI agent to find every config file in a project:
 
 The agent picks a folder and asks the operating system what is inside. It gets back a list of entries. It picks a subfolder and asks again. Then again. For every directory, one round trip to the filesystem. A project with ten thousand folders means ten thousand trips.
