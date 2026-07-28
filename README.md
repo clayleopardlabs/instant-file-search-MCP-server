@@ -13,15 +13,13 @@ No folder-by-folder crawling. No waiting while your assistant slowly walks the t
 
 ## How It Works
 
-The ordinary way to search for files is the hard way: start at a folder, open it, look at what is inside, then open the next folder, and keep going. It is simple, but it is wasteful. If you already asked the same computer where all its files are a moment ago, why should it pretend to be surprised every time?
+The ordinary way to search for files is the hard way: start at a folder, open it, look at what's inside, then open the next folder, and keep going. It's simple, but it's wasteful. If you already asked the same computer where all its files are a moment ago, why should it pretend to be surprised every time?
 
 The better way is to keep a map.
 
-Your computer already knows when a file is created, renamed, moved, or deleted. Those changes are not mysteries. They are recorded as they happen. So instead of sending the assistant out to inspect the disk from scratch, this tool lets it ask a live map of the filesystem.
+Your computer already knows when a file is created, renamed, moved, or deleted. They're recorded as they happen. So instead of sending the assistant out to inspect the disk from scratch, this tool lets it ask a live map of the filesystem.
 
-That is the whole trick. The assistant is not searching harder. It is asking a better question.
-
-Once that map exists, useful things become cheap:
+That's the trick. That map already exists and you can use it to answer anything instantly:
 
 * “Show me what changed in this project since yesterday.”
 * “Find files that look like secrets or local config.”
