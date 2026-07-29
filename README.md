@@ -2,34 +2,33 @@
 
 ![](demo.gif)
 
-## Purpose
 
-This tool gives an AI assistant fast access to the files on your computer.
+# Instant File Search for AI Agents
 
-It can find files by name, extension, date, size, or location. It can count files, show file paths, and search inside folders. It gives the assistant immediate visibility into the files on your machine.
+Search 30,000 files instantly. Or 300,000. Or 3 million.
 
-It answers in milliseconds, not seconds. It does not search folder by folder.
+Ask your AI assistant to find every PDF edited last week, every `.env` file buried in your repos, every invoice from March, the largest files in a project, or every filename matching a pattern. It can count matching files, return paths, filter by extension, search inside specific folders, and give agents immediate visibility into what actually exists on your machine.
+
+No folder-by-folder crawling.
 
 ## How It Works
 
-A normal file search starts at a folder. The tool opens the folder and looks at the items inside. It opens each subfolder and repeats the process. This is simple but slow.
+The ordinary way to search for files is the hard way: start at a folder, open it, look at what's inside, then open the next folder, and keep going. It's simple, but it's wasteful. If you already asked the same computer where all its files are a moment ago, why should it pretend to be surprised every time?
 
-The computer already keeps a record of the files on each drive. When you create a file, the computer adds it to the record. When you rename or delete a file, the computer changes the record. This record is the NTFS Master File Table.
+The better way is to keep a map.
 
-This tool runs a search directly in that record. It does not walk through the directory tree. It sends one query and gets all the matching results.
+Your computer already knows when a file is created, renamed, moved, or deleted. They're recorded as they happen. So instead of sending the assistant out to inspect the disk from scratch, this tool lets it ask a live map of the filesystem, the NTFS Master File Table.
 
-This is why the search is fast. The answer is already in a list that the computer keeps up to date.
+That's the trick. That map already exists and you can use it to answer anything instantly:
 
-## Capabilities
+* GǣShow me what changed in this project since yesterday.Gǥ
+* GǣFind files that look like secrets or local config.Gǥ
+* GǣList source files but ignore dependencies and build output.Gǥ
+* GǣCount how many test files exist beside implementation files.Gǥ
+* GǣFind old exports, duplicate downloads, or forgotten installers.Gǥ
+* GǣGive me the projectG��s shape before reading the code.Gǥ
 
-You can use this tool for these types of searches:
-
-* "Show me what changed in this project since yesterday."
-* "Find files that look like secrets or local config."
-* "List source files but ignore dependencies and build output."
-* "Count how many test files exist beside implementation files."
-* "Find old exports, duplicate downloads, or forgotten installers."
-* "Give me the project's shape before reading the code."
+These are the kinds of file operations agents usually waste time on. Here, they become instant lookups.
 
 ## Technical Details
 
@@ -328,3 +327,4 @@ Detailed docs in the `docs/` directory: `architecture.md`, `build.md`, `developm
 ## License
 
 MIT
+
