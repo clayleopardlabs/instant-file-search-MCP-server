@@ -1,41 +1,70 @@
-﻿# Instant File Search for AI Agents
+# Instant File Search for AI Agents
 
-Here is what happens when you ask an AI agent to find every config file in a project:
+![](demo.gif)
 
-The agent picks a folder and asks the operating system what is inside. It gets back a list of entries. It picks a subfolder and asks again. Then again. For every directory, one round trip to the filesystem. A project with ten thousand folders means ten thousand trips.
 
-That finds the files eventually. But it is slow, and it is unnecessary, because the computer already keeps a complete list.
+# Instant File Search for AI Agents
 
-## The Record the Filesystem Already Keeps
+Search 30,000 files instantly. Or 300,000. Or 3 million.
 
-Every time you save a file, Windows writes its name, its location, its size, and the current time into a master record on the drive. When you move or rename the file, the record updates. When you delete it, the slot marks free.
+Ask your AI assistant to find every PDF edited last week, every `.env` file buried in your repos, every invoice from March, the largest files in a project, or every filename matching a pattern. It can count matching files, return paths, filter by extension, search inside specific folders, and give agents immediate visibility into what actually exists on your machine.
 
-This record is not a separate index you have to build and maintain. It is part of how NTFS works - the filesystem cannot function without it. The data is always there, always current, always covering every file on every drive.
+No folder-by-folder crawling.
 
-Normal search tools - `find`, `Get-ChildItem`, a recursive glob - ignore this record. They start from wherever you point them and walk the directory tree one node at a time. That works fine when you need one file in one folder. It is wasteful when the answer already lives in a single table the computer updates for you.
+## How It Works
 
-## Reading the Table Directly
+The ordinary way to search for files is the hard way: start at a folder, open it, look at what's inside, then open the next folder, and keep going. It's simple, but it's wasteful. If you already asked the same computer where all its files are a moment ago, why should it pretend to be surprised every time?
 
-A tool like Everything by Voidtools reads this master record directly. It connects to the running Everything desktop application through a standard Windows messaging channel (WM_COPYDATA - the mechanism two windows use to exchange text). It sends a query, the desktop app looks up the answer in its in-memory index, and sends back the results. No directory walking. No recursive calls. One round trip.
+The better way is to keep a map.
 
-Everything keeps its index current by registering for filesystem notifications. When a file appears, disappears, or changes, the index updates in near real time. So every query starts from a complete picture of what exists, not from a snapshot that was correct the last time you searched.
+Your computer already knows when a file is created, renamed, moved, or deleted. They're recorded as they happen. So instead of sending the assistant out to inspect the disk from scratch, this tool lets it ask a live map of the filesystem, the NTFS Master File Table.
 
-This is why a search across every file on a multi-terabyte drive returns in milliseconds. The question goes to a place that already holds the answer.
+That's the trick. That map already exists and you can use it to answer anything instantly:
 
-## What This Project Does
+* “Show me what changed in this project since yesterday.”
+* “Find files that look like secrets or local config.”
+* “List source files but ignore dependencies and build output.”
+* “Count how many test files exist beside implementation files.”
+* “Find old exports, duplicate downloads, or forgotten installers.”
+* “Give me the project’s shape before reading the code.”
 
-This project wraps that query channel into three tools that speak the Model Context Protocol - a standard that lets AI agents call external capabilities through a simple JSON message exchange over stdin and stdout.
+These are the kinds of file operations agents usually waste time on. Here, they become instant lookups.
 
-The agent calls `find_files` with a pattern and a path. The binary forwards the request to Everything through the Windows messaging channel, collects the structured result, and returns it as JSON. The agent never runs a slow shell command or reads a partial directory listing. It asks the catalog and gets the answer.
+## Technical Details
+
+Under the hood, this server connects your MCP-compatible AI client to a version of the high-speed file index.
+
+It currently uses a free utility called Everything which stores and monitors an index of the NTFS Master File Table in RAM (uses about 0.5-1 gb depending on the size of your disks) and stays current through filesystem change notifications. Because it doesn't need to crawl directories on each search, queries that would normally require expensive recursive scans are answered in milliseconds.
+
+This MCP server exposes that capability to AI assistants and coding agents, allowing them to query the local filesystem through structured tool calls instead of relying on slow shell commands, repeated directory walks, or fragile manual search loops.
+
+It works with any MCP-compatible client, including VS Code, Cursor, Claude Desktop, and OpenCode, with agent and sub-agent support through the optional plugin adapter.
+
 
 Two additional tools come with the same binary:
 
 - `count_files` returns only the number of matches, without transferring file data. Call this first when you are not sure whether a pattern matches ten files or ten million.
 - `search_status` reports whether Everything is running, the IPC channel is responding, and the database is loaded. Call this when the other tools fail unexpectedly to find out whether the engine is the problem.
 
+## One-Command Install
+
+```powershell
+powershell -c "irm https://raw.githubusercontent.com/clayleopardlabs/instantaneous-windows-file-search-mcp-server/master/scripts/install.ps1 | iex"
+```
+
+This installs Everything by Voidtools (via winget) and downloads the latest pre-built binary. No Rust toolchain needed.
+
 ## What You Need
 
-**Everything by Voidtools** must be installed and running. This project is a bridge, not a search engine. Everything is free, runs on any modern Windows machine, and works quietly from the system tray. Download it at [voidtools.com](https://www.voidtools.com). Version 1.5 or later, any edition. Windows only - Everything indexes the NTFS Master File Table, which does not exist on other platforms.
+**Everything by Voidtools** must be installed and running. This project is a bridge, not a search engine. Everything is free, runs on any modern Windows machine, and works quietly from the system tray. Version 1.5 or later, any edition. Windows only - Everything indexes the NTFS Master File Table, which does not exist on other platforms.
+
+Everything can be installed silently:
+
+```powershell
+winget install voidtools.Everything --accept-source-agreements --silent
+```
+
+Or download the installer directly: [Everything-1.5.0.1418b.x64-Setup.exe](https://www.voidtools.com/Everything-1.5.0.1418b.x64-Setup.exe)
 
 Everything must be running for the IPC channel to work. It can be minimized to the system tray; no GUI window needs to be visible.
 
@@ -45,7 +74,7 @@ Everything must be running for the IPC channel to work. It can be minimized to t
 
 **The plugin adapter** (TypeScript, optional) is only needed for OpenCode users who want sub-agents (explore, librarian, task workers) to access the same tools. Sub-agents do not inherit MCP tools automatically. The plugin bridges that gap by spawning the binary as a child process.
 
-## Quick Start
+## Quick Start (build from source)
 
 ```sh
 git clone https://github.com/clayleopardlabs/instantaneous-windows-file-search-mcp-server
@@ -54,6 +83,8 @@ cargo build --release
 ```
 
 Binary at `target/release/instantaneous-windows-file-search-mcp-server.exe`.
+
+The project pins the `x86_64-pc-windows-gnu` Rust target by default, so you only need [MSYS2/MinGW-w64](https://www.msys2.org/) (install via `winget install MSYS2.MSYS2`) instead of the full Visual Studio Build Tools. If you prefer MSVC, override the toolchain in `rust-toolchain.toml` or pass `--target x86_64-pc-windows-msvc`.
 
 Add to your MCP client configuration:
 
@@ -263,17 +294,17 @@ Default (omit `fields`): all common fields.
 
 ```
 MCP Host (VS Code / Cursor / Claude Desktop)
-  ΓööΓöÇ MCP binary (Rust, stdin/stdout)
-       ΓööΓöÇ Everything IPC (WM_COPYDATA)
-            ΓööΓöÇ Everything Desktop App
-                 ΓööΓöÇ NTFS Master File Table
+  └─ MCP binary (Rust, stdin/stdout)
+       └─ Everything IPC (WM_COPYDATA)
+            └─ Everything Desktop App
+                 └─ NTFS Master File Table
 
 OpenCode (main + sub-agents)
-  ΓööΓöÇ Plugin adapter (TypeScript)
-       ΓööΓöÇ spawns MCP binary
-            ΓööΓöÇ Everything IPC (WM_COPYDATA)
-                 ΓööΓöÇ Everything Desktop App
-                      ΓööΓöÇ NTFS Master File Table
+  └─ Plugin adapter (TypeScript)
+       └─ spawns MCP binary
+            └─ Everything IPC (WM_COPYDATA)
+                 └─ Everything Desktop App
+                      └─ NTFS Master File Table
 ```
 
 All IPC is native Windows messaging. No HTTP, no network, no sockets. The `everything-ipc` Rust crate handles the Win32 window messaging.
