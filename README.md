@@ -2,44 +2,46 @@
 
 ![](demo.gif)
 
+## Purpose
 
-# Instant File Search for AI Agents
+This tool gives an AI assistant fast access to the files on your computer.
 
-Search 30,000 files instantly. Or 300,000. Or 3 million.
+It can find files by name, extension, date, size, or location. It can count files, show file paths, and search inside folders. It gives the assistant immediate visibility into the files on your machine.
 
-Ask your AI assistant to find every PDF edited last week, every `.env` file buried in your repos, every invoice from March, the largest files in a project, or every filename matching a pattern. It can count matching files, return paths, filter by extension, search inside specific folders, and give agents immediate visibility into what actually exists on your machine.
-
-No folder-by-folder crawling.
+It answers in milliseconds, not seconds. It does not search folder by folder.
 
 ## How It Works
 
-The ordinary way to search for files is the hard way: start at a folder, open it, look at what's inside, then open the next folder, and keep going. It's simple, but it's wasteful. If you already asked the same computer where all its files are a moment ago, why should it pretend to be surprised every time?
+A normal file search starts at a folder. The tool opens the folder and looks at the items inside. It opens each subfolder and repeats the process. This is simple but slow.
 
-The better way is to keep a map.
+The computer already keeps a record of the files on each drive. When you create a file, the computer adds it to the record. When you rename or delete a file, the computer changes the record. This record is the NTFS Master File Table.
 
-Your computer already knows when a file is created, renamed, moved, or deleted. They're recorded as they happen. So instead of sending the assistant out to inspect the disk from scratch, this tool lets it ask a live map of the filesystem, the NTFS Master File Table.
+This tool runs a search directly in that record. It does not walk through the directory tree. It sends one query and gets all the matching results.
 
-That's the trick. That map already exists and you can use it to answer anything instantly:
+This is why the search is fast. The answer is already in a list that the computer keeps up to date.
 
-* “Show me what changed in this project since yesterday.”
-* “Find files that look like secrets or local config.”
-* “List source files but ignore dependencies and build output.”
-* “Count how many test files exist beside implementation files.”
-* “Find old exports, duplicate downloads, or forgotten installers.”
-* “Give me the project’s shape before reading the code.”
+## Capabilities
 
-These are the kinds of file operations agents usually waste time on. Here, they become instant lookups.
+You can use this tool for these types of searches:
+
+* "Show me what changed in this project since yesterday."
+* "Find files that look like secrets or local config."
+* "List source files but ignore dependencies and build output."
+* "Count how many test files exist beside implementation files."
+* "Find old exports, duplicate downloads, or forgotten installers."
+* "Give me the project's shape before reading the code."
 
 ## Technical Details
 
-Under the hood, this server connects your MCP-compatible AI client to a version of the high-speed file index.
+This server connects an MCP-compatible AI client to a high-speed file index.
 
-It currently uses a free utility called Everything which stores and monitors an index of the NTFS Master File Table in RAM (uses about 0.5-1 gb depending on the size of your disks) and stays current through filesystem change notifications. Because it doesn't need to crawl directories on each search, queries that would normally require expensive recursive scans are answered in milliseconds.
+It uses a free utility called Everything. Everything keeps an index of the NTFS Master File Table in RAM. It uses about 0.5 GB to 1 GB, based on the size of your disks. It stays current through filesystem change notifications. It does not crawl directories for each search.
 
-This MCP server exposes that capability to AI assistants and coding agents, allowing them to query the local filesystem through structured tool calls instead of relying on slow shell commands, repeated directory walks, or fragile manual search loops.
+Queries that normally need recursive searches are answered in milliseconds.
 
-It works with any MCP-compatible client, including VS Code, Cursor, Claude Desktop, and OpenCode, with agent and sub-agent support through the optional plugin adapter.
+The server gives this capability to AI assistants and coding agents. The agent can query the local filesystem through structured tool calls. It does not need slow shell commands, repeated directory walks, or manual search loops.
 
+The server works with any MCP-compatible client. This includes VS Code, Cursor, Claude Desktop, and OpenCode. It has optional agent and sub-agent support through a plugin adapter.
 
 Two additional tools come with the same binary:
 
