@@ -1,0 +1,19 @@
+{
+  "name": "everything-mcp-plugin",
+  "version": "1.0.0",
+  "description": "OpenCode plugin adapter for Everything MCP server — provides instant PC file search to sub-agents",
+  "private": true,
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "prepublish": "tsc"
+  },
+  "dependencies": {
+    "@opencode-ai/plugin": "^1.17.8"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.7.0"
+  }
+}
