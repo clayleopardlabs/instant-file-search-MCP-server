@@ -52,7 +52,27 @@ Two additional tools come with the same binary:
 powershell -c "irm https://raw.githubusercontent.com/clayleopardlabs/instantaneous-windows-file-search-mcp-server/master/scripts/install.ps1 | iex"
 ```
 
-This installs Everything by Voidtools (via winget) and downloads the latest pre-built binary. No Rust toolchain needed.
+With no client option, this preserves the OpenCode install behavior and uses `%USERPROFILE%\.config\opencode\tools`.
+No Rust toolchain is needed.
+
+For Codex, run the installer with the client selection:
+
+```powershell
+powershell -c "& ([scriptblock]::Create((irm 'https://raw.githubusercontent.com/clayleopardlabs/instantaneous-windows-file-search-mcp-server/master/scripts/install.ps1'))) -Client Codex"
+```
+
+The Codex option installs the binary in `%LOCALAPPDATA%\ClayLeopardLabs\instantaneous-file-search` and registers it with `codex mcp add`.
+The `Both` option uses the same neutral directory and prints the OpenCode configuration for that path.
+
+For a cloned repository, the equivalent commands are:
+
+```powershell
+.\scripts\install.ps1 -Client OpenCode
+.\scripts\install.ps1 -Client Codex
+.\scripts\install.ps1 -Client Both
+```
+
+The installer accepts `-InstallDir` to override the selected default location and `-ExpectedSha256` to verify a downloaded release asset.
 
 ## What You Need
 
@@ -109,6 +129,17 @@ Restart the client. Three tools appear in the agent's tool list: `find_files`, `
 | VS Code, Cursor, Claude Desktop, or any MCP host | MCP binary only | The host loads tools directly |
 | OpenCode main session | MCP binary as MCP server | Configured under `mcp` key in opencode.json |
 | OpenCode sub-agents too | MCP binary + plugin adapter | Sub-agents do not inherit MCP tools |
+| Codex desktop, CLI, or IDE | MCP binary registered with Codex | Codex launches the local stdio server |
+
+### Codex
+
+The installer registers the server as `instantaneous-file-search`. Verify it with:
+
+```powershell
+codex mcp list
+```
+
+Codex uses the local stdio transport already provided by this server; no HTTP endpoint or tunnel is needed for local Codex use. Restart Codex or start a new task after installation if the tools do not appear immediately.
 
 ## Build
 

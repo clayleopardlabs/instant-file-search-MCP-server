@@ -1,0 +1,52 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: msys2/setup-msys2@v2
+        with:
+          update: true
+          install: mingw-w64-x86_64-gcc
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-gnu
+
+      - run: cargo build --release
+        env:
+          CC_x86_64_pc_windows_gnu: gcc
+
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: instantaneous-windows-file-search-mcp-server.exe
+          path: target/release/instantaneous-windows-file-search-mcp-server.exe
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: instantaneous-windows-file-search-mcp-server.exe
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: instantaneous-windows-file-search-mcp-server.exe
+          generate_release_notes: true
