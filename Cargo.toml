@@ -1,11 +1,11 @@
 [package]
-name = "instantaneous-windows-file-search-mcp-server"
+name = "instant-file-search-mcp-server"
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
 authors = ["Clay Leopard Labs"]
-description = "MCP server providing instant PC file search via the Everything NTFS index engine"
-repository = "https://github.com/clayleopardlabs/instantaneous-windows-file-search-mcp-server"
+description = "MCP server providing instant PC file search via the Everything NTFS index engine (self-contained engine bundle)"
+repository = "https://github.com/clayleopardlabs/instant-file-search-mcp-server"
 
 [dependencies]
 everything-ipc = { version = "0.1", features = ["tokio"] }

@@ -7,7 +7,9 @@
 use anyhow::Result;
 use everything_ipc::wm::{EverythingClient, RequestFlags, SearchFlags, Sort};
 use serde::{Deserialize, Serialize};
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 
 // Input types are defined in tools.rs (shared with rmcp tool definitions).
 use crate::tools::{CountParams, SearchParams};
@@ -85,6 +87,241 @@ pub struct EverythingStatus {
 
     /// Everything version string, if available.
     pub version: Option<String>,
+
+    /// Where the search engine came from.
+    pub engine_source: EngineSource,
+
+    /// Whether a bundled portable Everything ships with this MCP install.
+    pub bundled_available: bool,
+
+    /// Whether an installed Everything was detected on this machine.
+    pub installed_available: bool,
+}
+
+/// How the Everything search engine was made available.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum EngineSource {
+    /// A reachable Everything window already existed (user's own install).
+    Existing,
+    /// The MCP launched the installed Everything GUI (e.g. to bridge a service-only install).
+    InstalledLaunched,
+    /// The MCP launched its bundled portable Everything.
+    Bundled,
+    /// No engine could be made available.
+    None,
+}
+
+impl Default for EngineSource {
+    fn default() -> Self {
+        EngineSource::None
+    }
+}
+
+// ---- Engine management (self-contained bundle) -----------------------------
+
+/// How long to wait for a freshly launched engine to load its database.
+fn engine_timeout() -> Duration {
+    std::env::var("EVERYTHING_ENGINE_TIMEOUT_SECS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .map(Duration::from_secs)
+        .unwrap_or(Duration::from_secs(60))
+}
+
+/// The Everything service only serves the DEFAULT instance, so both the
+/// user's install and the bundled portable engine connect via
+/// [`EverythingClient::new()`].
+enum EngineKind {
+    Default,
+}
+
+impl EngineKind {
+    fn connect(&self) -> Result<EverythingClient> {
+        EverythingClient::new().map_err(|e| {
+            anyhow::anyhow!("Everything IPC unavailable for default instance: {e}")
+        })
+    }
+}
+
+impl std::fmt::Debug for EngineKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "default")
+    }
+}
+
+/// Path to the bundled portable Everything.exe, if it ships with this install.
+///
+/// Resolution order:
+/// 1. `EVERYTHING_ENGINE_EXE` environment variable (explicit override)
+/// 2. `..\everything\Everything.exe` relative to this binary
+/// 3. `everything\Everything.exe` next to this binary
+pub fn bundled_everything_path() -> Option<PathBuf> {
+    if let Ok(explicit) = std::env::var("EVERYTHING_ENGINE_EXE") {
+        let p = PathBuf::from(explicit);
+        if p.is_file() {
+            return Some(p);
+        }
+    }
+
+    let own_dir = std::env::current_exe().ok()?.parent()?.to_path_buf();
+    let candidates = [
+        own_dir.join("..").join("everything").join("Everything.exe"),
+        own_dir.join("everything").join("Everything.exe"),
+    ];
+    candidates.into_iter().find(|p| p.is_file())
+}
+
+/// Locate an installed Everything.exe (the user's own install).
+fn installed_everything_path() -> Option<PathBuf> {
+    let mut candidates: Vec<PathBuf> = Vec::new();
+
+    // Registry App Paths (written by the Everything installer).
+    for hive in [
+        r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\Everything.exe",
+        r"HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\Everything.exe",
+    ] {
+        let out = Command::new("reg")
+            .args(["query", hive, "/ve"])
+            .output()
+            .ok();
+        if let Some(out) = out {
+            if let Ok(text) = String::from_utf8(out.stdout) {
+                // Line format: "    (Default)    REG_SZ    C:\Program Files\Everything\Everything.exe"
+                for line in text.lines() {
+                    if let Some(idx) = line.find("REG_SZ") {
+                        let p = PathBuf::from(line[idx + "REG_SZ".len()..].trim());
+                        if p.is_file() {
+                            candidates.push(p);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Common install locations.
+    for base in [
+        std::env::var("ProgramFiles").unwrap_or_default(),
+        std::env::var("ProgramFiles(x86)").unwrap_or_default(),
+        std::env::var("LOCALAPPDATA").unwrap_or_default(),
+    ] {
+        if !base.is_empty() {
+            candidates.push(PathBuf::from(base).join("Everything").join("Everything.exe"));
+        }
+    }
+
+    candidates.into_iter().find(|p| p.is_file())
+}
+
+/// Launch an Everything engine. `bundled` selects the bundled portable exe
+/// (with a private config), otherwise the installed GUI.
+fn launch_engine(path: &Path, bundled: bool) -> anyhow::Result<()> {
+    let mut cmd = Command::new(path);
+    if bundled {
+        let ini = path
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join("Everything.ini");
+        // Run as the DEFAULT instance (no -instance flag): the Everything
+        // service only serves the default instance, so the bundled GUI can
+        // connect to a running service for indexing.
+        cmd.args([
+            "-config",
+            ini.to_string_lossy().as_ref(),
+            "-startup",
+            "-first-instance",
+        ]);
+    } else {
+        // The installed GUI connects to a running Everything service if present.
+        cmd.arg("-startup");
+    }
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+
+    cmd.spawn().map_err(|e| {
+        anyhow::anyhow!("failed to launch Everything at {}: {e}", path.display())
+    })?;
+    tracing::info!("launched Everything engine: {}", path.display());
+    Ok(())
+}
+
+/// Wait until an engine of the given kind answers and its DB is loaded.
+fn wait_for_engine(kind: &EngineKind, timeout: Duration) -> bool {
+    let start = Instant::now();
+    loop {
+        if let Ok(client) = kind.connect() {
+            if client.is_ipc_available() && client.is_db_loaded() {
+                return true;
+            }
+        }
+        if start.elapsed() >= timeout {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(300));
+    }
+}
+
+/// Make sure a search engine is available, launching one if necessary.
+///
+/// Priority:
+/// 1. A reachable, loaded Everything window already exists (user's install) — use it.
+/// 2. An installed Everything exists but is not reachable (e.g. service-only
+///    install) — launch its GUI, which bridges the running service.
+/// 3. No installed Everything — launch the bundled portable Everything.
+pub fn ensure_engine() -> Result<EngineSource> {
+    // 1. Existing, fully loaded engine.
+    if let Ok(client) = EverythingClient::new() {
+        if client.is_ipc_available() && client.is_db_loaded() {
+            return Ok(EngineSource::Existing);
+        }
+    }
+
+    let installed = installed_everything_path();
+
+    // 2. Launch the installed Everything GUI (bridges service-only installs).
+    if let Some(i) = &installed {
+        tracing::info!("launching installed Everything at {}", i.display());
+        if launch_engine(i, false).is_ok()
+            && wait_for_engine(&EngineKind::Default, engine_timeout())
+        {
+            return Ok(EngineSource::InstalledLaunched);
+        }
+    }
+
+    // 3. Launch the bundled portable Everything (default instance, connects
+    //    to the Everything service for indexing when one is present).
+    if let Some(b) = bundled_everything_path() {
+        tracing::info!("launching bundled Everything at {}", b.display());
+        if launch_engine(&b, true).is_ok()
+            && wait_for_engine(&EngineKind::Default, engine_timeout())
+        {
+            return Ok(EngineSource::Bundled);
+        }
+    }
+
+    let mut msg = String::from("no Everything engine available: no reachable Everything window found");
+    if installed.is_none() {
+        msg.push_str(", no installed Everything, ");
+    }
+    if bundled_everything_path().is_none() {
+        msg.push_str("and no bundled portable Everything");
+    } else {
+        msg.push_str("and launching available engines failed or timed out");
+    }
+    msg.push_str(". Run `search_status` for diagnostics.");
+    Err(anyhow::anyhow!(msg))
+}
+
+/// Create an IPC client for the engine source currently in effect.
+fn create_client_for(source: &EngineSource) -> Result<EverythingClient> {
+    match source {
+        EngineSource::Existing | EngineSource::InstalledLaunched | EngineSource::Bundled => {
+            EverythingClient::new().map_err(|e| anyhow::anyhow!("Everything IPC failed: {e}"))
+        }
+        EngineSource::None => Err(anyhow::anyhow!("no Everything engine available")),
+    }
 }
 
 // ---- Public API ------------------------------------------------------------
@@ -243,45 +480,40 @@ pub fn is_running() -> bool {
 }
 
 /// Return detailed status of the Everything IPC connection.
+///
+/// Self-healing: if no engine is available, attempts to launch one (bundled
+/// portable Everything first, then the installed GUI) before reporting.
 #[allow(dead_code)]
 pub fn status() -> Result<EverythingStatus> {
-    let client = match EverythingClient::new() {
-        Ok(c) => c,
-        Err(e) => {
-            return Ok(EverythingStatus {
-                connected: false,
-                window_found: matches!(e, everything_ipc::wm::IpcError::NoIpcWindow),
-                ipc_available: false,
-                db_loaded: false,
-                version: None,
-            })
-        }
+    let bundled_available = bundled_everything_path().is_some();
+    let installed_available = installed_everything_path().is_some();
+
+    let source = ensure_engine().unwrap_or(EngineSource::None);
+    let client = create_client_for(&source);
+
+    let (ipc_available, db_loaded, window_found) = match &client {
+        Ok(c) => (c.is_ipc_available(), c.is_db_loaded(), true),
+        Err(_) => (false, false, false),
     };
 
-    let ipc_available = client.is_ipc_available();
-    let db_loaded = client.is_db_loaded();
-
     Ok(EverythingStatus {
-        connected: ipc_available && db_loaded,
-        window_found: true,
+        connected: source != EngineSource::None && ipc_available && db_loaded,
+        window_found,
         ipc_available,
         db_loaded,
         version: None,
+        engine_source: source,
+        bundled_available,
+        installed_available,
     })
 }
 
 // ---- Internal helpers ------------------------------------------------------
 
-/// Try to create an Everything IPC client, with a user-friendly bail! on
-/// failure.
+/// Try to create an Everything IPC client, launching an engine if needed.
 fn create_client() -> Result<EverythingClient> {
-    EverythingClient::new().map_err(|e| {
-        anyhow::anyhow!(
-            "Everything is not running. Please start Everything from your installation directory. \
-             The GUI must be running (minimized to system tray is fine) \
-             for IPC to work. (underlying error: {e})"
-        )
-    })
+    let source = ensure_engine()?;
+    create_client_for(&source)
 }
 
 /// Default directory patterns excluded when include_all is false.

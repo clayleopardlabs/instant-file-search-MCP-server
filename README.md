@@ -1,10 +1,5 @@
 # Instant File Search for AI Agents
 
-![](demo.gif)
-
-
-# Instant File Search for AI Agents
-
 Search 30,000 files instantly. Or 300,000. Or 3 million.
 
 Ask your AI assistant to find every PDF edited last week, every `.env` file buried in your repos, every invoice from March, the largest files in a project, or every filename matching a pattern. It can count matching files, return paths, filter by extension, search inside specific folders, and give agents immediate visibility into what actually exists on your machine.
@@ -21,30 +16,31 @@ Your computer already knows when a file is created, renamed, moved, or deleted. 
 
 That's the trick. That map already exists and you can use it to answer anything instantly:
 
-* “Show me what changed in this project since yesterday.”
-* “Find files that look like secrets or local config.”
-* “List source files but ignore dependencies and build output.”
-* “Count how many test files exist beside implementation files.”
-* “Find old exports, duplicate downloads, or forgotten installers.”
-* “Give me the project’s shape before reading the code.”
+* "Show me what changed in this project since yesterday."
+* "Find files that look like secrets or local config."
+* "List source files but ignore dependencies and build output."
+* "Count how many test files exist beside implementation files."
+* "Find old exports, duplicate downloads, or forgotten installers."
+* "Give me the project's shape before reading the code."
 
 These are the kinds of file operations agents usually waste time on. Here, they become instant lookups.
 
 ## Technical Details
 
-Under the hood, this server connects your MCP-compatible AI client to a version of the high-speed file index.
+Under the hood, this server talks to a high-speed file index built on the NTFS Master File Table.
 
-It currently uses a free utility called Everything which stores and monitors an index of the NTFS Master File Table in RAM (uses about 0.5-1 gb depending on the size of your disks) and stays current through filesystem change notifications. Because it doesn't need to crawl directories on each search, queries that would normally require expensive recursive scans are answered in milliseconds.
+The index is provided by Everything, a free utility by Voidtools, which stores and monitors the index in RAM (about 0.5-1 GB depending on the size of your disks) and stays current through filesystem change notifications. Because it doesn't need to crawl directories on each search, queries that would normally require expensive recursive scans are answered in milliseconds.
+
+The server is **self-contained**: it ships with a bundled portable Everything engine, and if no Everything is running it starts one automatically (reusing an installed Everything first when one exists). You do not need to install Everything yourself, and no GUI window is required — the engine can run quietly from the system tray or headless through the Everything service.
 
 This MCP server exposes that capability to AI assistants and coding agents, allowing them to query the local filesystem through structured tool calls instead of relying on slow shell commands, repeated directory walks, or fragile manual search loops.
 
 It works with any MCP-compatible client, including VS Code, Cursor, Claude Desktop, and OpenCode, with agent and sub-agent support through the optional plugin adapter.
 
-
 Two additional tools come with the same binary:
 
 - `count_files` returns only the number of matches, without transferring file data. Call this first when you are not sure whether a pattern matches ten files or ten million.
-- `search_status` reports whether Everything is running, the IPC channel is responding, and the database is loaded. Call this when the other tools fail unexpectedly to find out whether the engine is the problem.
+- `search_status` reports whether the search engine is running, the IPC channel is responding, the database is loaded, and which engine source is active. Call this when the other tools fail unexpectedly to find out whether the engine is the problem.
 
 ## One-Command Install
 
@@ -52,21 +48,19 @@ Two additional tools come with the same binary:
 powershell -c "irm https://raw.githubusercontent.com/clayleopardlabs/instantaneous-windows-file-search-mcp-server/master/scripts/install.ps1 | iex"
 ```
 
-This installs Everything by Voidtools (via winget) and downloads the latest pre-built binary. No Rust toolchain needed.
+This installs everything needed — the MCP binary AND a bundled portable Everything engine — with no separate prerequisites. No Rust toolchain needed.
 
 ## What You Need
 
-**Everything by Voidtools** must be installed and running. This project is a bridge, not a search engine. Everything is free, runs on any modern Windows machine, and works quietly from the system tray. Version 1.5 or later, any edition. Windows only - Everything indexes the NTFS Master File Table, which does not exist on other platforms.
+**Nothing extra.** The installer deploys the MCP binary plus a bundled portable Everything engine to `%LOCALAPPDATA%\ClayLeopardLabs\EverythingMCP`. On first search, the server picks the best available engine:
 
-Everything can be installed silently:
+1. An Everything that is already running (yours — zero extra RAM).
+2. An installed Everything with no window (its GUI is launched and connects to the Everything service).
+3. The bundled portable engine (self-contained fallback).
 
-```powershell
-winget install voidtools.Everything --accept-source-agreements --silent
-```
+Windows only — Everything indexes the NTFS Master File Table, which does not exist on other platforms.
 
-Or download the installer directly: [Everything-1.5.0.1418b.x64-Setup.exe](https://www.voidtools.com/Everything-1.5.0.1418b.x64-Setup.exe)
-
-Everything must be running for the IPC channel to work. It can be minimized to the system tray; no GUI window needs to be visible.
+If you already use Everything yourself, the server simply uses your running instance. The bundled engine exists so the server works on machines that have never had Everything installed.
 
 ## Two Pieces, One Binary
 
@@ -84,7 +78,7 @@ Run the included installer from a checkout:
 .\scripts\install.ps1
 ```
 
-The installer detects Codex, OpenCode, and Claude Desktop, then lets you choose which detected clients to configure. It builds the release binary if needed, copies it to a stable per-user location, registers the selected MCP server, installs the OpenCode adapter in `%USERPROFILE%\.config\opencode\plugins\everything-mcp-plugin`, and backs up JSON configuration files before editing them. It is safe to run again after an OS reinstall or a source update. To verify the installation later:
+The installer detects Codex, OpenCode, and Claude Desktop, then lets you choose which detected clients to configure. It builds the release binary if needed, copies it to a stable per-user location, deploys the bundled Everything engine, registers the selected MCP server, installs the OpenCode adapter in `%USERPROFILE%\.config\opencode\plugins\instant-file-search-mcp-plugin`, and backs up JSON configuration files before editing them. It is safe to run again after an OS reinstall or a source update. To verify the installation later:
 
 ```powershell
 .\scripts\doctor.ps1
@@ -100,11 +94,11 @@ For unattended setup, select clients explicitly:
 Use `-SkipBuild` when you already have a release binary, `-SkipCodex`, `-SkipOpenCode`, or `-SkipClaude` to omit a client, or `-DryRun` to preview the actions. Codex’s native registration command is also available directly:
 
 ```powershell
-codex mcp add everything -- C:\path\to\instantaneous-windows-file-search-mcp-server.exe
+codex mcp add instant-file-search -- C:\path\to\instant-file-search-mcp-server.exe
 codex mcp list
 ```
 
-After installation, restart Codex or start a new task so it reloads the MCP configuration. Everything by Voidtools remains a separate prerequisite; if its IPC or database is unavailable, `search_status` reports that condition.
+After installation, restart Codex or start a new task so it reloads the MCP configuration. The server manages its own search engine; `search_status` reports which engine source is active.
 
 ```sh
 git clone https://github.com/clayleopardlabs/instantaneous-windows-file-search-mcp-server
@@ -112,7 +106,7 @@ cd instantaneous-windows-file-search-mcp-server
 cargo build --release
 ```
 
-Binary at `target/release/instantaneous-windows-file-search-mcp-server.exe`.
+Binary at `target/release/instant-file-search-mcp-server.exe`.
 
 The project pins the `x86_64-pc-windows-gnu` Rust target by default, so you only need [MSYS2/MinGW-w64](https://www.msys2.org/) (install via `winget install MSYS2.MSYS2`) instead of the full Visual Studio Build Tools. If you prefer MSVC, override the toolchain in `rust-toolchain.toml` or pass `--target x86_64-pc-windows-msvc`.
 
@@ -121,9 +115,9 @@ Add to your MCP client configuration:
 ```json
 {
   "mcpServers": {
-    "everything": {
+    "instant-file-search": {
       "type": "local",
-      "command": ["C:/full/path/to/instantaneous-windows-file-search-mcp-server.exe"],
+      "command": ["C:/full/path/to/instant-file-search-mcp-server.exe"],
       "enabled": true
     }
   }
@@ -150,7 +144,7 @@ Requires the [Rust toolchain](https://rustup.rs):
 cargo build --release
 ```
 
-Output: `target/release/instantaneous-windows-file-search-mcp-server.exe`
+Output: `target/release/instant-file-search-mcp-server.exe`
 
 ### Plugin adapter (optional)
 
@@ -171,9 +165,9 @@ Output: `plugin/dist/index.js`
 ```json
 {
   "mcpServers": {
-    "everything": {
+    "instant-file-search": {
       "type": "local",
-      "command": ["C:/path/to/instantaneous-windows-file-search-mcp-server.exe"],
+      "command": ["C:/path/to/instant-file-search-mcp-server.exe"],
       "enabled": true
     }
   }
@@ -189,8 +183,8 @@ Add to `~/.config/opencode/opencode.json` under the `mcp` key:
 ```json
 {
   "mcp": {
-    "everything": {
-      "command": ["C:/path/to/instantaneous-windows-file-search-mcp-server.exe"],
+    "instant-file-search": {
+      "command": ["C:/path/to/instant-file-search-mcp-server.exe"],
       "enabled": true
     }
   }
@@ -200,27 +194,28 @@ Add to `~/.config/opencode/opencode.json` under the `mcp` key:
 ### OpenCode - sub-agent support (requires plugin)
 
 ```sh
-mkdir -p ~/.config/opencode/plugins/everything-mcp-plugin
-cp -r plugin/dist ~/.config/opencode/plugins/everything-mcp-plugin/
-cp -r plugin/node_modules ~/.config/opencode/plugins/everything-mcp-plugin/
-cp plugin/package.json ~/.config/opencode/plugins/everything-mcp-plugin/
+mkdir -p ~/.config/opencode/plugins/instant-file-search-mcp-plugin
+cp -r plugin/dist ~/.config/opencode/plugins/instant-file-search-mcp-plugin/
+cp -r plugin/node_modules ~/.config/opencode/plugins/instant-file-search-mcp-plugin/
+cp plugin/package.json ~/.config/opencode/plugins/instant-file-search-mcp-plugin/
 ```
 
 Register in `~/.config/opencode/opencode.json` under the `plugin` array:
 
 ```json
-"file:///C:/Users/YOU/.config/opencode/plugins/everything-mcp-plugin/dist/index.js"
+"file:///C:/Users/YOU/.config/opencode/plugins/instant-file-search-mcp-plugin/dist/index.js"
 ```
 
 The MCP entry and the plugin coexist. The MCP entry serves the main session; the plugin serves sub-agents.
 
 ### Plugin binary resolution order
 
-1. `EVERYTHING_MCP_BINARY` environment variable
-2. Default path relative to `plugin/dist/`: `../../target/release/instantaneous-windows-file-search-mcp-server.exe`
-3. `PATH`
+1. `INSTANT_FS_MCP_BINARY` environment variable (`EVERYTHING_MCP_BINARY` accepted for backward compatibility)
+2. Stable install: `%LOCALAPPDATA%\ClayLeopardLabs\EverythingMCP\instant-file-search-mcp-server.exe`
+3. Default path relative to `plugin/dist/`: `../../target/release/instant-file-search-mcp-server.exe`
+4. `PATH`
 
-Set `EVERYTHING_MCP_BINARY` if the default path does not match your layout.
+Set `INSTANT_FS_MCP_BINARY` if none of the default paths match your layout.
 
 ## Tools
 
@@ -326,18 +321,18 @@ Default (omit `fields`): all common fields.
 MCP Host (VS Code / Cursor / Claude Desktop)
   └─ MCP binary (Rust, stdin/stdout)
        └─ Everything IPC (WM_COPYDATA)
-            └─ Everything Desktop App
+            └─ Everything engine (running instance / installed GUI / bundled portable)
                  └─ NTFS Master File Table
 
 OpenCode (main + sub-agents)
   └─ Plugin adapter (TypeScript)
        └─ spawns MCP binary
             └─ Everything IPC (WM_COPYDATA)
-                 └─ Everything Desktop App
+                 └─ Everything engine (running instance / installed GUI / bundled portable)
                       └─ NTFS Master File Table
 ```
 
-All IPC is native Windows messaging. No HTTP, no network, no sockets. The `everything-ipc` Rust crate handles the Win32 window messaging.
+All IPC is native Windows messaging. No HTTP, no network, no sockets. The `everything-ipc` Rust crate handles the Win32 window messaging. When no engine is reachable, the binary starts one automatically (installed GUI first, then the bundled portable engine) and waits for its database to load.
 
 ## Development
 
@@ -345,9 +340,9 @@ All IPC is native Windows messaging. No HTTP, no network, no sockets. The `every
 cargo test
 ```
 
-Unit tests cover sort parsing, field parsing, timestamp formatting, and attribute formatting. No integration tests - Everything must be running for real IPC queries.
+Unit tests cover sort parsing, field parsing, timestamp formatting, and attribute formatting. No integration tests - a search engine must be running for real IPC queries.
 
-Logging is controlled by the `EVERYTHING_MCP_LOG` environment variable (tracing-subscriber env-filter). Unset by default - no log output.
+Logging is controlled by the `EVERYTHING_MCP_LOG` environment variable (tracing-subscriber env-filter). Unset by default - no log output. Logs go to stderr so they never corrupt the MCP JSON stream.
 
 Key dependencies: `rmcp` for MCP transport, `everything-ipc` for WM_COPYDATA IPC, `schemars` for JSON Schema generation, `tokio` for async runtime. Everything calls are blocking and dispatched via `spawn_blocking`. No unsafe blocks, no generated code, no build scripts.
 

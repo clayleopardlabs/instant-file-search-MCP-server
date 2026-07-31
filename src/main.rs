@@ -9,9 +9,10 @@ use tracing_subscriber::EnvFilter;
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::from_env("EVERYTHING_MCP_LOG"))
+        .with_writer(std::io::stderr)
         .init();
 
-    tracing::info!("instant-windows-search-mcp-server starting");
+    tracing::info!("instant-file-search-mcp-server starting");
     let handler = handler::EverythingHandler;
     let transport = rmcp::transport::stdio();
     handler.serve(transport).await?.waiting().await?;

@@ -1,7 +1,7 @@
 {
-  "name": "everything-mcp-plugin",
+  "name": "instant-file-search-mcp-plugin",
   "version": "1.0.0",
-  "description": "OpenCode plugin adapter for Everything MCP server — provides instant PC file search to sub-agents",
+  "description": "OpenCode plugin adapter for Instant File Search MCP server — provides instant PC file search to sub-agents",
   "private": true,
   "type": "module",
   "main": "dist/index.js",
