@@ -3,7 +3,7 @@
 ![](demo.gif)
 
 
-# Instant File Search for AI Agents
+# Millions of files in milliseconds.
 
 Search 30,000 files instantly. Or 300,000. Or 3 million.
 
