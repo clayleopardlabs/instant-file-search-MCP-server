@@ -42,3 +42,17 @@ Optional:
 ## When to use it
 
 Use Secure MCP Tunnel when you want a private local server to be reachable from ChatGPT or another supported OpenAI product without exposing the machine directly to the internet.
+
+## GitHub PAT pushes
+
+If you want this clone to push to GitHub using a PAT instead of Windows schannel, run:
+
+```powershell
+.\scripts\setup-git-auth.ps1
+```
+
+That configures repo-local Git settings to:
+
+- prefer OpenSSL over schannel
+- ask the helper script for GitHub credentials
+- read the token from `GITHUB_TOKEN` or `GH_TOKEN`
