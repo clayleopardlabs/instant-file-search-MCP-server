@@ -76,6 +76,36 @@ Everything must be running for the IPC channel to work. It can be minimized to t
 
 ## Quick Start (build from source)
 
+### Automatic setup for Codex, OpenCode, and Claude Desktop
+
+Run the included installer from a checkout:
+
+```powershell
+.\scripts\install.ps1
+```
+
+The installer detects Codex, OpenCode, and Claude Desktop, then lets you choose which detected clients to configure. It builds the release binary if needed, copies it to a stable per-user location, registers the selected MCP server, installs the OpenCode adapter in `%USERPROFILE%\.config\opencode\plugins\everything-mcp-plugin`, and backs up JSON configuration files before editing them. It is safe to run again after an OS reinstall or a source update. To verify the installation later:
+
+```powershell
+.\scripts\doctor.ps1
+```
+
+For unattended setup, select clients explicitly:
+
+```powershell
+.\scripts\install.ps1 -Clients all
+.\scripts\install.ps1 -Clients codex,opencode,claude
+```
+
+Use `-SkipBuild` when you already have a release binary, `-SkipCodex`, `-SkipOpenCode`, or `-SkipClaude` to omit a client, or `-DryRun` to preview the actions. Codex’s native registration command is also available directly:
+
+```powershell
+codex mcp add everything -- C:\path\to\instantaneous-windows-file-search-mcp-server.exe
+codex mcp list
+```
+
+After installation, restart Codex or start a new task so it reloads the MCP configuration. Everything by Voidtools remains a separate prerequisite; if its IPC or database is unavailable, `search_status` reports that condition.
+
 ```sh
 git clone https://github.com/clayleopardlabs/instantaneous-windows-file-search-mcp-server
 cd instantaneous-windows-file-search-mcp-server
