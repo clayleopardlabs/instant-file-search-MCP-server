@@ -1,23 +1,42 @@
 import type { Plugin } from "@opencode-ai/plugin";
 import { tool } from "@opencode-ai/plugin";
 import { spawn, type ChildProcess } from "node:child_process";
+import { existsSync } from "node:fs";
 import { fileURLToPath } from "url";
 import path from "path";
 
 const z = tool.schema;
 
 /**
- * Path to the Everything MCP server binary.
- * Adjust for your environment or use the EVERYTHING_MCP_BINARY env var.
+ * Path to the Instant File Search MCP server binary.
+ * Adjust for your environment or use the INSTANT_FS_MCP_BINARY env var
+ * (EVERYTHING_MCP_BINARY is accepted for backward compatibility).
  */
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const BINARY_PATH: string =
+  process.env.INSTANT_FS_MCP_BINARY ??
   process.env.EVERYTHING_MCP_BINARY ??
-  path.join(__dirname, "..", "..", "target", "release", "instantaneous-windows-file-search-mcp-server.exe");
+  (() => {
+    const installRoot = path.join(
+      process.env.LOCALAPPDATA ?? "",
+      "ClayLeopardLabs",
+      "EverythingMCP",
+      "instant-file-search-mcp-server.exe",
+    );
+    if (installRoot && existsSync(installRoot)) return installRoot;
+    return path.join(
+      __dirname,
+      "..",
+      "..",
+      "target",
+      "release",
+      "instant-file-search-mcp-server.exe",
+    );
+  })();
 
-const CALL_TIMEOUT_MS = 30_000;
+const CALL_TIMEOUT_MS = 90_000;
 
 // ── MCP stdio transport (NDJSON — newline-delimited JSON) ────────
 // The rmcp crate's transport-io uses NDJSON, NOT Content-Length framing.

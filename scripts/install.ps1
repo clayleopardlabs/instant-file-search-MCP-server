@@ -12,13 +12,13 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$serverName = 'everything'
-$binaryName = 'instantaneous-windows-file-search-mcp-server.exe'
+$serverName = 'instant-file-search'
+$binaryName = 'instant-file-search-mcp-server.exe'
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $stableBinary = Join-Path $InstallRoot $binaryName
 $openCodeConfigDir = Join-Path $env:USERPROFILE '.config\opencode'
 $openCodeConfig = Join-Path $openCodeConfigDir 'opencode.json'
-$openCodePluginRoot = Join-Path $openCodeConfigDir 'plugins\everything-mcp-plugin'
+$openCodePluginRoot = Join-Path $openCodeConfigDir 'plugins\instant-file-search-mcp-plugin'
 $claudeConfig = Join-Path $env:APPDATA 'Claude\claude_desktop_config.json'
 
 function Write-Step([string]$Message) { Write-Host "`n==> $Message" -ForegroundColor Cyan }
@@ -90,7 +90,7 @@ function Install-Codex {
     if ($DryRun) { Write-Action "codex mcp add $serverName -- '$stableBinary'"; return }
 
     $listOutput = (& $codex.Source mcp list 2>&1 | Out-String)
-    if ($listOutput -match '(?im)\beverything\b') {
+    if ($listOutput -match '(?im)\beverything\b' -or $listOutput -match '(?im)\binstant-file-search\b') {
         $helpOutput = (& $codex.Source mcp --help 2>&1 | Out-String)
         if ($helpOutput -match '(?im)\bremove\b') {
             & $codex.Source mcp remove $serverName
@@ -115,7 +115,7 @@ function Install-OpenCode {
 
     if ($DryRun) {
         Write-Action "Install plugin files into '$openCodePluginRoot'"
-        Write-Action "Set user EVERYTHING_MCP_BINARY to '$stableBinary'"
+        Write-Action "Set user INSTANT_FS_MCP_BINARY to '$stableBinary'"
         Write-Action "Add MCP server '$serverName' to '$openCodeConfig'"
         return
     }
@@ -137,7 +137,7 @@ function Install-OpenCode {
         Copy-Item -LiteralPath (Join-Path $pluginSource 'node_modules') -Destination $openCodePluginRoot -Recurse -Force
     } else { Write-Host 'WARN: npm and plugin/node_modules were not found; OpenCode plugin dependencies are missing.' -ForegroundColor Yellow }
 
-    [Environment]::SetEnvironmentVariable('EVERYTHING_MCP_BINARY', $stableBinary, 'User')
+    [Environment]::SetEnvironmentVariable('INSTANT_FS_MCP_BINARY', $stableBinary, 'User')
     $config = Read-JsonConfig $openCodeConfig
     $mcp = $config.PSObject.Properties['mcp'].Value
     if (-not $mcp) { $mcp = [pscustomobject]@{}; Ensure-Property $config 'mcp' $mcp }
@@ -157,7 +157,7 @@ function Install-Claude {
     Write-Host "PASS: Claude Desktop MCP server configured in '$claudeConfig'." -ForegroundColor Green
 }
 
-Write-Host 'Instantaneous Windows File Search MCP installer' -ForegroundColor Green
+Write-Host 'Instant File Search MCP installer' -ForegroundColor Green
 $selected = @(Select-InstallClients)
 if ($SkipCodex) { $selected = @($selected | Where-Object { $_ -ne 'codex' }) }
 if ($SkipOpenCode) { $selected = @($selected | Where-Object { $_ -ne 'opencode' }) }
@@ -172,12 +172,34 @@ if (-not (Test-Path -LiteralPath $BinaryPath)) {
     if (-not $cargo) { throw 'Rust/Cargo is not installed and the release binary was not found.' }
     Write-Step 'Building the release binary'
     if ($DryRun) { Write-Action "cargo build --release --locked --manifest-path '$repoRoot\Cargo.toml'" }
-    else { & $cargo.Source build --release --locked --manifest-path (Join-Path $repoRoot 'Cargo.toml'); if ($LASTEXITCODE -ne 0) { throw 'Cargo build failed.' } }
+    else {
+        # rustup's self-contained dlltool wrapper is broken; use WinLibs mingw if present.
+        $winLibs = Get-ChildItem (Join-Path $env:LOCALAPPDATA 'Microsoft\WinGet\Packages') -Directory -Filter 'BrechtSanders.WinLibs*' -ErrorAction SilentlyContinue | Where-Object { Test-Path (Join-Path $_.FullName 'mingw64\bin\dlltool.exe') } | Select-Object -First 1
+        if ($winLibs) { $env:PATH = "$(Join-Path $winLibs.FullName 'mingw64\bin');$env:PATH" }
+        & $cargo.Source build --release --locked --manifest-path (Join-Path $repoRoot 'Cargo.toml'); if ($LASTEXITCODE -ne 0) { throw 'Cargo build failed.' }
+    }
 }
 
 Write-Step 'Installing a stable copy of the MCP server'
 if ($DryRun) { Write-Action "Create '$InstallRoot' and copy '$BinaryPath' to '$stableBinary'" }
 else { New-Item -ItemType Directory -Path $InstallRoot -Force | Out-Null; Copy-Item -LiteralPath $BinaryPath -Destination $stableBinary -Force }
+
+Write-Step 'Deploying the bundled Everything engine'
+$bundleDir = Join-Path $InstallRoot 'everything'
+$vendorZip = Join-Path $repoRoot 'vendor\everything\Everything-1.5.0.1418b.x64.zip'
+if (Test-Path -LiteralPath $vendorZip) {
+    if ($DryRun) {
+        Write-Action "Extract '$vendorZip' to '$bundleDir' and copy Everything.ini/LICENSE"
+    } else {
+        New-Item -ItemType Directory -Path $bundleDir -Force | Out-Null
+        Expand-Archive -LiteralPath $vendorZip -DestinationPath $bundleDir -Force
+        Copy-Item -LiteralPath (Join-Path $repoRoot 'vendor\everything\Everything.ini') -Destination $bundleDir -Force
+        Copy-Item -LiteralPath (Join-Path $repoRoot 'vendor\everything\LICENSE-Everything.txt') -Destination $InstallRoot -Force
+        Write-Host "PASS: Bundled Everything deployed to '$bundleDir'." -ForegroundColor Green
+    }
+} else {
+    Write-Host 'WARN: vendor\everything zip was not found; the MCP will use an installed Everything if present (fallback to search_status diagnostics).' -ForegroundColor Yellow
+}
 
 foreach ($client in $selected) {
     switch ($client) {
@@ -189,7 +211,11 @@ foreach ($client in $selected) {
 
 $everything = Get-Process -Name Everything -ErrorAction SilentlyContinue
 if ($everything) { Write-Host 'PASS: Everything is running.' -ForegroundColor Green }
-else { Write-Host 'WARN: Everything is not running. Install/start Everything before searching.' -ForegroundColor Yellow }
+elseif (Test-Path -LiteralPath (Join-Path $InstallRoot 'everything\Everything.exe')) {
+    Write-Host 'PASS: Everything is not running, but the bundled engine will start automatically on first search.' -ForegroundColor Green
+} else {
+    Write-Host 'WARN: Everything is not running and no bundled engine was deployed. Install Everything or re-run the installer with the vendor zip present.' -ForegroundColor Yellow
+}
 Write-Host "`nInstalled binary: $stableBinary" -ForegroundColor Green
 Write-Host 'Restart selected clients so they reload the MCP configuration.'
 Write-Host 'Run .\scripts\doctor.ps1 any time to diagnose the setup.'
