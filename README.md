@@ -360,4 +360,6 @@ Detailed docs in the `docs/` directory: `architecture.md`, `build.md`, `developm
 
 ## License
 
-MIT
+This project (the MCP server, the native indexer, and the plugin adapter) is licensed under the MIT License.
+
+The bundled backup engine is **Everything**, copyright (C) 2018 David Carpenter, also distributed under the MIT License, and its embedded **PCRE** component is copyright (c) 1997-2012 University of Cambridge, distributed under the MIT-style license reproduced in its terms. The full license texts ship with the installer at `%LOCALAPPDATA%\ClayLeopardLabs\EverythingMCP\LICENSE-Everything.txt` (source copy: `vendor/everything/LICENSE-Everything.txt`), alongside the engine itself, as those licenses require.
