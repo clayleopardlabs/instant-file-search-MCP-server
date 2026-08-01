@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use windows::Win32::Foundation::HANDLE;
+use windows::Win32::Foundation::{CloseHandle, HANDLE};
 use windows::Win32::Storage::FileSystem::{
     CreateFileW, FILE_FLAG_OVERLAPPED, FILE_GENERIC_READ, FILE_SHARE_DELETE, FILE_SHARE_READ,
     FILE_SHARE_WRITE, OPEN_EXISTING,
@@ -32,13 +32,33 @@ const USN_REASON_HARD_LINK_CHANGE: u32 = 0x0000_0004;
 
 /// Watch all volumes in a loop (one thread per volume is fine; the journal
 /// IOCTLs block).
-pub fn watch_all(volumes: &[String], index: &Arc<FileIndex>) -> Result<()> {
+pub fn journal_tails(volumes: &[String]) -> Vec<(String, u64, i64)> {
+    let mut tails = Vec::new();
+    for v in volumes {
+        if let Ok(h) = open_volume(v) {
+            if let Ok(j) = query_journal(h) {
+                tails.push((v.clone(), j.UsnJournalID, j.NextUsn));
+            }
+            unsafe {
+                let _ = CloseHandle(h);
+            }
+        }
+    }
+    tails
+}
+
+pub fn watch_all(volumes: &[String], index: &Arc<FileIndex>, tails: &[(String, u64, i64)]) -> Result<()> {
     let mut handles = Vec::new();
     for v in volumes {
         let idx = index.clone();
         let vol = v.clone();
+        let start = tails
+            .iter()
+            .find(|(t, _, _)| *t == *v)
+            .map(|(_, id, usn)| (*id, *usn))
+            .unwrap_or((0, 0));
         handles.push(std::thread::spawn(move || {
-            if let Err(e) = watch_one(&vol, &idx) {
+            if let Err(e) = watch_one(&vol, &idx, start) {
                 tracing::warn!("USN watcher for {} exited: {e:#}", vol);
             }
         }));
@@ -85,11 +105,11 @@ fn query_journal(handle: HANDLE) -> Result<USN_JOURNAL_DATA_V0> {
     Ok(out)
 }
 
-fn watch_one(volume: &str, index: &Arc<FileIndex>) -> Result<()> {
+fn watch_one(volume: &str, index: &Arc<FileIndex>, start: (u64, i64)) -> Result<()> {
     let handle = open_volume(volume)?;
     let journal = query_journal(handle)?;
-    let mut journal_id = journal.UsnJournalID;
-    let mut next_usn = journal.FirstUsn;
+    let mut journal_id = start.0;
+    let mut next_usn = start.1;
     tracing::info!("USN journal on {}: id={journal_id} first={}", volume, journal.FirstUsn);
 
     let mut buf = vec![0u8; 1 << 20];
@@ -117,18 +137,25 @@ fn watch_one(volume: &str, index: &Arc<FileIndex>) -> Result<()> {
             )
         };
         if let Err(e) = ok {
-            // Journal gone (deleted by user or fsutil)? Re-query and restart.
-            tracing::warn!("FSCTL_READ_USN_JOURNAL on {} failed: {e}", volume);
-            std::thread::sleep(Duration::from_secs(10));
+            // Journal rolled over (0x8007049D) or was deleted/recreated: replaying
+            // from FirstUsn races the truncation loop (a 32MB journal can wrap
+            // again mid-replay and swallow fresh records). A full volume re-scan
+            // is authoritative and fast (~14s for 2.4M files).
+            tracing::warn!("FSCTL_READ_USN_JOURNAL on {} failed: {e}; rescanning", volume);
+            std::thread::sleep(Duration::from_secs(1));
             if let Ok(j) = query_journal(handle) {
-                if j.UsnJournalID != journal_id {
-                    tracing::warn!(
-                        "USN journal on {} was recreated ({} -> {}); records between are lost",
-                        volume, journal_id, j.UsnJournalID
-                    );
-                }
                 journal_id = j.UsnJournalID;
-                next_usn = j.FirstUsn;
+                match crate::mft::scan_volume(volume) {
+                    Ok(entries) => {
+                        let n = index.replace_volume(&format!("{volume}\\"), entries);
+                        tracing::info!("rescan {}: {n} entries; journal id={journal_id}", volume);
+                        next_usn = j.NextUsn;
+                    }
+                    Err(re) => {
+                        tracing::warn!("rescan {} failed: {re:#}", volume);
+                        next_usn = j.FirstUsn;
+                    }
+                }
             }
             continue;
         }
@@ -171,7 +198,9 @@ fn apply_records(volume: &str, index: &Arc<FileIndex>, data: &[u8]) {
                     } else {
                         format!("{}{name}", volume.trim_end_matches('\\'))
                     };
-                    if reason & USN_REASON_DELETE != 0 && reason & USN_REASON_CREATE == 0 {
+                    if reason & USN_REASON_DELETE != 0 {
+                        // DELETE takes precedence: a trailing CLOSE record in
+                        // the same delete sequence must not re-add the file.
                         index.remove(&path);
                     } else if reason & USN_REASON_CLOSE != 0
                         || reason & USN_REASON_CREATE != 0
@@ -207,6 +236,11 @@ fn apply_records(volume: &str, index: &Arc<FileIndex>, data: &[u8]) {
                             entry.created = to_filetime(md.created().unwrap_or(std::time::UNIX_EPOCH));
                             entry.modified = to_filetime(md.modified().unwrap_or(std::time::UNIX_EPOCH));
                             entry.accessed = to_filetime(md.accessed().unwrap_or(std::time::UNIX_EPOCH));
+                        } else {
+                            // File is gone (deleted before its CLOSE record,
+                            // or a delete we missed). Don't re-add it.
+                            index.remove(&path);
+                            continue;
                         }
                         index.upsert(entry);
                     }

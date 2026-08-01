@@ -37,6 +37,34 @@ impl FileIndex {
         n
     }
 
+    /// Remove all entries under a volume prefix, then insert the fresh scan.
+    pub fn replace_volume(&self, prefix: &str, entries: Vec<IndexedFile>) -> usize {
+        let mut inner = self.inner.write().unwrap();
+        let doomed: Vec<String> = inner
+            .entries
+            .keys()
+            .filter(|p| p.starts_with(prefix))
+            .cloned()
+            .collect();
+        for p in doomed {
+            inner.entries.remove(&p);
+        }
+        inner.refs.clear();
+        let pairs: Vec<(u64, String)> = inner
+            .entries
+            .iter()
+            .map(|(path, e)| (e.file_ref, path.clone()))
+            .collect();
+        for (r, p) in pairs {
+            inner.refs.insert(r, p);
+        }
+        for e in entries {
+            inner.refs.insert(e.file_ref, e.path.clone());
+            inner.entries.insert(e.path.clone(), e);
+        }
+        inner.entries.len()
+    }
+
     /// Insert or update one entry.
     pub fn upsert(&self, entry: IndexedFile) {
         let mut inner = self.inner.write().unwrap();

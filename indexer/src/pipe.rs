@@ -5,14 +5,18 @@
 //!           {"method":"status"} | {"method":"ping"}
 //! Response: {"ok":true,"data":{...}} | {"ok":false,"error":"..."}
 
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use windows::core::{HRESULT, PCWSTR};
-use windows::Win32::Foundation::{CloseHandle, ERROR_PIPE_CONNECTED, HANDLE};
+use windows::Win32::Foundation::{CloseHandle, ERROR_PIPE_CONNECTED, GENERIC_READ, GENERIC_WRITE, HANDLE};
 use windows::Win32::Security::Authorization::ConvertStringSecurityDescriptorToSecurityDescriptorW;
 use windows::Win32::Security::{PSECURITY_DESCRIPTOR, SECURITY_ATTRIBUTES};
 use windows::Win32::Storage::FileSystem::{
-    FlushFileBuffers, PIPE_ACCESS_DUPLEX, ReadFile, WriteFile,
+    FlushFileBuffers, PIPE_ACCESS_DUPLEX, ReadFile, WriteFile, CreateFileW, OPEN_EXISTING,
+    FILE_SHARE_READ, FILE_SHARE_WRITE,
 };
 use windows::Win32::System::Pipes::{
     ConnectNamedPipe, CreateNamedPipeW, DisconnectNamedPipe, PIPE_READMODE_MESSAGE,
@@ -45,13 +49,39 @@ fn last_error() -> windows::core::Error {
     windows::core::Error::from_thread()
 }
 
+/// Connect a dummy client to the pipe to unblock a pending ConnectNamedPipe
+/// so the serve loop can observe the stop flag.
+pub fn poke_stop() {
+    let mut name: Vec<u16> = PIPE_NAME.encode_utf16().chain(std::iter::once(0)).collect();
+    unsafe {
+        let h = CreateFileW(
+            PCWSTR(name.as_mut_ptr()),
+            (GENERIC_READ | GENERIC_WRITE).0,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            None,
+            OPEN_EXISTING,
+            Default::default(),
+            None,
+        );
+        if let Ok(h) = h {
+            let _ = CloseHandle(h);
+        }
+    }
+}
+
 pub struct PipeServer {
     state: IndexerState,
     security: SECURITY_ATTRIBUTES,
+    stop: Arc<AtomicBool>,
 }
 
 impl PipeServer {
+    #[allow(dead_code)]
     pub fn new(state: IndexerState) -> Result<Self> {
+        Self::with_stop(state, Arc::new(AtomicBool::new(false)))
+    }
+
+    pub fn with_stop(state: IndexerState, stop: Arc<AtomicBool>) -> Result<Self> {
         // DACL granting Everyone read/write, so non-elevated clients
         // (the MCP server runs as the user) can connect to the pipe.
         let sddl = "D:(A;;GRGW;;;WD)";
@@ -73,12 +103,12 @@ impl PipeServer {
             lpSecurityDescriptor: sd.0,
             bInheritHandle: false.into(),
         };
-        Ok(Self { state, security })
+        Ok(Self { state, security, stop })
     }
 
     pub fn run(&self) -> Result<()> {
         tracing::info!("listening on {PIPE_NAME}");
-        loop {
+        while !self.stop.load(Ordering::SeqCst) {
             let pipe = self.create_pipe()?;
             let connected = unsafe { ConnectNamedPipe(pipe, None) };
             if connected.is_err() {
@@ -112,6 +142,7 @@ impl PipeServer {
                 let _ = CloseHandle(pipe);
             }
         }
+        Ok(())
     }
 
     fn create_pipe(&self) -> Result<HANDLE> {
