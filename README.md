@@ -2,24 +2,13 @@
 
 ![](demo.gif)
 
-
-# Millions of files in milliseconds.
-
-Search 30,000 files instantly. Or 300,000. Or 3 million.
-
-Ask your AI assistant to find every PDF edited last week, every `.env` file buried in your repos, every invoice from March, the largest files in a project, or every filename matching a pattern. It can count matching files, return paths, filter by extension, search inside specific folders, and give agents immediate visibility into what actually exists on your machine.
-
-No folder-by-folder crawling.
+An MCP server that gives AI agents instant filesystem search on Windows. Agents can find files by name, extension, size, or date, scope searches to a directory, exclude noise folders, and count matches — across millions of files, in milliseconds, without walking folders one by one.
 
 ## How It Works
 
-The ordinary way to search for files is the hard way: start at a folder, open it, look at what's inside, then open the next folder, and keep going. It's simple, but it's wasteful. If you already asked the same computer where all its files are a moment ago, why should it pretend to be surprised every time?
+Windows records every file creation, rename, move, and deletion as it happens. This server maintains a live index of the NTFS Master File Table from those records, so agents can query the entire filesystem the same way a search engine queries a document index.
 
-The better way is to keep a map.
-
-Your computer already knows when a file is created, renamed, moved, or deleted. They're recorded as they happen. So instead of sending the assistant out to inspect the disk from scratch, this tool lets it ask a live map of the filesystem, the NTFS Master File Table.
-
-That's the trick. That map already exists and you can use it to answer anything instantly:
+Typical agent use cases:
 
 * "Show me what changed in this project since yesterday."
 * "Find files that look like secrets or local config."
@@ -28,16 +17,14 @@ That's the trick. That map already exists and you can use it to answer anything 
 * "Find old exports, duplicate downloads, or forgotten installers."
 * "Give me the project's shape before reading the code."
 
-These are the kinds of file operations agents usually waste time on. Here, they become instant lookups.
-
 ## Search Engine (Built In)
 
-The server is fully self-contained — nothing to install, configure, or launch beyond the server itself:
+The server is self-contained — nothing to install, configure, or launch beyond the server itself:
 
 1. **A native indexer** runs as a Windows service (`instant-file-search-indexer`, auto-start). On first launch it reads the NTFS Master File Table directly — a full scan of ~2.4 million files takes about 15 seconds. After that it tracks creates, renames, moves, and deletes through the Windows change journal, so the index is always current.
 2. **A backup engine** ships with the installer. If the indexer service is ever stopped or unreachable, searches are answered by the backup engine automatically — you never have to start anything yourself.
 
-Searches hit an in-memory index over a named pipe and return in milliseconds. No folder-by-folder crawling, no index files on disk, no external runtime.
+Searches hit an in-memory index over a named pipe and return in milliseconds. No index files on disk, no external runtime.
 
 ## One-Command Install
 
@@ -49,13 +36,13 @@ This installs everything needed — the MCP server, the indexer service, and the
 
 ## What You Need
 
-**Nothing extra.** Windows 10/11 (NTFS volumes — the index reads the Master File Table, which other platforms don't have).
+Windows 10/11 with NTFS volumes (the index reads the Master File Table, which other platforms don't have). No other prerequisites.
 
 The installer deploys the server, registers the indexer service so it starts with Windows (the only step needing administrator rights), and configures the MCP client of your choice. The server routes each search to the indexer service first and falls back to the backup engine automatically if the service isn't running.
 
-## Two Pieces, One Binary
+## Components
 
-**The MCP server binary** (Rust, single `.exe`) is all you need for VS Code, Cursor, Claude Desktop, or any MCP host. Point the host at this binary and the three tools appear in the agent's toolbox.
+**The MCP server binary** (Rust, single `.exe`) is all you need for VS Code, Cursor, Claude Desktop, or any MCP host. Point the host at this binary and the three tools appear in the agent's tool list.
 
 **The plugin adapter** (TypeScript, optional) is only needed for OpenCode users who want sub-agents (explore, librarian, task workers) to access the same tools. Sub-agents do not inherit MCP tools automatically. The plugin bridges that gap by spawning the binary as a child process.
 
@@ -362,4 +349,4 @@ Detailed docs in the `docs/` directory: `architecture.md`, `build.md`, `developm
 
 This project (the MCP server, the native indexer, and the plugin adapter) is licensed under the MIT License.
 
-The bundled backup engine is **Everything**, copyright (C) 2018 David Carpenter, also distributed under the MIT License, and its embedded **PCRE** component is copyright (c) 1997-2012 University of Cambridge, distributed under the MIT-style license reproduced in its terms. The full license texts ship with the installer at `%LOCALAPPDATA%\ClayLeopardLabs\EverythingMCP\LICENSE-Everything.txt` (source copy: `vendor/everything/LICENSE-Everything.txt`), alongside the engine itself, as those licenses require.
+The bundled backup engine is **Everything**, a file search utility by David Carpenter (https://www.voidtools.com) that maintains its own index of the filesystem; it ships here as the fallback search engine when the indexer service is unreachable. Everything is copyright (C) 2018 David Carpenter, distributed under the MIT License, and its embedded **PCRE** component is copyright (c) 1997-2012 University of Cambridge, distributed under the MIT-style license reproduced in its terms. The full license texts ship with the installer at `%LOCALAPPDATA%\ClayLeopardLabs\EverythingMCP\LICENSE-Everything.txt` (source copy: `vendor/everything/LICENSE-Everything.txt`), alongside the engine itself, as those licenses require.
