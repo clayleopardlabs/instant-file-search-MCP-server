@@ -1,5 +1,6 @@
 mod everything;
 mod handler;
+mod native;
 mod tools;
 
 use rmcp::ServiceExt;

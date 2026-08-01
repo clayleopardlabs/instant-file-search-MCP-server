@@ -191,6 +191,7 @@ impl PipeServer {
                                 "modified": e.modified,
                                 "accessed": e.accessed,
                                 "is_dir": e.is_dir,
+                                "extension": e.extension,
                             })
                         })
                         .collect();

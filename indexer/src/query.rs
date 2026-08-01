@@ -17,11 +17,13 @@ pub struct QueryOptions {
     pub path: Option<String>,
     pub exclude_path: Option<String>,
     pub include_all: bool,
+    pub match_path: bool,
     pub regex: bool,
     pub match_case: bool,
     pub match_whole_word: bool,
     pub max_results: usize,
     pub offset: usize,
+    pub sort: Option<String>,
 }
 
 #[derive(Debug, Default)]
@@ -455,14 +457,15 @@ fn file_matches(
 ) -> bool {
     let name = entry.name.as_str();
     let lower_path = entry.lower_path.as_str();
+    let target = if opts.match_path { lower_path } else { name };
 
     for token in tokens {
         let ok = match token {
             Token::Include { pattern, whole_word } => {
                 if *whole_word {
-                    whole_word_match(name, pattern, opts.match_case)
+                    whole_word_match(target, pattern, opts.match_case)
                 } else {
-                    wildcard_match(pattern, name, opts.match_case)
+                    wildcard_match(pattern, target, opts.match_case)
                 }
             }
             Token::Exclude { pattern, whole_word } => {
@@ -475,16 +478,16 @@ fn file_matches(
                         contains_ci(&entry.path, pattern)
                     }
                 } else if *whole_word {
-                    whole_word_match(name, pattern, opts.match_case)
+                    whole_word_match(target, pattern, opts.match_case)
                 } else {
-                    wildcard_match(pattern, name, opts.match_case)
+                    wildcard_match(pattern, target, opts.match_case)
                 };
                 !hit
             }
             Token::Regex { pattern, negate } => {
                 let hit = compiled
                     .get(pattern)
-                    .map(|(re, _)| re.is_match(name))
+                    .map(|(re, _)| re.is_match(target))
                     .unwrap_or(false);
                 if *negate {
                     !hit
@@ -613,10 +616,57 @@ pub fn search(entries: &HashMap<String, IndexedFile>, opts: &QueryOptions) -> Qu
     // For large result sets only the first max_results (+offset) are ever
     // returned, so use partial selection instead of a full sort.
     let want = opts.offset.saturating_add(if opts.max_results == 0 { usize::MAX } else { opts.max_results });
-    let sort_key = |a: &&IndexedFile, b: &&IndexedFile| {
-        cmp_ci(a.name.as_bytes(), b.name.as_bytes())
-            .then_with(|| cmp_ci(a.path.as_bytes(), b.path.as_bytes()))
-    };
+    let sort_key: Box<dyn Fn(&&IndexedFile, &&IndexedFile) -> std::cmp::Ordering> =
+        match opts.sort.as_deref() {
+            Some("name") | None => Box::new(|a, b| {
+                cmp_ci(a.name.as_bytes(), b.name.as_bytes())
+                    .then_with(|| cmp_ci(a.path.as_bytes(), b.path.as_bytes()))
+            }),
+            Some("name_desc") => Box::new(|a, b| {
+                cmp_ci(b.name.as_bytes(), a.name.as_bytes())
+                    .then_with(|| cmp_ci(a.path.as_bytes(), b.path.as_bytes()))
+            }),
+            Some("path") => Box::new(|a, b| cmp_ci(a.path.as_bytes(), b.path.as_bytes())),
+            Some("path_desc") => Box::new(|a, b| cmp_ci(b.path.as_bytes(), a.path.as_bytes())),
+            Some("size") => Box::new(|a, b| {
+                b.size.cmp(&a.size).then_with(|| cmp_ci(a.path.as_bytes(), b.path.as_bytes()))
+            }),
+            Some("size_asc") => Box::new(|a, b| {
+                a.size.cmp(&b.size).then_with(|| cmp_ci(a.path.as_bytes(), b.path.as_bytes()))
+            }),
+            Some("date_modified") => Box::new(|a, b| {
+                b.modified.cmp(&a.modified).then_with(|| cmp_ci(a.path.as_bytes(), b.path.as_bytes()))
+            }),
+            Some("date_modified_asc") => Box::new(|a, b| {
+                a.modified.cmp(&b.modified).then_with(|| cmp_ci(a.path.as_bytes(), b.path.as_bytes()))
+            }),
+            Some("date_created") => Box::new(|a, b| {
+                b.created.cmp(&a.created).then_with(|| cmp_ci(a.path.as_bytes(), b.path.as_bytes()))
+            }),
+            Some("date_created_asc") => Box::new(|a, b| {
+                a.created.cmp(&b.created).then_with(|| cmp_ci(a.path.as_bytes(), b.path.as_bytes()))
+            }),
+            Some("date_accessed") => Box::new(|a, b| {
+                b.accessed.cmp(&a.accessed).then_with(|| cmp_ci(a.path.as_bytes(), b.path.as_bytes()))
+            }),
+            Some("date_accessed_asc") => Box::new(|a, b| {
+                a.accessed.cmp(&b.accessed).then_with(|| cmp_ci(a.path.as_bytes(), b.path.as_bytes()))
+            }),
+            Some("extension") => Box::new(|a, b| {
+                a.extension
+                    .cmp(&b.extension)
+                    .then_with(|| cmp_ci(a.name.as_bytes(), b.name.as_bytes()))
+            }),
+            Some("extension_desc") => Box::new(|a, b| {
+                b.extension
+                    .cmp(&a.extension)
+                    .then_with(|| cmp_ci(a.name.as_bytes(), b.name.as_bytes()))
+            }),
+            _ => Box::new(|a, b| {
+                cmp_ci(a.name.as_bytes(), b.name.as_bytes())
+                    .then_with(|| cmp_ci(a.path.as_bytes(), b.path.as_bytes()))
+            }),
+        };
     if matched.len() > want && want != usize::MAX {
         matched.select_nth_unstable_by(want, &sort_key);
         matched[..want].sort_by(&sort_key);

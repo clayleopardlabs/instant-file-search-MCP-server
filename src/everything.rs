@@ -643,12 +643,12 @@ fn parse_fields(fields: Option<&str>) -> RequestFlags {
 
 /// Convert a 100-nanosecond-interval count (from the FILETIME epoch of
 /// 1601-01-01 UTC) to an ISO 8601 UTC time string.
-fn ns100_to_iso_string(ns100: u64) -> Option<String> {
+pub(crate) fn ns100_to_iso_string(ns100: u64) -> Option<String> {
     if ns100 == 0 {
         return None;
     }
     // FILETIME epoch (1601-01-01) -> Unix epoch (1970-01-01) offset
-    const EPOCH_OFFSET: u64 = 1_164_447_360_000_000_000;
+    const EPOCH_OFFSET: u64 = 116_444_736_000_000_000;
     if ns100 < EPOCH_OFFSET {
         return None;
     }
@@ -711,7 +711,7 @@ fn is_leap_year(y: i64) -> bool {
 
 /// Format file attributes as a human-friendly string (e.g. "A", "H", "R", "S",
 /// "D").
-fn format_attributes(attrs: u32) -> String {
+pub(crate) fn format_attributes(attrs: u32) -> String {
     let mut s = String::with_capacity(8);
 
     const FILE_ATTRIBUTE_READONLY: u32 = 0x0001;
@@ -801,7 +801,7 @@ mod tests {
     fn test_ns100_to_iso_string() {
         assert!(ns100_to_iso_string(0).is_none());
         assert!(ns100_to_iso_string(1_000).is_none());
-        let r = ns100_to_iso_string(11_644_473_600_000_000_00);
+        let r = ns100_to_iso_string(116_444_736_000_000_000);
         assert_eq!(r.as_deref(), Some("1970-01-01T00:00:00Z"));
     }
 }
