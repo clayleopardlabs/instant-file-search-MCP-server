@@ -136,6 +136,7 @@ fn watch_one(volume: &str, index: &Arc<FileIndex>, start: (u64, i64)) -> Result<
                 None,
             )
         };
+        tracing::debug!("USN {}: read rc={}", volume, returned);
         if let Err(e) = ok {
             // Journal rolled over (0x8007049D) or was deleted/recreated: replaying
             // from FirstUsn races the truncation loop (a 32MB journal can wrap
@@ -160,6 +161,7 @@ fn watch_one(volume: &str, index: &Arc<FileIndex>, start: (u64, i64)) -> Result<
             continue;
         }
         if returned == 0 {
+            tracing::debug!("USN {}: returned=0 at next={}", volume, next_usn);
             continue;
         }
         // The output buffer is: [8-byte next-USN cursor][USN_RECORD_V2 records...]
@@ -168,7 +170,7 @@ fn watch_one(volume: &str, index: &Arc<FileIndex>, start: (u64, i64)) -> Result<
             next_usn = i64::from_le_bytes(buf[0..8].try_into().unwrap());
         }
         apply_records(volume, index, &buf[8..returned as usize]);
-        tracing::trace!("USN {}: returned={} records", volume, returned);
+        tracing::info!("USN {}: returned={} next={}", volume, returned, next_usn);
     }
 }
 
