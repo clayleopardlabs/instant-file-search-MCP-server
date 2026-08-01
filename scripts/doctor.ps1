@@ -69,6 +69,20 @@ if (Test-Path -LiteralPath (Join-Path $InstallRoot 'LICENSE-Everything.txt')) {
     Warn 'Everything license notice is missing.'
 }
 
+$indexerExe = Join-Path $InstallRoot 'indexer\instant-file-search-indexer.exe'
+$indexerSvc = Get-Service -Name 'instant-file-search-indexer' -ErrorAction SilentlyContinue
+if (Test-Path -LiteralPath $indexerExe) {
+    Pass "Native indexer binary present ('$indexerExe')."
+} else {
+    Warn "Native indexer binary missing ('$indexerExe'). Searches will use the Everything fallback."
+}
+if ($indexerSvc) {
+    if ($indexerSvc.Status -eq 'Running') { Pass 'Native indexer service is running.' }
+    else { Warn "Native indexer service exists but is '$($indexerSvc.Status)'. Start it with: sc.exe start instant-file-search-indexer" }
+} else {
+    Warn "Native indexer service is not installed. Run the installer elevated (or: sc.exe create instant-file-search-indexer binPath= `"$indexerExe service`" start= auto)."
+}
+
 if (Test-Path -LiteralPath $stableBinary) {
     # Smoke test: the binary must start, answer MCP initialize, and keep running
     # (if it exits immediately, the engine acquisition path is broken).

@@ -34,9 +34,9 @@ These are the kinds of file operations agents usually waste time on. Here, they 
 
 Under the hood, this server talks to a high-speed file index built on the NTFS Master File Table.
 
-The index is provided by Everything, a free utility by Voidtools, which stores and monitors the index in RAM (about 0.5-1 GB depending on the size of your disks) and stays current through filesystem change notifications. Because it doesn't need to crawl directories on each search, queries that would normally require expensive recursive scans are answered in milliseconds.
+The primary engine is now a **native Rust indexer** (`instant-file-search-indexer.exe`), which reads the raw `$MFT` stream sequentially (a full-volume scan of ~2.4M files takes about 15 seconds) and then stays current through the USN Change Journal — creates, renames, deletes and closes are applied incrementally, with a re-scan fallback when the journal rolls over. It runs as the auto-start Windows service `instant-file-search-indexer` and answers queries over a named pipe in milliseconds. No directory crawling, no index files on disk, no external runtime.
 
-The server is **self-contained**: it ships with a bundled portable Everything engine, and if no Everything is running it starts one automatically (reusing an installed Everything first when one exists). You do not need to install Everything yourself, and no GUI window is required — the engine can run quietly from the system tray or headless through the Everything service.
+The original Everything engine remains as a fully interchangeable fallback: it's a free utility by Voidtools that keeps its own RAM index current through filesystem change notifications. The server is **self-contained** — it ships with a bundled portable Everything engine, and if no Everything is running it starts one automatically (reusing an installed Everything first when one exists). Queries that would normally require expensive recursive scans are answered in milliseconds by either engine.
 
 This MCP server exposes that capability to AI assistants and coding agents, allowing them to query the local filesystem through structured tool calls instead of relying on slow shell commands, repeated directory walks, or fragile manual search loops.
 
@@ -57,15 +57,15 @@ This installs everything needed — the MCP binary AND a bundled portable Everyt
 
 ## What You Need
 
-**Nothing extra.** The installer deploys the MCP binary plus a bundled portable Everything engine to `%LOCALAPPDATA%\ClayLeopardLabs\EverythingMCP`. On first search, the server picks the best available engine:
+**Nothing extra.** The installer deploys the MCP binary plus the native indexer service (and a bundled portable Everything engine as backup). On first search, the server routes to the native indexer's named pipe when the service is running; if it isn't, it falls back to the best available Everything engine:
 
 1. An Everything that is already running (yours — zero extra RAM).
 2. An installed Everything with no window (its GUI is launched and connects to the Everything service).
 3. The bundled portable engine (self-contained fallback).
 
-Windows only — Everything indexes the NTFS Master File Table, which does not exist on other platforms.
+Windows only — both engines index the NTFS Master File Table, which does not exist on other platforms.
 
-If you already use Everything yourself, the server simply uses your running instance. The bundled engine exists so the server works on machines that have never had Everything installed.
+The native indexer needs to be installed as the `instant-file-search-indexer` Windows service (elevated install step, provided by the installer) to reach the volume devices for its MFT scan. If you already use Everything yourself, the server can simply use your running instance as the fallback. The bundled engine exists so the server works on machines that have never had Everything installed.
 
 ## Two Pieces, One Binary
 

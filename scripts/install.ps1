@@ -157,6 +157,47 @@ function Install-Claude {
     Write-Host "PASS: Claude Desktop MCP server configured in '$claudeConfig'." -ForegroundColor Green
 }
 
+function Install-NativeService {
+    Write-Step 'Installing the native indexer service'
+    $indexerName = 'instant-file-search-indexer.exe'
+    $indexerDir = Join-Path $InstallRoot 'indexer'
+    $stableIndexer = Join-Path $indexerDir $indexerName
+    $serviceName = 'instant-file-search-indexer'
+
+    if ($DryRun) {
+        Write-Action "Copy '$(Join-Path $repoRoot "target\release\$indexerName")' to '$stableIndexer'"
+        Write-Action "sc.exe create $serviceName binPath= `"$stableIndexer service`" start= auto"
+        return
+    }
+
+    $buildIndexer = Join-Path $repoRoot "target\release\$indexerName"
+    if (-not (Test-Path -LiteralPath $buildIndexer)) {
+        Write-Host 'WARN: indexer release binary not found; the native engine will not be installed. Use the Everything fallback or rebuild.' -ForegroundColor Yellow
+        return
+    }
+
+    New-Item -ItemType Directory -Path $indexerDir -Force | Out-Null
+    Copy-Item -LiteralPath $buildIndexer -Destination $stableIndexer -Force
+
+    $elevated = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+    if (-not $elevated) {
+        Write-Host 'WARN: not running elevated — cannot register the indexer service. Re-run this installer from an elevated prompt (or register it manually):' -ForegroundColor Yellow
+        Write-Host "  sc.exe create $serviceName binPath= `"$stableIndexer service`" start= auto" -ForegroundColor DarkGray
+        return
+    }
+
+    $existing = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
+    if ($existing) {
+        if ($existing.Status -ne 'Stopped') { Stop-Service -Name $serviceName -Force; Start-Sleep -Seconds 2 }
+        & sc.exe delete $serviceName | Out-Null
+        Start-Sleep -Seconds 1
+    }
+    & sc.exe create $serviceName binPath= "`"$stableIndexer service`"" start= auto | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "sc.exe create failed for service '$serviceName'." }
+    Start-Service -Name $serviceName
+    Write-Host "PASS: indexer service '$serviceName' installed and started (auto-start)." -ForegroundColor Green
+}
+
 Write-Host 'Instant File Search MCP installer' -ForegroundColor Green
 $selected = @(Select-InstallClients)
 if ($SkipCodex) { $selected = @($selected | Where-Object { $_ -ne 'codex' }) }
@@ -208,6 +249,8 @@ foreach ($client in $selected) {
         'claude' { Install-Claude }
     }
 }
+
+Install-NativeService
 
 $everything = Get-Process -Name Everything -ErrorAction SilentlyContinue
 if ($everything) { Write-Host 'PASS: Everything is running.' -ForegroundColor Green }
