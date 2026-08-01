@@ -141,6 +141,8 @@ Restart the client. Three tools appear in the agent's tool list: `find_files`, `
 
 ## Build
 
+The repo is a Cargo workspace with two binaries.
+
 ### MCP binary (required)
 
 Requires the [Rust toolchain](https://rustup.rs):
@@ -150,6 +152,26 @@ cargo build --release
 ```
 
 Output: `target/release/instant-file-search-mcp-server.exe`
+
+### Native indexer (recommended)
+
+Built by the same workspace command (member crate `indexer/`):
+
+```sh
+cargo build --release -p instant-file-search-indexer
+```
+
+Output: `target/release/instant-file-search-indexer.exe`
+
+Run it in one of three modes:
+
+| Mode | Use |
+|------|-----|
+| `serve` | Named-pipe server + MFT scan + USN watcher (what the service runs) |
+| `scan` | One-shot diagnostic scan, prints the entry count |
+| `service` | SCM-managed Windows service (auto-start, runs `serve` internally) |
+
+The service must run elevated (SYSTEM) to open volume devices (`\\.\C:`) for the raw MFT read. The installer registers it; `sc.exe create instant-file-search-indexer binPath= "C:\...\instant-file-search-indexer.exe service" start= auto` does it manually.
 
 ### Plugin adapter (optional)
 
@@ -325,19 +347,19 @@ Default (omit `fields`): all common fields.
 ```
 MCP Host (VS Code / Cursor / Claude Desktop)
   └─ MCP binary (Rust, stdin/stdout)
-       └─ Everything IPC (WM_COPYDATA)
+       ├─ named pipe ──► instant-file-search-indexer service (native Rust, primary)
+       │                    ├─ raw $MFT stream scan (initial, ~15s for 2.4M files)
+       │                    └─ USN Change Journal (incremental updates)
+       └─ Everything IPC (WM_COPYDATA) ──► Everything engine (fallback)
             └─ Everything engine (running instance / installed GUI / bundled portable)
-                 └─ NTFS Master File Table
 
 OpenCode (main + sub-agents)
   └─ Plugin adapter (TypeScript)
        └─ spawns MCP binary
-            └─ Everything IPC (WM_COPYDATA)
-                 └─ Everything engine (running instance / installed GUI / bundled portable)
-                      └─ NTFS Master File Table
+            └─ (same routing as above: native pipe first, Everything fallback)
 ```
 
-All IPC is native Windows messaging. No HTTP, no network, no sockets. The `everything-ipc` Rust crate handles the Win32 window messaging. When no engine is reachable, the binary starts one automatically (installed GUI first, then the bundled portable engine) and waits for its database to load.
+The primary engine is the native indexer service: queries travel over a named pipe (`\\.\pipe\instant-file-search-indexer`) with newline-delimited JSON, answered in milliseconds against an in-memory index kept current by the USN Change Journal. When the service is down, the MCP binary falls back to the Everything engine over Win32 window messaging (WM_COPYDATA) — no HTTP, no network, no sockets. When no Everything engine is reachable, the binary starts one automatically (installed GUI first, then the bundled portable engine) and waits for its database to load.
 
 ## Development
 
@@ -347,9 +369,9 @@ cargo test
 
 Unit tests cover sort parsing, field parsing, timestamp formatting, and attribute formatting. No integration tests - a search engine must be running for real IPC queries.
 
-Logging is controlled by the `EVERYTHING_MCP_LOG` environment variable (tracing-subscriber env-filter). Unset by default - no log output. Logs go to stderr so they never corrupt the MCP JSON stream.
+Logging is controlled by the `EVERYTHING_MCP_LOG` environment variable (tracing-subscriber env-filter). Unset by default - no log output. Logs go to stderr so they never corrupt the MCP JSON stream. The indexer uses the same env var; as an SCM service its output is invisible, so run `serve` from a console with redirection when diagnosing the watcher.
 
-Key dependencies: `rmcp` for MCP transport, `everything-ipc` for WM_COPYDATA IPC, `schemars` for JSON Schema generation, `tokio` for async runtime. Everything calls are blocking and dispatched via `spawn_blocking`. No unsafe blocks, no generated code, no build scripts.
+Key dependencies: `rmcp` for MCP transport, `everything-ipc` for the Everything fallback (WM_COPYDATA), `schemars` for JSON Schema generation, `tokio` for async runtime. Everything calls are blocking and dispatched via `spawn_blocking`. The indexer crate uses `windows` (0.62) for Win32 APIs (USN journal, named pipes, service control), `ntfs` for MFT record parsing, and `windows-service` for the SCM integration. No unsafe blocks, no generated code, no build scripts.
 
 Detailed docs in the `docs/` directory: `architecture.md`, `build.md`, `development.md`, `tools.md`.
 
