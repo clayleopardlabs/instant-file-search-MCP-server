@@ -1,0 +1,163 @@
+//! instant-file-search-indexer
+//!
+//! Native NTFS indexer for the instant-file-search MCP server.
+//!
+//! Modes:
+//!   serve    — console mode: build the index, then serve queries + USN
+//!              updates over \\.\pipe\instant-file-search-indexer (default)
+//!   service  — Windows service mode (registers with SCM via `sc create`)
+//!   scan     — one-shot diagnostic scan, print stats, exit
+//!   help     — usage
+
+mod index;
+mod mft;
+mod pipe;
+mod query;
+mod scan;
+mod sector_reader;
+mod usn;
+
+use std::sync::Arc;
+
+use anyhow::{Context, Result};
+use windows_service::service_dispatcher;
+
+use index::FileIndex;
+
+/// Shared state handed to the pipe server.
+#[derive(Clone)]
+pub struct IndexerState {
+    pub index: Arc<FileIndex>,
+    pub volumes: Vec<String>,
+}
+
+const SERVICE_NAME: &str = "instant-file-search-indexer";
+
+fn main() -> Result<()> {
+    let mode = std::env::args().nth(1).unwrap_or_else(|| "serve".to_string());
+    match mode.as_str() {
+        "scan" => {
+            let out = scan::scan_all_volumes()?;
+            print!("{out}");
+            Ok(())
+        }
+        "service" => {
+            service_dispatcher::start(SERVICE_NAME, service_main)
+                .context("failed to start service dispatcher")
+        }
+        "serve" => serve(),
+        _ => {
+            eprintln!("usage: instant-file-search-indexer [serve|service|scan]");
+            Ok(())
+        }
+    }
+}
+
+fn init_tracing() {
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
+        .with_target(false)
+        .try_init();
+}
+
+/// SCM entry point for `service` mode. Runs serve() on a worker thread so
+/// the service thread can process SCM control requests.
+extern "system" fn service_main(_argc: u32, _argv: *mut *mut u16) {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    use windows_service::service::{ServiceControl, ServiceControlAccept, ServiceState, ServiceStatus, ServiceType};
+    use windows_service::service_control_handler::{self, ServiceControlHandlerResult};
+
+    let stop_requested = Arc::new(AtomicBool::new(false));
+    let stop_flag = stop_requested.clone();
+
+    let event_handler = move |control_event| -> ServiceControlHandlerResult {
+        match control_event {
+            ServiceControl::Stop | ServiceControl::Shutdown => {
+                stop_flag.store(true, Ordering::SeqCst);
+                pipe::poke_stop();
+                ServiceControlHandlerResult::NoError
+            }
+            ServiceControl::Interrogate => ServiceControlHandlerResult::NoError,
+            _ => ServiceControlHandlerResult::NotImplemented,
+        }
+    };
+
+    let status_handle = match service_control_handler::register(SERVICE_NAME, event_handler) {
+        Ok(h) => h,
+        Err(e) => {
+            eprintln!("service control handler registration failed: {e}");
+            return;
+        }
+    };
+
+    let running_status = ServiceStatus {
+        service_type: ServiceType::OWN_PROCESS,
+        current_state: ServiceState::Running,
+        controls_accepted: ServiceControlAccept::STOP,
+        exit_code: windows_service::service::ServiceExitCode::Win32(0),
+        checkpoint: 0,
+        wait_hint: std::time::Duration::from_secs(5),
+        process_id: None,
+    };
+    let _ = status_handle.set_service_status(running_status.clone());
+
+    let worker_stop = stop_requested.clone();
+    let worker = std::thread::spawn(move || serve_with_stop(worker_stop));
+
+    // The indexer has no graceful stop hook yet; report stopped as soon as
+    // the worker exits so SCM doesn't wait on the service timeout.
+    if let Err(e) = worker.join() {
+        eprintln!("service worker panicked: {e:?}");
+    }
+    let _ = status_handle.set_service_status(ServiceStatus {
+        current_state: ServiceState::Stopped,
+        ..running_status
+    });
+    let _ = stop_requested;
+}
+
+fn serve() -> Result<()> {
+    serve_with_stop(Arc::new(std::sync::atomic::AtomicBool::new(false)))
+}
+
+fn serve_with_stop(stop: Arc<std::sync::atomic::AtomicBool>) -> Result<()> {
+    init_tracing();
+
+    let volumes = mft::discover_ntfs_volumes();
+    if volumes.is_empty() {
+        anyhow::bail!("no NTFS fixed volumes found");
+    }
+    tracing::info!("volumes: {}", volumes.join(", "));
+
+    let index = Arc::new(FileIndex::new());
+
+    // Capture journal tails BEFORE the scan: the watcher starts from here,
+    // covering changes made during the scan window without replaying the
+    // entire journal history (the scan already snapshots current state).
+    let tails = usn::journal_tails(&volumes);
+    for (v, id, usn) in &tails {
+        tracing::info!("USN tail on {}: id={id} next={usn}", v);
+    }
+
+    // Initial scan.
+    let n = scan::build_index(&volumes, &index).context("initial scan")?;
+    tracing::info!("initial index built: {n} entries");
+
+    let state = IndexerState { index: index.clone(), volumes: volumes.clone() };
+
+    // USN watcher thread.
+    let watch_index = index.clone();
+    let watch_volumes = volumes.clone();
+    std::thread::spawn(move || {
+        if let Err(e) = usn::watch_all(&watch_volumes, &watch_index, &tails) {
+            tracing::error!("USN watcher exited: {e:#}");
+        }
+    });
+
+    let server = pipe::PipeServer::with_stop(state, stop)?;
+    server.run()
+}

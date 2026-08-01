@@ -1,0 +1,262 @@
+//! USN Change Journal watcher.
+//!
+//! After the initial MFT scan, we stay current by replaying the NTFS USN
+//! Change Journal (the same mechanism Everything uses). We poll the journal
+//! per-volume in a loop and apply create/delete/rename/attribute-change
+//! records to the in-memory index.
+
+use std::sync::Arc;
+use std::time::Duration;
+
+use anyhow::{Context, Result};
+use windows::Win32::Foundation::{CloseHandle, HANDLE};
+use windows::Win32::Storage::FileSystem::{
+    CreateFileW, FILE_FLAG_OVERLAPPED, FILE_GENERIC_READ, FILE_SHARE_DELETE, FILE_SHARE_READ,
+    FILE_SHARE_WRITE, OPEN_EXISTING,
+};
+use windows::Win32::System::IO::DeviceIoControl;
+use windows::Win32::System::Ioctl::{
+    FSCTL_QUERY_USN_JOURNAL, FSCTL_READ_USN_JOURNAL, READ_USN_JOURNAL_DATA_V0, USN_JOURNAL_DATA_V0,
+    USN_RECORD_V2,
+};
+use windows::core::PCWSTR;
+
+use crate::index::FileIndex;
+use crate::mft::IndexedFile;
+
+const USN_REASON_RENAME: u32 = 0x0000_3000;
+const USN_REASON_CLOSE: u32 = 0x8000_0000;
+const USN_REASON_DELETE: u32 = 0x0000_0200;
+const USN_REASON_CREATE: u32 = 0x0000_0100;
+const USN_REASON_HARD_LINK_CHANGE: u32 = 0x0001_0000;
+
+/// Watch all volumes in a loop (one thread per volume is fine; the journal
+/// IOCTLs block).
+pub fn journal_tails(volumes: &[String]) -> Vec<(String, u64, i64)> {
+    let mut tails = Vec::new();
+    for v in volumes {
+        if let Ok(h) = open_volume(v) {
+            if let Ok(j) = query_journal(h) {
+                tails.push((v.clone(), j.UsnJournalID, j.NextUsn));
+            }
+            unsafe {
+                let _ = CloseHandle(h);
+            }
+        }
+    }
+    tails
+}
+
+pub fn watch_all(volumes: &[String], index: &Arc<FileIndex>, tails: &[(String, u64, i64)]) -> Result<()> {
+    let mut handles = Vec::new();
+    for v in volumes {
+        let idx = index.clone();
+        let vol = v.clone();
+        let start = tails
+            .iter()
+            .find(|(t, _, _)| *t == *v)
+            .map(|(_, id, usn)| (*id, *usn))
+            .unwrap_or((0, 0));
+        handles.push(std::thread::spawn(move || {
+            if let Err(e) = watch_one(&vol, &idx, start) {
+                tracing::warn!("USN watcher for {} exited: {e:#}", vol);
+            }
+        }));
+    }
+    for h in handles {
+        let _ = h.join();
+    }
+    Ok(())
+}
+
+fn open_volume(volume: &str) -> Result<HANDLE> {
+    let device = format!("\\\\.\\{}", volume.trim_end_matches('\\'));
+    let mut wide: Vec<u16> = device.encode_utf16().chain(std::iter::once(0)).collect();
+    let handle = unsafe {
+        CreateFileW(
+            PCWSTR(wide.as_mut_ptr()),
+            FILE_GENERIC_READ.0,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            None,
+            OPEN_EXISTING,
+            FILE_FLAG_OVERLAPPED,
+            None,
+        )
+    }?;
+    Ok(handle)
+}
+
+fn query_journal(handle: HANDLE) -> Result<USN_JOURNAL_DATA_V0> {
+    let mut out = USN_JOURNAL_DATA_V0::default();
+    let mut returned = 0u32;
+    unsafe {
+        DeviceIoControl(
+            handle,
+            FSCTL_QUERY_USN_JOURNAL,
+            None,
+            0,
+            Some((&mut out as *mut USN_JOURNAL_DATA_V0).cast()),
+            std::mem::size_of::<USN_JOURNAL_DATA_V0>() as u32,
+            Some(&mut returned),
+            None,
+        )
+    }
+    .context("FSCTL_QUERY_USN_JOURNAL")?;
+    Ok(out)
+}
+
+fn watch_one(volume: &str, index: &Arc<FileIndex>, start: (u64, i64)) -> Result<()> {
+    let handle = open_volume(volume)?;
+    let journal = query_journal(handle)?;
+    let mut journal_id = start.0;
+    let mut next_usn = start.1;
+    tracing::info!("USN journal on {}: id={journal_id} first={}", volume, journal.FirstUsn);
+
+    let mut buf = vec![0u8; 1 << 20];
+    loop {
+        std::thread::sleep(Duration::from_millis(2000));
+        let mut read = READ_USN_JOURNAL_DATA_V0 {
+            StartUsn: next_usn,
+            ReasonMask: u32::MAX,
+            ReturnOnlyOnClose: 0,
+            Timeout: 0,
+            BytesToWaitFor: 0,
+            UsnJournalID: journal_id,
+        };
+        let mut returned = 0u32;
+        let ok = unsafe {
+            DeviceIoControl(
+                handle,
+                FSCTL_READ_USN_JOURNAL,
+                Some((&mut read as *mut READ_USN_JOURNAL_DATA_V0).cast()),
+                std::mem::size_of::<READ_USN_JOURNAL_DATA_V0>() as u32,
+                Some(buf.as_mut_ptr().cast()),
+                buf.len() as u32,
+                Some(&mut returned),
+                None,
+            )
+        };
+        tracing::debug!("USN {}: read rc={}", volume, returned);
+        if let Err(e) = ok {
+            // Journal rolled over (0x8007049D) or was deleted/recreated: replaying
+            // from FirstUsn races the truncation loop (a 32MB journal can wrap
+            // again mid-replay and swallow fresh records). A full volume re-scan
+            // is authoritative and fast (~14s for 2.4M files).
+            tracing::warn!("FSCTL_READ_USN_JOURNAL on {} failed: {e}; rescanning", volume);
+            std::thread::sleep(Duration::from_secs(1));
+            if let Ok(j) = query_journal(handle) {
+                journal_id = j.UsnJournalID;
+                match crate::mft::scan_volume(volume) {
+                    Ok(entries) => {
+                        let n = index.replace_volume(&format!("{volume}\\"), entries);
+                        tracing::info!("rescan {}: {n} entries; journal id={journal_id}", volume);
+                        next_usn = j.NextUsn;
+                    }
+                    Err(re) => {
+                        tracing::warn!("rescan {} failed: {re:#}", volume);
+                        next_usn = j.FirstUsn;
+                    }
+                }
+            }
+            continue;
+        }
+        if returned == 0 {
+            tracing::debug!("USN {}: returned=0 at next={}", volume, next_usn);
+            continue;
+        }
+        // The output buffer is: [8-byte next-USN cursor][USN_RECORD_V2 records...]
+        // (per MSDN "Walking a Buffer of Change Journal Records")
+        if returned >= 8 {
+            next_usn = i64::from_le_bytes(buf[0..8].try_into().unwrap());
+        }
+        apply_records(volume, index, &buf[8..returned as usize]);
+        tracing::info!("USN {}: returned={} next={}", volume, returned, next_usn);
+    }
+}
+
+fn apply_records(volume: &str, index: &Arc<FileIndex>, data: &[u8]) {
+    let mut offset = 0usize;
+    while offset + std::mem::size_of::<USN_RECORD_V2>() <= data.len() {
+        let rec = unsafe { &*(data.as_ptr().add(offset) as *const USN_RECORD_V2) };
+        if rec.RecordLength == 0 {
+            break;
+        }
+        if rec.RecordLength >= std::mem::size_of::<USN_RECORD_V2>() as u32
+            && rec.RecordLength as usize <= data.len() - offset
+        {
+            let name_len = rec.FileNameLength as usize;
+            let name_start = offset + rec.FileNameOffset as usize;
+            if name_start + name_len <= data.len() {
+                let name = String::from_utf16_lossy(
+                    &data[name_start..name_start + name_len]
+                        .chunks_exact(2)
+                        .map(|c| u16::from_le_bytes([c[0], c[1]]))
+                        .collect::<Vec<_>>(),
+                );
+                if !name.is_empty() {
+                    let reason = rec.Reason;
+                    let path = if let Some(p) = resolve_by_ref(index, volume, rec.ParentFileReferenceNumber) {
+                        format!("{p}\\{name}")
+                    } else {
+                        format!("{}{name}", volume.trim_end_matches('\\'))
+                    };
+                    tracing::debug!("USN {}: name={} reason=0x{:X} path={}", volume, name, reason, path);
+                    if reason & USN_REASON_DELETE != 0 {
+                        // DELETE takes precedence: a trailing CLOSE record in
+                        // the same delete sequence must not re-add the file.
+                        index.remove(&path);
+                        tracing::debug!("USN {}: DELETE {}", volume, path);
+                    } else if reason & USN_REASON_CLOSE != 0
+                        || reason & USN_REASON_CREATE != 0
+                        || reason & USN_REASON_RENAME != 0
+                        || reason & USN_REASON_HARD_LINK_CHANGE != 0
+                    {
+                        // USN records carry no file size; stat on CLOSE/CREATE so
+                        // size filters stay correct for changed files.
+                        let mut entry = IndexedFile::new(
+                            path.clone(),
+                            0,
+                            rec.TimeStamp as i64,
+                            rec.TimeStamp as i64,
+                            rec.TimeStamp as i64,
+                            rec.FileAttributes & 0x10 != 0,
+                            rec.FileReferenceNumber & 0x0000_FFFF_FFFF_FFFF,
+                        );
+                        if let Ok(md) = std::fs::metadata(&path) {
+                            if md.is_dir() != entry.is_dir {
+                                entry.is_dir = md.is_dir();
+                            }
+                            // Index stores Windows FILETIME (100ns since 1601),
+                            // same convention as the MFT scan.
+                            const FILETIME_EPOCH: i64 = 116_444_736_000_000_000;
+                            let to_filetime = |t: std::time::SystemTime| -> i64 {
+                                match t.duration_since(std::time::UNIX_EPOCH) {
+                                    Ok(d) => FILETIME_EPOCH + (d.as_secs() as i64) * 10_000_000
+                                        + (d.subsec_nanos() as i64 / 100),
+                                    Err(e) => FILETIME_EPOCH - (e.duration().as_secs() as i64) * 10_000_000,
+                                }
+                            };
+                            entry.size = md.len();
+                            entry.created = to_filetime(md.created().unwrap_or(std::time::UNIX_EPOCH));
+                            entry.modified = to_filetime(md.modified().unwrap_or(std::time::UNIX_EPOCH));
+                            entry.accessed = to_filetime(md.accessed().unwrap_or(std::time::UNIX_EPOCH));
+                            index.upsert(entry);
+                        } else {
+                            // File is gone (deleted before its CLOSE record, renamed
+                            // away, or a delete we missed). Don't re-add it.
+                            index.remove(&path);
+                        }
+                    }
+                }
+            }
+        }
+        offset += rec.RecordLength as usize;
+    }
+}
+
+fn resolve_by_ref(index: &FileIndex, volume: &str, parent_ref: u64) -> Option<String> {
+    let _ = volume;
+    // USN refs are full 64-bit file references; the index is keyed by
+    // the 48-bit record number (same masking as the MFT scan).
+    index.path_by_ref(parent_ref & 0x0000_FFFF_FFFF_FFFF)
+}
