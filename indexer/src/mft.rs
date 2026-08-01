@@ -14,7 +14,7 @@
 //! 4. Collect `FILE_NAME` attributes (parent ref, name, times, size, flags).
 
 use std::collections::HashMap;
-use std::io::{BufReader, Read, Seek, SeekFrom};
+use std::io::{BufReader, SeekFrom};
 
 use anyhow::{Context, Result};
 use ntfs::{KnownNtfsFileRecordNumber, Ntfs, NtfsReadSeek};
@@ -38,11 +38,90 @@ pub struct IndexedFile {
     pub is_dir: bool,
     /// NTFS file record number (used as the USN file reference).
     pub file_ref: u64,
+    /// Precomputed lowercase name (query hot path).
+    pub name: String,
+    /// Precomputed lowercase path (query hot path).
+    pub lower_path: String,
+    /// Precomputed lowercase extension without the dot (query hot path).
+    pub extension: Option<String>,
+    /// Precomputed "under a default-excluded dir" (query hot path).
+    pub excluded: bool,
+}
+
+impl IndexedFile {
+    pub fn new(
+        path: String,
+        size: u64,
+        created: i64,
+        modified: i64,
+        accessed: i64,
+        is_dir: bool,
+        file_ref: u64,
+    ) -> Self {
+        let mut f = IndexedFile {
+            path,
+            size,
+            created,
+            modified,
+            accessed,
+            is_dir,
+            file_ref,
+            name: String::new(),
+            lower_path: String::new(),
+            extension: None,
+            excluded: false,
+        };
+        f.refresh();
+        f
+    }
+
+    fn refresh(&mut self) {
+        self.name = self
+            .path
+            .rsplit('\\')
+            .next()
+            .unwrap_or_default()
+            .to_string();
+        self.lower_path = self.path.to_ascii_lowercase();
+        self.extension = self.path.rsplit_once('.').and_then(|(head, ext)| {
+            if head.is_empty() || ext.is_empty() || ext.contains('\\') {
+                None
+            } else {
+                Some(ext.to_ascii_lowercase())
+            }
+        });
+        self.excluded = is_default_excluded(&self.lower_path);
+    }
+
+    pub fn set_path(&mut self, path: String) {
+        self.path = path;
+        self.refresh();
+    }
 }
 
 const ATTR_FILE_NAME: u32 = 0x30;
 const ATTR_DATA: u32 = 0x80;
 const ATTR_END: u32 = 0xFFFF_FFFF;
+
+use crate::query::DEFAULT_EXCLUDES;
+
+fn is_default_excluded(lower_path: &str) -> bool {
+    let bytes = lower_path.as_bytes();
+    DEFAULT_EXCLUDES.iter().any(|d| {
+        let d = d.as_bytes();
+        let mut i = 0;
+        while i + d.len() + 1 <= bytes.len() {
+            if bytes[i] == b'\\' && bytes[i + 1..i + 1 + d.len()].eq_ignore_ascii_case(d) {
+                let after = i + 1 + d.len();
+                if after == bytes.len() || bytes[after] == b'\\' {
+                    return true;
+                }
+            }
+            i += 1;
+        }
+        false
+    })
+}
 
 /// Discover NTFS volumes (drive letters) on this machine.
 pub fn discover_ntfs_volumes() -> Vec<String> {
@@ -274,7 +353,7 @@ fn parse_file_record_inner(
                 u16::from_le_bytes([buf[off + 20], buf[off + 21]]) as usize;
             let v = &buf[off + value_off..(off + value_off + value_len).min(buf.len())];
             if v.len() >= 66 {
-                let p = u64::from_le_bytes(v[0..8].try_into().ok()?);
+                let p = u64::from_le_bytes(v[0..8].try_into().ok()?) & 0x0000_FFFF_FFFF_FFFF;
                 let c = i64::from_le_bytes(v[8..16].try_into().ok()?);
                 let m = i64::from_le_bytes(v[16..24].try_into().ok()?);
                 let a = i64::from_le_bytes(v[32..40].try_into().ok()?);
@@ -315,15 +394,15 @@ fn parse_file_record_inner(
     let parent = parent_ref?;
     let name = name?;
     Some((
-        IndexedFile {
-            path: String::new(),
+        IndexedFile::new(
+            String::new(),
             size,
             created,
             modified,
             accessed,
             is_dir,
-            file_ref: record_number,
-        },
+            record_number,
+        ),
         Some((parent, name)),
     ))
 }
@@ -354,7 +433,7 @@ pub fn resolve_paths(
                     }
                 }
                 cache.insert(e.file_ref, path.clone());
-                e.path = path;
+                e.set_path(path);
                 break;
             }
             if cur == root_ref {
@@ -366,7 +445,7 @@ pub fn resolve_paths(
                     }
                 }
                 cache.insert(e.file_ref, path.clone());
-                e.path = path;
+                e.set_path(path);
                 break;
             }
             match names.get(&cur) {
@@ -376,7 +455,7 @@ pub fn resolve_paths(
                     cur = *parent;
                 }
                 None => {
-                    e.path = String::new();
+                    e.set_path(String::new());
                     break;
                 }
             }

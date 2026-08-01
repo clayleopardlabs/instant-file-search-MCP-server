@@ -16,7 +16,6 @@ mod scan;
 mod sector_reader;
 mod usn;
 
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};

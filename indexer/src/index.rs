@@ -70,8 +70,14 @@ impl FileIndex {
     }
 
     /// Snapshot all entries (used by query engine).
-    pub fn snapshot(&self) -> Vec<IndexedFile> {
-        self.inner.read().unwrap().entries.values().cloned().collect()
+    pub fn snapshot_map(&self) -> HashMap<String, IndexedFile> {
+        self.inner.read().unwrap().entries.clone()
+    }
+
+    /// Query under the read lock: pass the entries iterator to `f`.
+    pub fn with_entries<R>(&self, f: impl FnOnce(&HashMap<String, IndexedFile>) -> R) -> R {
+        let inner = self.inner.read().unwrap();
+        f(&inner.entries)
     }
 }
 

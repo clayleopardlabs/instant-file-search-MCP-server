@@ -5,7 +5,6 @@
 //! per-volume in a loop and apply create/delete/rename/attribute-change
 //! records to the in-memory index.
 
-use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -89,7 +88,7 @@ fn query_journal(handle: HANDLE) -> Result<USN_JOURNAL_DATA_V0> {
 fn watch_one(volume: &str, index: &Arc<FileIndex>) -> Result<()> {
     let handle = open_volume(volume)?;
     let journal = query_journal(handle)?;
-    let journal_id = journal.UsnJournalID;
+    let mut journal_id = journal.UsnJournalID;
     let mut next_usn = journal.FirstUsn;
     tracing::info!("USN journal on {}: id={journal_id} first={}", volume, journal.FirstUsn);
 
@@ -122,6 +121,13 @@ fn watch_one(volume: &str, index: &Arc<FileIndex>) -> Result<()> {
             tracing::warn!("FSCTL_READ_USN_JOURNAL on {} failed: {e}", volume);
             std::thread::sleep(Duration::from_secs(10));
             if let Ok(j) = query_journal(handle) {
+                if j.UsnJournalID != journal_id {
+                    tracing::warn!(
+                        "USN journal on {} was recreated ({} -> {}); records between are lost",
+                        volume, journal_id, j.UsnJournalID
+                    );
+                }
+                journal_id = j.UsnJournalID;
                 next_usn = j.FirstUsn;
             }
             continue;
@@ -129,11 +135,13 @@ fn watch_one(volume: &str, index: &Arc<FileIndex>) -> Result<()> {
         if returned == 0 {
             continue;
         }
-        // The last 8 bytes are the next USN cursor.
+        // The output buffer is: [8-byte next-USN cursor][USN_RECORD_V2 records...]
+        // (per MSDN "Walking a Buffer of Change Journal Records")
         if returned >= 8 {
-            next_usn = i64::from_le_bytes(buf[returned as usize - 8..returned as usize].try_into().unwrap());
+            next_usn = i64::from_le_bytes(buf[0..8].try_into().unwrap());
         }
-        apply_records(volume, index, &buf[..returned as usize - 8]);
+        apply_records(volume, index, &buf[8..returned as usize]);
+        tracing::trace!("USN {}: returned={} records", volume, returned);
     }
 }
 
@@ -161,7 +169,7 @@ fn apply_records(volume: &str, index: &Arc<FileIndex>, data: &[u8]) {
                     let path = if let Some(p) = resolve_by_ref(index, volume, rec.ParentFileReferenceNumber) {
                         format!("{p}\\{name}")
                     } else {
-                        format!("{}\\{}", volume, name)
+                        format!("{}{name}", volume.trim_end_matches('\\'))
                     };
                     if reason & USN_REASON_DELETE != 0 && reason & USN_REASON_CREATE == 0 {
                         index.remove(&path);
@@ -170,15 +178,37 @@ fn apply_records(volume: &str, index: &Arc<FileIndex>, data: &[u8]) {
                         || reason & USN_REASON_RENAME != 0
                         || reason & USN_REASON_HARD_LINK_CHANGE != 0
                     {
-                        index.upsert(IndexedFile {
-                            path,
-                            size: 0,
-                            created: rec.TimeStamp as i64,
-                            modified: rec.TimeStamp as i64,
-                            accessed: rec.TimeStamp as i64,
-                            is_dir: rec.FileAttributes & 0x10 != 0,
-                            file_ref: rec.FileReferenceNumber,
-                        });
+                        // USN records carry no file size; stat on CLOSE/CREATE so
+                        // size filters stay correct for changed files.
+                        let mut entry = IndexedFile::new(
+                            path.clone(),
+                            0,
+                            rec.TimeStamp as i64,
+                            rec.TimeStamp as i64,
+                            rec.TimeStamp as i64,
+                            rec.FileAttributes & 0x10 != 0,
+                            rec.FileReferenceNumber & 0x0000_FFFF_FFFF_FFFF,
+                        );
+                        if let Ok(md) = std::fs::metadata(&path) {
+                            if md.is_dir() != entry.is_dir {
+                                entry.is_dir = md.is_dir();
+                            }
+                            // Index stores Windows FILETIME (100ns since 1601),
+                            // same convention as the MFT scan.
+                            const FILETIME_EPOCH: i64 = 116_444_736_000_000_000;
+                            let to_filetime = |t: std::time::SystemTime| -> i64 {
+                                match t.duration_since(std::time::UNIX_EPOCH) {
+                                    Ok(d) => FILETIME_EPOCH + (d.as_secs() as i64) * 10_000_000
+                                        + (d.subsec_nanos() as i64 / 100),
+                                    Err(e) => FILETIME_EPOCH - (e.duration().as_secs() as i64) * 10_000_000,
+                                }
+                            };
+                            entry.size = md.len();
+                            entry.created = to_filetime(md.created().unwrap_or(std::time::UNIX_EPOCH));
+                            entry.modified = to_filetime(md.modified().unwrap_or(std::time::UNIX_EPOCH));
+                            entry.accessed = to_filetime(md.accessed().unwrap_or(std::time::UNIX_EPOCH));
+                        }
+                        index.upsert(entry);
                     }
                 }
             }
@@ -189,5 +219,7 @@ fn apply_records(volume: &str, index: &Arc<FileIndex>, data: &[u8]) {
 
 fn resolve_by_ref(index: &FileIndex, volume: &str, parent_ref: u64) -> Option<String> {
     let _ = volume;
-    index.path_by_ref(parent_ref)
+    // USN refs are full 64-bit file references; the index is keyed by
+    // the 48-bit record number (same masking as the MFT scan).
+    index.path_by_ref(parent_ref & 0x0000_FFFF_FFFF_FFFF)
 }

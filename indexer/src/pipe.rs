@@ -9,6 +9,8 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use windows::core::{HRESULT, PCWSTR};
 use windows::Win32::Foundation::{CloseHandle, ERROR_PIPE_CONNECTED, HANDLE};
+use windows::Win32::Security::Authorization::ConvertStringSecurityDescriptorToSecurityDescriptorW;
+use windows::Win32::Security::{PSECURITY_DESCRIPTOR, SECURITY_ATTRIBUTES};
 use windows::Win32::Storage::FileSystem::{
     FlushFileBuffers, PIPE_ACCESS_DUPLEX, ReadFile, WriteFile,
 };
@@ -45,11 +47,33 @@ fn last_error() -> windows::core::Error {
 
 pub struct PipeServer {
     state: IndexerState,
+    security: SECURITY_ATTRIBUTES,
 }
 
 impl PipeServer {
     pub fn new(state: IndexerState) -> Result<Self> {
-        Ok(Self { state })
+        // DACL granting Everyone read/write, so non-elevated clients
+        // (the MCP server runs as the user) can connect to the pipe.
+        let sddl = "D:(A;;GRGW;;;WD)";
+        let mut sddl_wide: Vec<u16> = sddl.encode_utf16().chain(std::iter::once(0)).collect();
+        let mut sd: PSECURITY_DESCRIPTOR = PSECURITY_DESCRIPTOR(std::ptr::null_mut());
+        unsafe {
+            ConvertStringSecurityDescriptorToSecurityDescriptorW(
+                PCWSTR(sddl_wide.as_mut_ptr()),
+                1,
+                &mut sd,
+                None,
+            )?
+        };
+        if sd.0.is_null() {
+            anyhow::bail!("ConvertStringSecurityDescriptorToSecurityDescriptorW returned null");
+        }
+        let security = SECURITY_ATTRIBUTES {
+            nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
+            lpSecurityDescriptor: sd.0,
+            bInheritHandle: false.into(),
+        };
+        Ok(Self { state, security })
     }
 
     pub fn run(&self) -> Result<()> {
@@ -70,15 +94,20 @@ impl PipeServer {
                 }
             }
 
-            let response = match self.read_request(pipe) {
-                Ok(req) => self.handle(req),
-                Err(e) => Response { ok: false, data: None, error: Some(e) },
+            loop {
+                let response = match self.read_request(pipe) {
+                    Ok(req) => self.handle(req),
+                    Err(_) => break true,
+                };
+                let mut body = serde_json::to_vec(&response).unwrap_or_default();
+                body.push(b'\n');
+                unsafe {
+                    let mut written = 0u32;
+                    let _ = WriteFile(pipe, Some(&body), Some(&mut written), None);
+                    let _ = FlushFileBuffers(pipe);
+                }
             };
-            let body = serde_json::to_vec(&response).unwrap_or_default();
             unsafe {
-                let mut written = 0u32;
-                let _ = WriteFile(pipe, Some(&body), Some(&mut written), None);
-                let _ = FlushFileBuffers(pipe);
                 let _ = DisconnectNamedPipe(pipe);
                 let _ = CloseHandle(pipe);
             }
@@ -96,7 +125,7 @@ impl PipeServer {
                 MAX_PIPE_BYTES,
                 MAX_PIPE_BYTES,
                 0,
-                None,
+                Some(&self.security),
             )
         };
         if pipe.is_invalid() {
@@ -147,8 +176,7 @@ impl PipeServer {
                     Ok(o) => o,
                     Err(_) => return Response { ok: false, data: None, error: Some("bad params") },
                 };
-                let snapshot = self.state.index.snapshot();
-                let result = query::search(&snapshot, &opts);
+                let result = self.state.index.with_entries(|entries| query::search(entries, &opts));
                 if req.method == "count" {
                     Response { ok: true, data: Some(serde_json::json!({"total": result.total})), error: None }
                 } else {

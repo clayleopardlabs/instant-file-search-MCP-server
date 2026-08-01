@@ -4,13 +4,14 @@
 //! wildcards (`*`, `?`), `regex:`, `case:`, `dm:`, `dc:`, `da:`, `size:`,
 //! `ext:`, `path:`, `folder:`, `file:`, `!` NOT, `|` OR, `<...>` grouping.
 
-use std::path::Path;
+use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
 use crate::mft::IndexedFile;
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct QueryOptions {
     pub query: String,
     pub path: Option<String>,
@@ -343,27 +344,55 @@ fn parse_date_filter(s: &str) -> Option<(DateOp, i64)> {
     Some((DateOp::On, parse_date(s)?))
 }
 
-/// Everything-style wildcard match: `*` = any run, `?` = one char.
-/// Case-insensitive unless `match_case`.
-pub fn wildcard_match(pattern: &str, text: &str, match_case: bool) -> bool {
-    let (p, t) = if match_case {
-        (pattern.to_string(), text.to_string())
-    } else {
-        (pattern.to_ascii_lowercase(), text.to_ascii_lowercase())
-    };
-    let p: Vec<char> = p.chars().collect();
-    let t: Vec<char> = t.chars().collect();
-    wildcard_rec(&p, &t)
+fn eq_ci(a: u8, b: u8) -> bool {
+    a == b || a.to_ascii_lowercase() == b.to_ascii_lowercase()
 }
 
-fn wildcard_rec(p: &[char], t: &[char]) -> bool {
+/// Everything semantics: a bare term (no wildcards) matches as a
+/// case-insensitive substring anywhere in the name.
+fn contains_ci(haystack: &str, needle: &str) -> bool {
+    let h = haystack.as_bytes();
+    let n = needle.as_bytes();
+    if n.is_empty() {
+        return true;
+    }
+    if n.len() > h.len() {
+        return false;
+    }
+    h.windows(n.len()).any(|w| w.iter().zip(n).all(|(a, b)| eq_ci(*a, *b)))
+}
+
+fn starts_with_ci(s: &str, prefix: &str) -> bool {
+    let s = s.as_bytes();
+    let p = prefix.as_bytes();
+    s.len() >= p.len() && s[..p.len()].iter().zip(p).all(|(a, b)| eq_ci(*a, *b))
+}
+
+/// Everything-style wildcard match: `*` = any run, `?` = one char.
+/// Case-insensitive by default (byte-wise, no allocation).
+pub fn wildcard_match(pattern: &str, text: &str, match_case: bool) -> bool {
+    if !pattern.contains(['*', '?']) {
+        return if match_case {
+            text.contains(pattern)
+        } else {
+            contains_ci(text, pattern)
+        };
+    }
+    if match_case {
+        wildcard_rec(pattern.as_bytes(), text.as_bytes())
+    } else {
+        wildcard_rec_ci(pattern.as_bytes(), text.as_bytes())
+    }
+}
+
+fn wildcard_rec(p: &[u8], t: &[u8]) -> bool {
     let (mut pi, mut ti) = (0usize, 0usize);
     let (mut star_p, mut star_t) = (usize::MAX, 0usize);
     while ti < t.len() {
-        if pi < p.len() && (p[pi] == '?' || p[pi] == t[ti]) {
+        if pi < p.len() && (p[pi] == b'?' || p[pi] == t[ti]) {
             pi += 1;
             ti += 1;
-        } else if pi < p.len() && p[pi] == '*' {
+        } else if pi < p.len() && p[pi] == b'*' {
             star_p = pi;
             star_t = ti;
             pi += 1;
@@ -375,49 +404,65 @@ fn wildcard_rec(p: &[char], t: &[char]) -> bool {
             return false;
         }
     }
-    while pi < p.len() && p[pi] == '*' {
+    while pi < p.len() && p[pi] == b'*' {
+        pi += 1;
+    }
+    pi == p.len()
+}
+
+fn wildcard_rec_ci(p: &[u8], t: &[u8]) -> bool {
+    let (mut pi, mut ti) = (0usize, 0usize);
+    let (mut star_p, mut star_t) = (usize::MAX, 0usize);
+    while ti < t.len() {
+        if pi < p.len() && (p[pi] == b'?' || eq_ci(p[pi], t[ti])) {
+            pi += 1;
+            ti += 1;
+        } else if pi < p.len() && p[pi] == b'*' {
+            star_p = pi;
+            star_t = ti;
+            pi += 1;
+        } else if star_p != usize::MAX {
+            pi = star_p + 1;
+            star_t += 1;
+            ti = star_t;
+        } else {
+            return false;
+        }
+    }
+    while pi < p.len() && p[pi] == b'*' {
         pi += 1;
     }
     pi == p.len()
 }
 
 fn whole_word_match(text: &str, needle: &str, match_case: bool) -> bool {
-    let (t, n) = if match_case {
-        (text.to_string(), needle.to_string())
-    } else {
-        (text.to_ascii_lowercase(), needle.to_ascii_lowercase())
-    };
-    let words: Vec<&str> = t.split(|c: char| !c.is_alphanumeric() && c != '_' && c != '.' && c != '-').collect();
-    words.iter().any(|w| *w == n)
+    let t = text.as_bytes();
+    let n = needle.as_bytes();
+    let words: Vec<&[u8]> = t
+        .split(|c| !c.is_ascii_alphanumeric() && *c != b'_' && *c != b'.' && *c != b'-')
+        .collect();
+    words.iter().any(|w| {
+        *w == n
+            || (!match_case && w.len() == n.len() && w.iter().zip(n).all(|(a, b)| eq_ci(*a, *b)))
+    })
 }
 
 fn file_matches(
     entry: &IndexedFile,
     tokens: &[Token],
+    compiled: &HashMap<String, (regex::Regex, bool)>,
     opts: &QueryOptions,
 ) -> bool {
-    let name = Path::new(&entry.path)
-        .file_name()
-        .map(|n| n.to_string_lossy().to_string())
-        .unwrap_or_default();
-    let lower_name = name.to_ascii_lowercase();
-    let lower_path = entry.path.to_ascii_lowercase();
+    let name = entry.name.as_str();
+    let lower_path = entry.lower_path.as_str();
 
     for token in tokens {
         let ok = match token {
             Token::Include { pattern, whole_word } => {
-                if opts.match_case {
-                    if *whole_word {
-                        whole_word_match(&name, pattern, true)
-                    } else {
-                        wildcard_match(pattern, &name, true)
-                    }
+                if *whole_word {
+                    whole_word_match(name, pattern, opts.match_case)
                 } else {
-                    if *whole_word {
-                        whole_word_match(&lower_name, &pattern.to_ascii_lowercase(), false)
-                    } else {
-                        wildcard_match(pattern, &lower_name, false)
-                    }
+                    wildcard_match(pattern, name, opts.match_case)
                 }
             }
             Token::Exclude { pattern, whole_word } => {
@@ -427,49 +472,37 @@ fn file_matches(
                     if opts.match_case {
                         entry.path.contains(pattern.as_str())
                     } else {
-                        lower_path.contains(&pattern.to_ascii_lowercase())
+                        contains_ci(&entry.path, pattern)
                     }
-                } else if opts.match_case {
-                    if *whole_word {
-                        whole_word_match(&name, pattern, true)
-                    } else {
-                        wildcard_match(pattern, &name, true)
-                    }
+                } else if *whole_word {
+                    whole_word_match(name, pattern, opts.match_case)
                 } else {
-                    if *whole_word {
-                        whole_word_match(&lower_name, &pattern.to_ascii_lowercase(), false)
-                    } else {
-                        wildcard_match(pattern, &lower_name, false)
-                    }
+                    wildcard_match(pattern, name, opts.match_case)
                 };
                 !hit
             }
             Token::Regex { pattern, negate } => {
-                let re = match regex::RegexBuilder::new(pattern)
-                    .case_insensitive(!opts.match_case)
-                    .build()
-                {
-                    Ok(r) => r,
-                    Err(_) => return false,
-                };
-                let hit = re.is_match(&name);
+                let hit = compiled
+                    .get(pattern)
+                    .map(|(re, _)| re.is_match(name))
+                    .unwrap_or(false);
                 if *negate {
                     !hit
                 } else {
                     hit
                 }
             }
-            Token::Or(group) => group.iter().any(|t| file_matches(entry, std::slice::from_ref(t), opts)),
-            Token::Path(p) => {
+            Token::Or(group) => group.iter().any(|t| file_matches(entry, std::slice::from_ref(t), compiled, opts)),
+            Token::Path(p) | Token::BarePath(p) => {
                 let p = p.trim_end_matches('\\');
-                if opts.match_case {
-                    entry.path.starts_with(p) || lower_path.starts_with(&p.to_ascii_lowercase())
-                } else {
-                    lower_path.starts_with(&p.to_ascii_lowercase())
+                let mut ok = starts_with_ci(lower_path, p);
+                if ok && lower_path.len() > p.len() {
+                    ok = lower_path.as_bytes()[p.len()] == b'\\' || lower_path.as_bytes()[p.len()] == b':';
                 }
+                ok
             }
             Token::Ext(exts) => {
-                let ext = Path::new(&name).extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
+                let ext = entry.extension.as_deref().unwrap_or_default();
                 exts.iter().any(|e| e == &ext)
             }
             Token::Size(f) => size_match(f, entry.size),
@@ -486,14 +519,6 @@ fn file_matches(
                 TypeFilter::Files => !entry.is_dir,
                 TypeFilter::Folders => entry.is_dir,
             },
-            Token::BarePath(p) => {
-                let p = p.trim_end_matches('\\');
-                if opts.match_case {
-                    entry.path.starts_with(p)
-                } else {
-                    lower_path.starts_with(&p.to_ascii_lowercase())
-                }
-            }
         };
         if !ok {
             return false;
@@ -529,41 +554,47 @@ fn windows_ts_to_unix(ts: i64) -> i64 {
     ((ts - EPOCH) / 10_000_000) as i64
 }
 
-fn path_excluded(path: &str, opts: &QueryOptions) -> bool {
-    if opts.include_all {
-        return false;
-    }
-    let lower = path.to_ascii_lowercase();
-    DEFAULT_EXCLUDES.iter().any(|d| {
-        lower.contains(&format!("\\{}\\", d.to_ascii_lowercase()))
-            || lower.ends_with(&format!("\\{}", d.to_ascii_lowercase()))
-    })
-}
-
 /// Run a search against a snapshot.
-pub fn search(entries: &[IndexedFile], opts: &QueryOptions) -> QueryResult {
+pub fn search(entries: &HashMap<String, IndexedFile>, opts: &QueryOptions) -> QueryResult {
     let tokens = tokenize(&opts.query);
-    let scope = opts.path.as_deref().unwrap_or("");
-    let scope = scope.trim_end_matches('\\');
+    let scope = opts.path.as_deref().unwrap_or("").trim_end_matches('\\');
+    let scope_lower = scope.to_ascii_lowercase();
+    let exclude_parts: Vec<String> = opts
+        .exclude_path
+        .as_deref()
+        .unwrap_or("")
+        .split(';')
+        .map(|p| p.trim().trim_end_matches('\\').to_ascii_lowercase())
+        .filter(|p| !p.is_empty())
+        .collect();
+    let mut compiled: HashMap<String, (regex::Regex, bool)> = HashMap::new();
+    for t in &tokens {
+        if let Token::Regex { pattern, negate } = t {
+            if let Ok(re) = regex::RegexBuilder::new(pattern)
+                .case_insensitive(!opts.match_case)
+                .build()
+            {
+                compiled.insert(pattern.clone(), (re, *negate));
+            }
+        }
+    }
 
     let mut matched: Vec<&IndexedFile> = Vec::new();
-    for entry in entries {
-        if path_excluded(&entry.path, opts) {
+    for entry in entries.values() {
+        if !opts.include_all && entry.excluded {
             continue;
         }
-        if !scope.is_empty() {
-            let lower = entry.path.to_ascii_lowercase();
-            let s = scope.to_ascii_lowercase();
-            if !lower.starts_with(&s) && !lower.starts_with(&format!("{s}\\")) {
+        if !scope_lower.is_empty() {
+            let lp = entry.lower_path.as_str();
+            if !starts_with_ci(lp, &scope_lower) {
                 continue;
             }
         }
-        if let Some(ep) = &opts.exclude_path {
-            let lower = entry.path.to_ascii_lowercase();
+        if !exclude_parts.is_empty() {
+            let lp = entry.lower_path.as_str();
             let mut excluded = false;
-            for part in ep.split(';') {
-                let p = part.trim().trim_end_matches('\\').to_ascii_lowercase();
-                if !p.is_empty() && (lower.starts_with(&p) || lower.starts_with(&format!("{p}\\"))) {
+            for p in &exclude_parts {
+                if starts_with_ci(lp, p) && (lp.len() == p.len() || lp.as_bytes()[p.len()] == b'\\') {
                     excluded = true;
                     break;
                 }
@@ -572,18 +603,26 @@ pub fn search(entries: &[IndexedFile], opts: &QueryOptions) -> QueryResult {
                 continue;
             }
         }
-        if !opts.query.is_empty() && !file_matches(entry, &tokens, opts) {
+        if !opts.query.is_empty() && !file_matches(entry, &tokens, &compiled, opts) {
             continue;
         }
         matched.push(entry);
     }
 
     // Sort: default by name (case-insensitive), then full path.
-    matched.sort_by(|a, b| {
-        let an = Path::new(&a.path).file_name().map(|n| n.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
-        let bn = Path::new(&b.path).file_name().map(|n| n.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
-        an.cmp(&bn).then_with(|| a.path.to_ascii_lowercase().cmp(&b.path.to_ascii_lowercase()))
-    });
+    // For large result sets only the first max_results (+offset) are ever
+    // returned, so use partial selection instead of a full sort.
+    let want = opts.offset.saturating_add(if opts.max_results == 0 { usize::MAX } else { opts.max_results });
+    let sort_key = |a: &&IndexedFile, b: &&IndexedFile| {
+        cmp_ci(a.name.as_bytes(), b.name.as_bytes())
+            .then_with(|| cmp_ci(a.path.as_bytes(), b.path.as_bytes()))
+    };
+    if matched.len() > want && want != usize::MAX {
+        matched.select_nth_unstable_by(want, &sort_key);
+        matched[..want].sort_by(&sort_key);
+    } else {
+        matched.sort_by(&sort_key);
+    }
 
     let total = matched.len();
     let slice = matched
@@ -594,4 +633,16 @@ pub fn search(entries: &[IndexedFile], opts: &QueryOptions) -> QueryResult {
         .collect();
 
     QueryResult { total, entries: slice }
+}
+
+fn cmp_ci(a: &[u8], b: &[u8]) -> std::cmp::Ordering {
+    let n = a.len().min(b.len());
+    for i in 0..n {
+        let x = a[i].to_ascii_lowercase();
+        let y = b[i].to_ascii_lowercase();
+        if x != y {
+            return x.cmp(&y);
+        }
+    }
+    a.len().cmp(&b.len())
 }
