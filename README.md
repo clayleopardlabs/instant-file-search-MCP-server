@@ -30,22 +30,14 @@ That's the trick. That map already exists and you can use it to answer anything 
 
 These are the kinds of file operations agents usually waste time on. Here, they become instant lookups.
 
-## Technical Details
+## Search Engine (Built In)
 
-Under the hood, this server talks to a high-speed file index built on the NTFS Master File Table.
+The server is fully self-contained — nothing to install, configure, or launch beyond the server itself:
 
-The primary engine is now a **native Rust indexer** (`instant-file-search-indexer.exe`), which reads the raw `$MFT` stream sequentially (a full-volume scan of ~2.4M files takes about 15 seconds) and then stays current through the USN Change Journal — creates, renames, deletes and closes are applied incrementally, with a re-scan fallback when the journal rolls over. It runs as the auto-start Windows service `instant-file-search-indexer` and answers queries over a named pipe in milliseconds. No directory crawling, no index files on disk, no external runtime.
+1. **A native indexer** runs as a Windows service (`instant-file-search-indexer`, auto-start). On first launch it reads the NTFS Master File Table directly — a full scan of ~2.4 million files takes about 15 seconds. After that it tracks creates, renames, moves, and deletes through the Windows change journal, so the index is always current.
+2. **A backup engine** ships with the installer. If the indexer service is ever stopped or unreachable, searches are answered by the backup engine automatically — you never have to start anything yourself.
 
-The original Everything engine remains as a fully interchangeable fallback: it's a free utility by Voidtools that keeps its own RAM index current through filesystem change notifications. The server is **self-contained** — it ships with a bundled portable Everything engine, and if no Everything is running it starts one automatically (reusing an installed Everything first when one exists). Queries that would normally require expensive recursive scans are answered in milliseconds by either engine.
-
-This MCP server exposes that capability to AI assistants and coding agents, allowing them to query the local filesystem through structured tool calls instead of relying on slow shell commands, repeated directory walks, or fragile manual search loops.
-
-It works with any MCP-compatible client, including VS Code, Cursor, Claude Desktop, and OpenCode, with agent and sub-agent support through the optional plugin adapter.
-
-Two additional tools come with the same binary:
-
-- `count_files` returns only the number of matches, without transferring file data. Call this first when you are not sure whether a pattern matches ten files or ten million.
-- `search_status` reports whether the search engine is running, the IPC channel is responding, the database is loaded, and which engine source is active. Call this when the other tools fail unexpectedly to find out whether the engine is the problem.
+Searches hit an in-memory index over a named pipe and return in milliseconds. No folder-by-folder crawling, no index files on disk, no external runtime.
 
 ## One-Command Install
 
@@ -53,23 +45,17 @@ Two additional tools come with the same binary:
 powershell -c "irm https://raw.githubusercontent.com/clayleopardlabs/instantaneous-windows-file-search-mcp-server/master/scripts/install.ps1 | iex"
 ```
 
-This installs everything needed — the MCP binary AND a bundled portable Everything engine — with no separate prerequisites. No Rust toolchain needed.
+This installs everything needed — the MCP server, the indexer service, and the bundled backup engine — with no separate prerequisites and no Rust toolchain.
 
 ## What You Need
 
-**Nothing extra.** The installer deploys the MCP binary plus the native indexer service (and a bundled portable Everything engine as backup). On first search, the server routes to the native indexer's named pipe when the service is running; if it isn't, it falls back to the best available Everything engine:
+**Nothing extra.** Windows 10/11 (NTFS volumes — the index reads the Master File Table, which other platforms don't have).
 
-1. An Everything that is already running (yours — zero extra RAM).
-2. An installed Everything with no window (its GUI is launched and connects to the Everything service).
-3. The bundled portable engine (self-contained fallback).
-
-Windows only — both engines index the NTFS Master File Table, which does not exist on other platforms.
-
-The native indexer needs to be installed as the `instant-file-search-indexer` Windows service (elevated install step, provided by the installer) to reach the volume devices for its MFT scan. If you already use Everything yourself, the server can simply use your running instance as the fallback. The bundled engine exists so the server works on machines that have never had Everything installed.
+The installer deploys the server, registers the indexer service so it starts with Windows (the only step needing administrator rights), and configures the MCP client of your choice. The server routes each search to the indexer service first and falls back to the backup engine automatically if the service isn't running.
 
 ## Two Pieces, One Binary
 
-**The MCP binary** (Rust, single `.exe`) is all you need for VS Code, Cursor, Claude Desktop, or any MCP host. Point the host at this binary and the three tools appear in the agent's toolbox.
+**The MCP server binary** (Rust, single `.exe`) is all you need for VS Code, Cursor, Claude Desktop, or any MCP host. Point the host at this binary and the three tools appear in the agent's toolbox.
 
 **The plugin adapter** (TypeScript, optional) is only needed for OpenCode users who want sub-agents (explore, librarian, task workers) to access the same tools. Sub-agents do not inherit MCP tools automatically. The plugin bridges that gap by spawning the binary as a child process.
 
@@ -83,7 +69,7 @@ Run the included installer from a checkout:
 .\scripts\install.ps1
 ```
 
-The installer detects Codex, OpenCode, and Claude Desktop, then lets you choose which detected clients to configure. It builds the release binary if needed, copies it to a stable per-user location, deploys the bundled Everything engine, registers the selected MCP server, installs the OpenCode adapter in `%USERPROFILE%\.config\opencode\plugins\instant-file-search-mcp-plugin`, and backs up JSON configuration files before editing them. It is safe to run again after an OS reinstall or a source update. To verify the installation later:
+The installer detects Codex, OpenCode, and Claude Desktop, then lets you choose which detected clients to configure. It builds the release binary if needed, copies it to a stable per-user location, registers the indexer service, registers the selected MCP server, installs the OpenCode adapter in `%USERPROFILE%\.config\opencode\plugins\instant-file-search-mcp-plugin`, and backs up JSON configuration files before editing them. It is safe to run again after an OS reinstall or a source update. To verify the installation later:
 
 ```powershell
 .\scripts\doctor.ps1
@@ -96,14 +82,14 @@ For unattended setup, select clients explicitly:
 .\scripts\install.ps1 -Clients codex,opencode,claude
 ```
 
-Use `-SkipBuild` when you already have a release binary, `-SkipCodex`, `-SkipOpenCode`, or `-SkipClaude` to omit a client, or `-DryRun` to preview the actions. Codex’s native registration command is also available directly:
+Use `-SkipBuild` when you already have a release binary, `-SkipCodex`, `-SkipOpenCode`, or `-SkipClaude` to omit a client, or `-DryRun` to preview the actions. Codex's native registration command is also available directly:
 
 ```powershell
 codex mcp add instant-file-search -- C:\path\to\instant-file-search-mcp-server.exe
 codex mcp list
 ```
 
-After installation, restart Codex or start a new task so it reloads the MCP configuration. The server manages its own search engine; `search_status` reports which engine source is active.
+After installation, restart Codex or start a new task so it reloads the MCP configuration.
 
 ```sh
 git clone https://github.com/clayleopardlabs/instantaneous-windows-file-search-mcp-server
@@ -135,15 +121,15 @@ Restart the client. Three tools appear in the agent's tool list: `find_files`, `
 
 | You use... | You need | Why |
 |------------|----------|-----|
-| VS Code, Cursor, Claude Desktop, or any MCP host | MCP binary only | The host loads tools directly |
-| OpenCode main session | MCP binary as MCP server | Configured under `mcp` key in opencode.json |
-| OpenCode sub-agents too | MCP binary + plugin adapter | Sub-agents do not inherit MCP tools |
+| VS Code, Cursor, Claude Desktop, or any MCP host | MCP server binary only | The host loads tools directly |
+| OpenCode main session | MCP server binary as MCP server | Configured under `mcp` key in opencode.json |
+| OpenCode sub-agents too | MCP server binary + plugin adapter | Sub-agents do not inherit MCP tools |
 
 ## Build
 
 The repo is a Cargo workspace with two binaries.
 
-### MCP binary (required)
+### MCP server (required)
 
 Requires the [Rust toolchain](https://rustup.rs):
 
@@ -153,7 +139,7 @@ cargo build --release
 
 Output: `target/release/instant-file-search-mcp-server.exe`
 
-### Native indexer (recommended)
+### Indexer (recommended)
 
 Built by the same workspace command (member crate `indexer/`):
 
@@ -167,7 +153,7 @@ Run it in one of three modes:
 
 | Mode | Use |
 |------|-----|
-| `serve` | Named-pipe server + MFT scan + USN watcher (what the service runs) |
+| `serve` | Named-pipe server + MFT scan + change-journal watcher (what the service runs) |
 | `scan` | One-shot diagnostic scan, prints the entry count |
 | `service` | SCM-managed Windows service (auto-start, runs `serve` internally) |
 
@@ -280,7 +266,7 @@ Embed these in the `query` parameter:
 
 | Param | Type | Description |
 |-------|------|-------------|
-| `query` | string (required) | Search query with Everything modifiers |
+| `query` | string (required) | Search query with modifiers |
 | `path` | string | Scope to a directory |
 | `max_results` | number | Results per page (max 100) |
 | `offset` | number | Pagination offset |
@@ -346,20 +332,17 @@ Default (omit `fields`): all common fields.
 
 ```
 MCP Host (VS Code / Cursor / Claude Desktop)
-  └─ MCP binary (Rust, stdin/stdout)
-       ├─ named pipe ──► instant-file-search-indexer service (native Rust, primary)
-       │                    ├─ raw $MFT stream scan (initial, ~15s for 2.4M files)
-       │                    └─ USN Change Journal (incremental updates)
-       └─ Everything IPC (WM_COPYDATA) ──► Everything engine (fallback)
-            └─ Everything engine (running instance / installed GUI / bundled portable)
+  └─ MCP server (Rust, stdin/stdout)
+       └─ named pipe ──► indexer service (in-memory index, primary)
+                            └─ NTFS Master File Table + change journal
 
 OpenCode (main + sub-agents)
   └─ Plugin adapter (TypeScript)
-       └─ spawns MCP binary
-            └─ (same routing as above: native pipe first, Everything fallback)
+       └─ spawns MCP server
+            └─ (same routing as above)
 ```
 
-The primary engine is the native indexer service: queries travel over a named pipe (`\\.\pipe\instant-file-search-indexer`) with newline-delimited JSON, answered in milliseconds against an in-memory index kept current by the USN Change Journal. When the service is down, the MCP binary falls back to the Everything engine over Win32 window messaging (WM_COPYDATA) — no HTTP, no network, no sockets. When no Everything engine is reachable, the binary starts one automatically (installed GUI first, then the bundled portable engine) and waits for its database to load.
+If the indexer service is unreachable, the server answers from the bundled backup engine instead — same tools, same results, no setup. All communication stays on the local machine: no HTTP, no network, no sockets.
 
 ## Development
 
@@ -369,9 +352,9 @@ cargo test
 
 Unit tests cover sort parsing, field parsing, timestamp formatting, and attribute formatting. No integration tests - a search engine must be running for real IPC queries.
 
-Logging is controlled by the `EVERYTHING_MCP_LOG` environment variable (tracing-subscriber env-filter). Unset by default - no log output. Logs go to stderr so they never corrupt the MCP JSON stream. The indexer uses the same env var; as an SCM service its output is invisible, so run `serve` from a console with redirection when diagnosing the watcher.
+Logging is controlled by the `EVERYTHING_MCP_LOG` environment variable (tracing-subscriber env-filter). Unset by default - no log output. Logs go to stderr so they never corrupt the MCP JSON stream. The indexer uses the same env var; as a service its output is invisible, so run `serve` from a console with redirection when diagnosing the watcher.
 
-Key dependencies: `rmcp` for MCP transport, `everything-ipc` for the Everything fallback (WM_COPYDATA), `schemars` for JSON Schema generation, `tokio` for async runtime. Everything calls are blocking and dispatched via `spawn_blocking`. The indexer crate uses `windows` (0.62) for Win32 APIs (USN journal, named pipes, service control), `ntfs` for MFT record parsing, and `windows-service` for the SCM integration. No unsafe blocks, no generated code, no build scripts.
+Key dependencies: `rmcp` for MCP transport, `everything-ipc` for the backup engine's IPC, `schemars` for JSON Schema generation, `tokio` for async runtime. Everything calls are blocking and dispatched via `spawn_blocking`. The indexer crate uses `windows` (0.62) for Win32 APIs (change journal, named pipes, service control), `ntfs` for MFT record parsing, and `windows-service` for the SCM integration. No unsafe blocks, no generated code, no build scripts.
 
 Detailed docs in the `docs/` directory: `architecture.md`, `build.md`, `development.md`, `tools.md`.
 
