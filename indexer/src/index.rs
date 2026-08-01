@@ -85,6 +85,42 @@ impl FileIndex {
         }
     }
 
+    /// Remove an entry and everything under it (directory delete).
+    pub fn remove_prefix(&self, prefix: &str) {
+        let mut inner = self.inner.write().unwrap();
+        let doomed: Vec<String> = inner
+            .entries
+            .keys()
+            .filter(|p| p.starts_with(prefix) && (*p == prefix || p.starts_with(&format!("{prefix}\\"))))
+            .cloned()
+            .collect();
+        for p in doomed {
+            if let Some(old) = inner.entries.remove(&p) {
+                inner.refs.remove(&old.file_ref);
+            }
+        }
+    }
+
+    /// Re-prefix every entry under `old_prefix` to `new_prefix` (directory
+    /// rename: NTFS emits no per-child rename records, only the directory's).
+    pub fn rename_prefix(&self, old_prefix: &str, new_prefix: &str) {
+        let mut inner = self.inner.write().unwrap();
+        let doomed: Vec<(String, IndexedFile)> = inner
+            .entries
+            .iter()
+            .filter(|(p, _)| p.starts_with(old_prefix) && (*p == old_prefix || p.starts_with(&format!("{old_prefix}\\"))))
+            .map(|(p, e)| (p.clone(), e.clone()))
+            .collect();
+        for (old_path, mut e) in doomed {
+            let new_path = format!("{new_prefix}{}", &old_path[old_prefix.len()..]);
+            e.set_path(new_path.clone());
+            inner.entries.remove(&old_path);
+            inner.refs.remove(&e.file_ref);
+            inner.entries.insert(new_path.clone(), e.clone());
+            inner.refs.insert(e.file_ref, new_path);
+        }
+    }
+
     /// Resolve an MFT record number to a full path (USN parent resolution).
     pub fn path_by_ref(&self, file_ref: u64) -> Option<String> {
         self.inner.read().unwrap().refs.get(&file_ref).cloned()
@@ -112,3 +148,63 @@ impl FileIndex {
 
 /// Convenience alias for `Arc<FileIndex>`.
 pub type SharedIndex = Arc<FileIndex>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::mft::IndexedFile;
+
+    fn e(path: &str) -> IndexedFile {
+        IndexedFile::new(path.to_string(), 0, 0, 0, 0, false, 0)
+    }
+
+    fn build() -> FileIndex {
+        let ix = FileIndex::new();
+        ix.replace(vec![
+            e(r"C:\olddir\a.txt"),
+            e(r"C:\olddir\sub\b.txt"),
+            e(r"C:\other\c.txt"),
+            e(r"C:\olddir"),
+        ]);
+        ix
+    }
+
+    #[test]
+    fn rename_prefix_moves_subtree() {
+        let ix = build();
+        ix.rename_prefix(r"C:\olddir", r"C:\newdir");
+        ix.with_entries(|m| {
+            assert!(m.contains_key(r"C:\newdir\a.txt"));
+            assert!(m.contains_key(r"C:\newdir\sub\b.txt"));
+            assert!(m.contains_key(r"C:\newdir"));
+            assert!(m.contains_key(r"C:\other\c.txt"));
+            assert!(!m.contains_key(r"C:\olddir"));
+        });
+        // Path-by-ref resolution must follow the rename too.
+        assert!(ix.len() == 4);
+    }
+
+    #[test]
+    fn remove_prefix_drops_subtree() {
+        let ix = build();
+        ix.remove_prefix(r"C:\olddir");
+        ix.with_entries(|m| {
+            assert!(!m.contains_key(r"C:\olddir"));
+            assert!(!m.contains_key(r"C:\olddir\a.txt"));
+            assert!(!m.contains_key(r"C:\olddir\sub\b.txt"));
+            assert!(m.contains_key(r"C:\other\c.txt"));
+        });
+    }
+
+    #[test]
+    fn rename_prefix_does_not_hit_sibling() {
+        // `C:\olddir` must not rename `C:\olddirX`.
+        let ix = FileIndex::new();
+        ix.replace(vec![e(r"C:\olddir\a.txt"), e(r"C:\olddirX\b.txt")]);
+        ix.rename_prefix(r"C:\olddir", r"C:\newdir");
+        ix.with_entries(|m| {
+            assert!(m.contains_key(r"C:\newdir\a.txt"));
+            assert!(m.contains_key(r"C:\olddirX\b.txt"));
+        });
+    }
+}

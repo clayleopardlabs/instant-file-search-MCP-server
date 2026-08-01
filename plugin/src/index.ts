@@ -156,7 +156,7 @@ const plugin: Plugin = async (_input, _options) => {
     tool: {
       find_files: tool({
         description:
-          "INSTANT file/directory search using Everything engine (NTFS index). " +
+          "INSTANT file/directory search using the local NTFS index (native engine; falls back to the backup engine when the indexer service is not running). " +
           "Fastest way to find files on this PC. Default scope: ALL indexed drives. " +
           "Supports regex, sort, path filter, exclude_path, selective fields, " +
           "match_case/match_whole_word/match_path, and pagination via offset. " +
@@ -245,7 +245,7 @@ const plugin: Plugin = async (_input, _options) => {
 
       count_files: tool({
         description:
-          "INSTANT count of matching files using Everything engine (NTFS index). " +
+          "INSTANT count of matching files using the local NTFS index (native engine; falls back to the backup engine when the indexer service is not running). " +
           "Returns total count without transferring file data. " +
           "Default scope: ALL indexed drives. Pass path to narrow. " +
           "Supports regex, match_case, match_whole_word, exclude_path, include_all. " +
@@ -291,10 +291,10 @@ const plugin: Plugin = async (_input, _options) => {
 
       search_status: tool({
         description:
-          "Check if Everything search engine is running and IPC is connected. " +
-          "Returns detailed diagnostics including window status, IPC availability, " +
-          "and DB load state. Call this before using find_files or count_files " +
-          "to verify the engine is available.",
+          "Check search engine status. Returns diagnostics for both engines: " +
+          "the native indexer service (indexed file count, volumes, pipe availability) " +
+          "and the backup engine (window/IPC/db state, engine source). " +
+          "Call this BEFORE using find_files or count_files to verify an engine is available.",
         args: {},
         execute: async (_args, _context) => {
           const text = await callMCP("search_status", {});

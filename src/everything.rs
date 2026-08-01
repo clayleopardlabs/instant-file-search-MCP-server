@@ -517,7 +517,14 @@ fn create_client() -> Result<EverythingClient> {
 }
 
 /// Default directory patterns excluded when include_all is false.
-const DEFAULT_EXCLUDES: &[&str] = &["node_modules", ".git", "WinSxS"];
+/// Must mirror the native indexer's DEFAULT_EXCLUDES (indexer/src/query.rs).
+const DEFAULT_EXCLUDES: &[&str] = &[
+    "node_modules",
+    ".git",
+    "WinSxS",
+    "$Recycle.Bin",
+    "System Volume Information",
+];
 
 /// Build the Everything search query string with smart defaults.
 ///
@@ -552,9 +559,11 @@ fn build_search_query(
 
     if let Some(ep) = exclude_path.filter(|s| !s.is_empty()) {
         for part in ep.split(';') {
-            let trimmed = part.trim();
+            let trimmed = part.trim().trim_end_matches('\\');
             if !trimmed.is_empty() {
-                parts.push(format!("!{}", trimmed));
+                // `!<foo\>` excludes the folder and everything under it,
+                // matching the native indexer's bare-name semantics.
+                parts.push(format!("!<{}\\>", trimmed));
                 excluded_dirs.push(trimmed);
             }
         }

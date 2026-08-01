@@ -65,12 +65,14 @@ impl EverythingHandler {
             ErrorData::internal_error(format!("task join failed: {e}"), None)
         })?;
 
-        let native_status = native_result.map_err(|e| {
-            ErrorData::internal_error(format!("native status failed: {e}"), None)
-        })?;
-        let everything_status = everything_result.map_err(|e| {
-            ErrorData::internal_error(format!("everything status failed: {e}"), None)
-        })?;
+        let native_status = match native_result {
+            Ok(v) => serde_json::json!({ "ok": true, "detail": v }),
+            Err(e) => serde_json::json!({ "ok": false, "error": e.to_string() }),
+        };
+        let everything_status = match everything_result {
+            Ok(v) => serde_json::json!({ "ok": true, "detail": v }),
+            Err(e) => serde_json::json!({ "ok": false, "error": e.to_string() }),
+        };
 
         let json = serde_json::json!({
             "native": native_status,

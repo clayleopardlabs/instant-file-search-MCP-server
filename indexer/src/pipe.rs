@@ -125,9 +125,12 @@ impl PipeServer {
             }
 
             loop {
+                if self.stop.load(Ordering::SeqCst) {
+                    break;
+                }
                 let response = match self.read_request(pipe) {
                     Ok(req) => self.handle(req),
-                    Err(_) => break true,
+                    Err(_) => break,
                 };
                 let mut body = serde_json::to_vec(&response).unwrap_or_default();
                 body.push(b'\n');
@@ -179,14 +182,17 @@ impl PipeServer {
                 return Err("read failed");
             }
             if read == 0 {
-                break;
+                return Err("client disconnected");
             }
             buf.extend_from_slice(&chunk[..read as usize]);
-            if read < chunk.len() as u32 {
-                break;
+            // In message mode ReadFile returns a complete message (or
+            // ERROR_MORE_DATA for a longer one), so once we have a full
+            // message the JSON must parse; otherwise it is a protocol error.
+            if let Ok(req) = serde_json::from_slice::<Request>(&buf) {
+                return Ok(req);
             }
+            return Err("invalid JSON request");
         }
-        serde_json::from_slice::<Request>(&buf).map_err(|_| "invalid JSON request")
     }
 
     fn handle(&self, req: Request) -> Response<'static> {

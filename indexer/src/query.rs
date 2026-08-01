@@ -35,9 +35,9 @@ pub struct QueryResult {
 #[derive(Debug, Clone)]
 pub enum Token {
     /// Positive term (name wildcard or bare text).
-    Include { pattern: String, whole_word: bool },
+    Include { pattern: String, whole_word: bool, case_sensitive: bool },
     /// Negative term (`!pattern`).
-    Exclude { pattern: String, whole_word: bool },
+    Exclude { pattern: String, whole_word: bool, case_sensitive: bool },
     /// Regex term (`regex:...` or regex flag).
     Regex { pattern: String, negate: bool },
     /// Or-group: list of terms where any must match.
@@ -214,9 +214,9 @@ pub fn tokenize(query: &str) -> Vec<Token> {
             // `case:term` — case-sensitive term.
             let pat = term[5..].trim().to_string();
             if negate {
-                Token::Exclude { pattern: pat, whole_word: false }
+                Token::Exclude { pattern: pat, whole_word: false, case_sensitive: true }
             } else {
-                Token::Include { pattern: pat, whole_word: false }
+                Token::Include { pattern: pat, whole_word: false, case_sensitive: true }
             }
         } else if term.starts_with("path:") {
             Token::Path(term[5..].trim().trim_matches('"').to_string())
@@ -256,13 +256,13 @@ pub fn tokenize(query: &str) -> Vec<Token> {
                 None => continue,
             }
         } else if term.starts_with("!<") && term.ends_with('>') {
-            Token::Exclude { pattern: term[2..term.len() - 1].to_string(), whole_word: false }
+            Token::Exclude { pattern: term[2..term.len() - 1].to_string(), whole_word: false, case_sensitive: false }
         } else if is_windows_path(term) {
             Token::BarePath(term.to_string())
         } else if negate {
-            Token::Exclude { pattern: term.to_string(), whole_word: false }
+            Token::Exclude { pattern: term.to_string(), whole_word: false, case_sensitive: false }
         } else {
-            Token::Include { pattern: term.to_string(), whole_word: false }
+            Token::Include { pattern: term.to_string(), whole_word: false, case_sensitive: false }
         };
         group.push(token);
     }
@@ -460,26 +460,28 @@ fn token_matches(
     let target = if opts.match_path { lower_path } else { name };
 
     match token {
-        Token::Include { pattern, whole_word } => {
+        Token::Include { pattern, whole_word, case_sensitive } => {
+            let cs = opts.match_case || *case_sensitive;
             if *whole_word {
-                whole_word_match(target, pattern, opts.match_case)
+                whole_word_match(target, pattern, cs)
             } else {
-                wildcard_match(pattern, target, opts.match_case)
+                wildcard_match(pattern, target, cs)
             }
         }
-        Token::Exclude { pattern, whole_word } => {
+        Token::Exclude { pattern, whole_word, case_sensitive } => {
             // Match against the whole path for `!<dir>` and against the
             // name for plain `!term`.
+            let cs = opts.match_case || *case_sensitive;
             let hit = if pattern.contains('\\') || pattern.contains('/') {
-                if opts.match_case {
+                if cs {
                     entry.path.contains(pattern.as_str())
                 } else {
                     contains_ci(&entry.path, pattern)
                 }
             } else if *whole_word {
-                whole_word_match(target, pattern, opts.match_case)
+                whole_word_match(target, pattern, cs)
             } else {
-                wildcard_match(pattern, target, opts.match_case)
+                wildcard_match(pattern, target, cs)
             };
             !hit
         }
@@ -574,7 +576,10 @@ fn path_excluded(lp: &[u8], p: &[u8]) -> bool {
 fn dir_name_match(lp: &[u8], p: &[u8]) -> bool {
     let mut i = 0;
     while i + p.len() <= lp.len() {
-        if (i == 0 || lp[i - 1] == b'\\') && lp[i..i + p.len()] == *p {
+        // Segment start: path start, after a separator, or after the drive
+        // letter colon (drive-root children like `C:\target`).
+        let seg_start = i == 0 || lp[i - 1] == b'\\' || lp[i - 1] == b':';
+        if seg_start && lp[i..i + p.len()] == *p {
             let after = i + p.len();
             if after == lp.len() || lp[after] == b'\\' {
                 return true;
@@ -629,7 +634,15 @@ pub fn search(entries: &HashMap<String, IndexedFile>, opts: &QueryOptions) -> Qu
         }
         if !scope_lower.is_empty() {
             let lp = entry.lower_path.as_str();
-            if !starts_with_ci(lp, &scope_lower) {
+            // Scope must be a directory boundary: `B:\Projects` matches
+            // `B:\Projects\...` but not `B:\ProjectsFoo\...`.
+            if starts_with_ci(lp, &scope_lower) {
+                let ok = lp.len() == scope_lower.len()
+                    || matches!(lp.as_bytes().get(scope_lower.len()), Some(b'\\') | Some(b':'));
+                if !ok {
+                    continue;
+                }
+            } else {
                 continue;
             }
         }
@@ -762,6 +775,10 @@ mod tests {
             ("readme.md".to_string(), entry(r"B:\p\readme.md", false, 1_785_542_400)),
             ("docs".to_string(), entry(r"B:\p\docs", true, 1_785_542_400)),
             ("target".to_string(), entry(r"B:\p\target\debug\x.o", false, 1_700_000_000)),
+            ("roottarget".to_string(), entry(r"C:\target\root.o", false, 1_700_000_000)),
+            ("rootrecycle".to_string(), entry(r"C:\$Recycle.Bin\gone.txt", false, 1_700_000_000)),
+            ("projectsfoo".to_string(), entry(r"B:\pfoo\sibling.txt", false, 1_700_000_000)),
+            ("CaseFile.txt".to_string(), entry(r"B:\p\CaseFile.txt", false, 1_700_000_000)),
         ]);
         let opts = QueryOptions { query: query.to_string(), ..Default::default() };
         let r = search(&map, &opts);
@@ -788,5 +805,67 @@ mod tests {
         assert!(run("dm:2026-08-01").contains(&"docs".to_string()));
         // Bare term is a substring match, dirs match too.
         assert_eq!(run("file: md"), vec!["AGENTS.md", "readme.md"]);
+    }
+
+    #[test]
+    fn exclude_path_bare_token_drive_root() {
+        // Regression: a bare exclude token must match a directory directly
+        // under the drive root (`C:\target\...`), where the preceding byte
+        // is the drive colon, not a backslash.
+        let opts = QueryOptions {
+            query: "*".to_string(),
+            exclude_path: Some("target".to_string()),
+            include_all: true,
+            ..Default::default()
+        };
+        let map: HashMap<String, IndexedFile> = HashMap::from([
+            ("roottarget".to_string(), entry(r"C:\target\root.o", false, 1_700_000_000)),
+            ("rootrecycle".to_string(), entry(r"C:\$Recycle.Bin\gone.txt", false, 1_700_000_000)),
+        ]);
+        let r = search(&map, &opts);
+        assert_eq!(r.entries.len(), 1);
+        assert_eq!(r.entries[0].path, r"C:\$Recycle.Bin\gone.txt");
+    }
+
+    #[test]
+    fn default_excludes_drive_root() {
+        // Regression: `$Recycle.Bin` at the drive root must be excluded by
+        // default (its name sits directly after the drive colon).
+        let opts = QueryOptions { query: "*".to_string(), ..Default::default() };
+        let map: HashMap<String, IndexedFile> = HashMap::from([
+            ("roottarget".to_string(), entry(r"C:\target\root.o", false, 1_700_000_000)),
+            ("rootrecycle".to_string(), entry(r"C:\$Recycle.Bin\gone.txt", false, 1_700_000_000)),
+        ]);
+        let r = search(&map, &opts);
+        assert_eq!(r.entries.len(), 1);
+        assert_eq!(r.entries[0].path, r"C:\target\root.o");
+    }
+
+    #[test]
+    fn path_scope_is_directory_boundary() {
+        // Regression: scope `B:\p` must not match `B:\pfoo\...`.
+        let opts = QueryOptions {
+            query: "*".to_string(),
+            path: Some(r"B:\p".to_string()),
+            ..Default::default()
+        };
+        let map: HashMap<String, IndexedFile> = HashMap::from([
+            ("inside".to_string(), entry(r"B:\p\a.txt", false, 1_700_000_000)),
+            ("sibling".to_string(), entry(r"B:\pfoo\b.txt", false, 1_700_000_000)),
+        ]);
+        let r = search(&map, &opts);
+        let paths: Vec<&str> = r.entries.iter().map(|e| e.path.as_str()).collect();
+        assert_eq!(paths, vec![r"B:\p\a.txt"]);
+    }
+
+    #[test]
+    fn case_prefix_is_case_sensitive() {
+        // Regression: `case:` must force case-sensitive matching for that
+        // token even when the global match_case flag is off.
+        assert_eq!(run("case:CaseFile.txt"), vec!["CaseFile.txt"]);
+        assert_eq!(run("case:casefile.txt"), Vec::<String>::new());
+        assert_eq!(run("case:Case*"), vec!["CaseFile.txt"]);
+        // Non-case: token remains case-insensitive.
+        assert_eq!(run("casefile.txt"), vec!["CaseFile.txt"]);
     }
 }

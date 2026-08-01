@@ -127,6 +127,12 @@ pub fn status() -> Result<serde_json::Value> {
 }
 
 fn options_from_search(params: &SearchParams) -> serde_json::Value {
+    // max_results=0 means "no limit" to the indexer, which can produce a
+    // response too large for the pipe buffer. Treat 0 as the default 100.
+    let max_results = match params.max_results {
+        Some(0) | None => 100,
+        Some(n) => n as usize,
+    };
     json!({
         "query": params.query,
         "path": params.path,
@@ -136,7 +142,7 @@ fn options_from_search(params: &SearchParams) -> serde_json::Value {
         "match_case": params.match_case.unwrap_or(false),
         "match_whole_word": params.match_whole_word.unwrap_or(false),
         "match_path": params.match_path.unwrap_or(false),
-        "max_results": params.max_results.unwrap_or(100) as usize,
+        "max_results": max_results,
         "offset": params.offset.unwrap_or(0) as usize,
         "sort": params.sort,
     })
