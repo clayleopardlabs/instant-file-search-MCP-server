@@ -1,0 +1,26 @@
+[package]
+name = "instant-file-search-indexer"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["Clay Leopard Labs"]
+description = "Native NTFS indexer service for instant file search (Phase 2: no Everything dependency)"
+
+[dependencies]
+ntfs = "0.4"
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Pipes",
+    "Win32_Security",
+    "Win32_System_Threading",
+    "Win32_System_IO",
+    "Win32_System_Ioctl",
+    "Win32_System_Memory",
+] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+regex = "1"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
