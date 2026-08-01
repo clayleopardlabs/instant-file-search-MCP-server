@@ -2,7 +2,7 @@
 
 ![](demo.gif)
 
-An MCP server that gives AI agents instant filesystem search on Windows. Agents can find files by name, extension, size, or date, scope searches to a directory, exclude noise folders, and count matches — across millions of files, in milliseconds, without walking folders one by one.
+An MCP server that gives AI agents instant filesystem search on Windows. Agents can find files by name, extension, size, or date, scope searches to a directory, exclude noise folders, and count matches across millions of files in milliseconds, without walking folders one by one.
 
 ## How It Works
 
@@ -19,10 +19,10 @@ Typical agent use cases:
 
 ## Search Engine (Built In)
 
-The server is self-contained — nothing to install, configure, or launch beyond the server itself:
+The server is self-contained: nothing to install, configure, or launch beyond the server itself:
 
-1. **A native indexer** runs as a Windows service (`instant-file-search-indexer`, auto-start). On first launch it reads the NTFS Master File Table directly — a full scan of ~2.4 million files takes about 15 seconds. After that it tracks creates, renames, moves, and deletes through the Windows change journal, so the index is always current.
-2. **A backup engine** ships with the installer. If the indexer service is ever stopped or unreachable, searches are answered by the backup engine automatically — you never have to start anything yourself.
+1. **A native indexer** runs as a Windows service (`instant-file-search-indexer`, auto-start). On first launch it reads the NTFS Master File Table directly; a full scan of ~2.4 million files takes about 15 seconds. After that it tracks creates, renames, moves, and deletes through the Windows change journal, so the index is always current.
+2. **A backup engine** ships with the installer. If the indexer service is ever stopped or unreachable, searches are answered by the backup engine automatically. You never have to start anything yourself.
 
 Searches hit an in-memory index over a named pipe and return in milliseconds. No index files on disk, no external runtime.
 
@@ -32,7 +32,7 @@ Searches hit an in-memory index over a named pipe and return in milliseconds. No
 powershell -c "irm https://raw.githubusercontent.com/clayleopardlabs/instantaneous-windows-file-search-mcp-server/master/scripts/install.ps1 | iex"
 ```
 
-This installs everything needed — the MCP server, the indexer service, and the bundled backup engine — with no separate prerequisites and no Rust toolchain.
+This installs everything needed (the MCP server, the indexer service, and the bundled backup engine) with no separate prerequisites and no Rust toolchain.
 
 ## What You Need
 
@@ -329,7 +329,7 @@ OpenCode (main + sub-agents)
             └─ (same routing as above)
 ```
 
-If the indexer service is unreachable, the server answers from the bundled backup engine instead — same tools, same results, no setup. All communication stays on the local machine: no HTTP, no network, no sockets.
+If the indexer service is unreachable, the server answers from the bundled backup engine instead, with the same tools and results and no setup. All communication stays on the local machine: no HTTP, no network, no sockets.
 
 ## Development
 
