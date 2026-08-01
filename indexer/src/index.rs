@@ -74,6 +74,7 @@ impl FileIndex {
         }
         inner.refs.insert(entry.file_ref, entry.path.clone());
         inner.entries.insert(entry.path.clone(), entry);
+        tracing::debug!("upsert: entries={} refs={}", inner.entries.len(), inner.refs.len());
     }
 
     /// Remove an entry by full path.

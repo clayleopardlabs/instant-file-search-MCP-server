@@ -24,11 +24,11 @@ use windows::core::PCWSTR;
 use crate::index::FileIndex;
 use crate::mft::IndexedFile;
 
-const USN_REASON_RENAME: u32 = 0x0000_0001;
+const USN_REASON_RENAME: u32 = 0x0000_3000;
 const USN_REASON_CLOSE: u32 = 0x8000_0000;
-const USN_REASON_DELETE: u32 = 0x0000_0002;
+const USN_REASON_DELETE: u32 = 0x0000_0200;
 const USN_REASON_CREATE: u32 = 0x0000_0100;
-const USN_REASON_HARD_LINK_CHANGE: u32 = 0x0000_0004;
+const USN_REASON_HARD_LINK_CHANGE: u32 = 0x0001_0000;
 
 /// Watch all volumes in a loop (one thread per volume is fine; the journal
 /// IOCTLs block).
@@ -200,10 +200,12 @@ fn apply_records(volume: &str, index: &Arc<FileIndex>, data: &[u8]) {
                     } else {
                         format!("{}{name}", volume.trim_end_matches('\\'))
                     };
+                    tracing::debug!("USN {}: name={} reason=0x{:X} path={}", volume, name, reason, path);
                     if reason & USN_REASON_DELETE != 0 {
                         // DELETE takes precedence: a trailing CLOSE record in
                         // the same delete sequence must not re-add the file.
                         index.remove(&path);
+                        tracing::debug!("USN {}: DELETE {}", volume, path);
                     } else if reason & USN_REASON_CLOSE != 0
                         || reason & USN_REASON_CREATE != 0
                         || reason & USN_REASON_RENAME != 0
@@ -238,13 +240,12 @@ fn apply_records(volume: &str, index: &Arc<FileIndex>, data: &[u8]) {
                             entry.created = to_filetime(md.created().unwrap_or(std::time::UNIX_EPOCH));
                             entry.modified = to_filetime(md.modified().unwrap_or(std::time::UNIX_EPOCH));
                             entry.accessed = to_filetime(md.accessed().unwrap_or(std::time::UNIX_EPOCH));
+                            index.upsert(entry);
                         } else {
-                            // File is gone (deleted before its CLOSE record,
-                            // or a delete we missed). Don't re-add it.
+                            // File is gone (deleted before its CLOSE record, renamed
+                            // away, or a delete we missed). Don't re-add it.
                             index.remove(&path);
-                            continue;
                         }
-                        index.upsert(entry);
                     }
                 }
             }
