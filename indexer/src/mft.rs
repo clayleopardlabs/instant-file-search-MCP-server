@@ -99,6 +99,7 @@ impl IndexedFile {
     }
 }
 
+const ATTR_STD_INFO: u32 = 0x10;
 const ATTR_FILE_NAME: u32 = 0x30;
 const ATTR_DATA: u32 = 0x80;
 const ATTR_END: u32 = 0xFFFF_FFFF;
@@ -342,7 +343,22 @@ fn parse_file_record_inner(
             break;
         }
         let non_resident = buf[off + 8] != 0;
-        if atype == ATTR_FILE_NAME && !non_resident {
+        if atype == ATTR_STD_INFO && !non_resident {
+            let value_len = u32::from_le_bytes([
+                buf[off + 16],
+                buf[off + 17],
+                buf[off + 18],
+                buf[off + 19],
+            ]) as usize;
+            let value_off =
+                u16::from_le_bytes([buf[off + 20], buf[off + 21]]) as usize;
+            let v = &buf[off + value_off..(off + value_off + value_len).min(buf.len())];
+            if v.len() >= 32 {
+                created = i64::from_le_bytes(v[0..8].try_into().ok()?);
+                modified = i64::from_le_bytes(v[8..16].try_into().ok()?);
+                accessed = i64::from_le_bytes(v[24..32].try_into().ok()?);
+            }
+        } else if atype == ATTR_FILE_NAME && !non_resident {
             let value_len = u32::from_le_bytes([
                 buf[off + 16],
                 buf[off + 17],
@@ -354,10 +370,6 @@ fn parse_file_record_inner(
             let v = &buf[off + value_off..(off + value_off + value_len).min(buf.len())];
             if v.len() >= 66 {
                 let p = u64::from_le_bytes(v[0..8].try_into().ok()?) & 0x0000_FFFF_FFFF_FFFF;
-                let c = i64::from_le_bytes(v[8..16].try_into().ok()?);
-                let m = i64::from_le_bytes(v[16..24].try_into().ok()?);
-                let a = i64::from_le_bytes(v[32..40].try_into().ok()?);
-                let s = u64::from_le_bytes(v[40..48].try_into().ok()?);
                 let name_len = v[64] as usize;
                 let ns = v[65] as i8;
                 if name_len > 0 && v.len() >= 66 + name_len * 2 {
@@ -371,22 +383,25 @@ fn parse_file_record_inner(
                         name_ns = ns;
                         parent_ref = Some(p);
                         name = Some(n);
-                        created = c;
-                        modified = m;
-                        accessed = a;
-                        size = s;
                     }
                 }
             }
-        } else if atype == ATTR_DATA && !non_resident && !data_seen {
-            let value_len = u32::from_le_bytes([
-                buf[off + 16],
-                buf[off + 17],
-                buf[off + 18],
-                buf[off + 19],
-            ]) as usize;
-            size = value_len as u64;
-            data_seen = true;
+        } else if atype == ATTR_DATA {
+            if non_resident {
+                if !data_seen && off + 56 <= buf.len() {
+                    size = u64::from_le_bytes(buf[off + 48..off + 56].try_into().ok()?);
+                    data_seen = true;
+                }
+            } else if !data_seen {
+                let value_len = u32::from_le_bytes([
+                    buf[off + 16],
+                    buf[off + 17],
+                    buf[off + 18],
+                    buf[off + 19],
+                ]) as usize;
+                size = value_len as u64;
+                data_seen = true;
+            }
         }
         off += alen;
     }
