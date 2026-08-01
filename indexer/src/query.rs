@@ -449,9 +449,9 @@ fn whole_word_match(text: &str, needle: &str, match_case: bool) -> bool {
     })
 }
 
-fn file_matches(
+fn token_matches(
     entry: &IndexedFile,
-    tokens: &[Token],
+    token: &Token,
     compiled: &HashMap<String, (regex::Regex, bool)>,
     opts: &QueryOptions,
 ) -> bool {
@@ -459,75 +459,83 @@ fn file_matches(
     let lower_path = entry.lower_path.as_str();
     let target = if opts.match_path { lower_path } else { name };
 
-    for token in tokens {
-        let ok = match token {
-            Token::Include { pattern, whole_word } => {
-                if *whole_word {
-                    whole_word_match(target, pattern, opts.match_case)
-                } else {
-                    wildcard_match(pattern, target, opts.match_case)
-                }
+    match token {
+        Token::Include { pattern, whole_word } => {
+            if *whole_word {
+                whole_word_match(target, pattern, opts.match_case)
+            } else {
+                wildcard_match(pattern, target, opts.match_case)
             }
-            Token::Exclude { pattern, whole_word } => {
-                // Match against the whole path for `!<dir>` and against the
-                // name for plain `!term`.
-                let hit = if pattern.contains('\\') || pattern.contains('/') {
-                    if opts.match_case {
-                        entry.path.contains(pattern.as_str())
-                    } else {
-                        contains_ci(&entry.path, pattern)
-                    }
-                } else if *whole_word {
-                    whole_word_match(target, pattern, opts.match_case)
-                } else {
-                    wildcard_match(pattern, target, opts.match_case)
-                };
-                !hit
-            }
-            Token::Regex { pattern, negate } => {
-                let hit = compiled
-                    .get(pattern)
-                    .map(|(re, _)| re.is_match(target))
-                    .unwrap_or(false);
-                if *negate {
-                    !hit
-                } else {
-                    hit
-                }
-            }
-            Token::Or(group) => group.iter().any(|t| file_matches(entry, std::slice::from_ref(t), compiled, opts)),
-            Token::Path(p) | Token::BarePath(p) => {
-                let p = p.trim_end_matches('\\');
-                let mut ok = starts_with_ci(lower_path, p);
-                if ok && lower_path.len() > p.len() {
-                    ok = lower_path.as_bytes()[p.len()] == b'\\' || lower_path.as_bytes()[p.len()] == b':';
-                }
-                ok
-            }
-            Token::Ext(exts) => {
-                let ext = entry.extension.as_deref().unwrap_or_default();
-                exts.iter().any(|e| e == &ext)
-            }
-            Token::Size(f) => size_match(f, entry.size),
-            Token::Date { kind, op, value } => {
-                let ts = match kind {
-                    DateKind::Modified => entry.modified,
-                    DateKind::Created => entry.created,
-                    DateKind::Accessed => entry.accessed,
-                };
-                let unix = windows_ts_to_unix(ts);
-                date_match(op, *value, unix)
-            }
-            Token::TypeFilter(tf) => match tf {
-                TypeFilter::Files => !entry.is_dir,
-                TypeFilter::Folders => entry.is_dir,
-            },
-        };
-        if !ok {
-            return false;
         }
+        Token::Exclude { pattern, whole_word } => {
+            // Match against the whole path for `!<dir>` and against the
+            // name for plain `!term`.
+            let hit = if pattern.contains('\\') || pattern.contains('/') {
+                if opts.match_case {
+                    entry.path.contains(pattern.as_str())
+                } else {
+                    contains_ci(&entry.path, pattern)
+                }
+            } else if *whole_word {
+                whole_word_match(target, pattern, opts.match_case)
+            } else {
+                wildcard_match(pattern, target, opts.match_case)
+            };
+            !hit
+        }
+        Token::Regex { pattern, negate } => {
+            let hit = compiled
+                .get(pattern)
+                .map(|(re, _)| re.is_match(target))
+                .unwrap_or(false);
+            if *negate {
+                !hit
+            } else {
+                hit
+            }
+        }
+        Token::Or(group) => group.iter().all(|t| token_matches(entry, t, compiled, opts)),
+        Token::Path(p) | Token::BarePath(p) => {
+            let p = p.trim_end_matches('\\');
+            let mut ok = starts_with_ci(lower_path, p);
+            if ok && lower_path.len() > p.len() {
+                ok = lower_path.as_bytes()[p.len()] == b'\\' || lower_path.as_bytes()[p.len()] == b':';
+            }
+            ok
+        }
+        Token::Ext(exts) => {
+            let ext = entry.extension.as_deref().unwrap_or_default();
+            exts.iter().any(|e| e == &ext)
+        }
+        Token::Size(f) => size_match(f, entry.size),
+        Token::Date { kind, op, value } => {
+            let ts = match kind {
+                DateKind::Modified => entry.modified,
+                DateKind::Created => entry.created,
+                DateKind::Accessed => entry.accessed,
+            };
+            let unix = windows_ts_to_unix(ts);
+            date_match(op, *value, unix)
+        }
+        Token::TypeFilter(tf) => match tf {
+            TypeFilter::Files => !entry.is_dir,
+            TypeFilter::Folders => entry.is_dir,
+        },
     }
-    true
+}
+
+fn file_matches(
+    entry: &IndexedFile,
+    tokens: &[Token],
+    compiled: &HashMap<String, (regex::Regex, bool)>,
+    opts: &QueryOptions,
+) -> bool {
+    // Semantics: tokens inside one group (no `|`) are AND-ed; groups joined
+    // by `|` are OR-ed. `Token::Or` holds a single AND-group.
+    if tokens.is_empty() {
+        return true;
+    }
+    tokens.iter().any(|t| token_matches(entry, t, compiled, opts))
 }
 
 fn size_match(f: &SizeFilter, size: u64) -> bool {
@@ -549,6 +557,38 @@ fn date_match(op: &DateOp, value: i64, ts: i64) -> bool {
 }
 
 /// NTFS 100ns intervals since 1601 -> unix seconds.
+/// Exclude token matching, mirroring Everything's semantics:
+/// - a token containing a path separator matches as a full path prefix
+///   (e.g. `C:\Windows\WinSxS` excludes that subtree)
+/// - a bare token matches any path component of that name
+///   (e.g. `node_modules` or `target` excludes every folder of that name)
+/// `lp` and `p` must both be lowercase.
+fn path_excluded(lp: &[u8], p: &[u8]) -> bool {
+    if p.contains(&b'\\') {
+        starts_with_ci_bytes(lp, p) && (lp.len() == p.len() || lp[p.len()] == b'\\')
+    } else {
+        dir_name_match(lp, p)
+    }
+}
+
+fn dir_name_match(lp: &[u8], p: &[u8]) -> bool {
+    let mut i = 0;
+    while i + p.len() <= lp.len() {
+        if (i == 0 || lp[i - 1] == b'\\') && lp[i..i + p.len()] == *p {
+            let after = i + p.len();
+            if after == lp.len() || lp[after] == b'\\' {
+                return true;
+            }
+        }
+        i += 1;
+    }
+    false
+}
+
+fn starts_with_ci_bytes(a: &[u8], b: &[u8]) -> bool {
+    a.len() >= b.len() && a[..b.len()].eq_ignore_ascii_case(b)
+}
+
 fn windows_ts_to_unix(ts: i64) -> i64 {
     const EPOCH: i64 = 116_444_736_000_000_000;
     if ts < EPOCH {
@@ -594,10 +634,10 @@ pub fn search(entries: &HashMap<String, IndexedFile>, opts: &QueryOptions) -> Qu
             }
         }
         if !exclude_parts.is_empty() {
-            let lp = entry.lower_path.as_str();
+            let lp = entry.lower_path.as_bytes();
             let mut excluded = false;
             for p in &exclude_parts {
-                if starts_with_ci(lp, p) && (lp.len() == p.len() || lp.as_bytes()[p.len()] == b'\\') {
+                if path_excluded(lp, p.as_bytes()) {
                     excluded = true;
                     break;
                 }
@@ -695,4 +735,58 @@ fn cmp_ci(a: &[u8], b: &[u8]) -> std::cmp::Ordering {
         }
     }
     a.len().cmp(&b.len())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ft(unix: i64) -> i64 {
+        (unix + 116_444_736_00i64) * 10_000_000
+    }
+
+    fn entry(path: &str, is_dir: bool, modified: i64) -> IndexedFile {
+        let m = ft(modified);
+        let mut e = IndexedFile::new(path.to_string(), 0, m, m, m, is_dir, 0);
+        e.modified = m;
+        e
+    }
+
+    fn run(query: &str) -> Vec<String> {
+        // unix 1785542400 = 2026-08-01T00:00:00Z (today); 1700000000 = 2023-11.
+        let map: HashMap<String, IndexedFile> = HashMap::from([
+            (".gitignore".to_string(), entry(r"B:\p\.gitignore", false, 1_700_000_000)),
+            (".env".to_string(), entry(r"B:\p\.env", false, 1_700_000_000)),
+            ("AGENTS.md".to_string(), entry(r"B:\p\AGENTS.md", false, 1_785_542_400)),
+            ("demo.gif".to_string(), entry(r"B:\p\demo.gif", false, 1_785_542_400)),
+            ("readme.md".to_string(), entry(r"B:\p\readme.md", false, 1_785_542_400)),
+            ("docs".to_string(), entry(r"B:\p\docs", true, 1_785_542_400)),
+            ("target".to_string(), entry(r"B:\p\target\debug\x.o", false, 1_700_000_000)),
+        ]);
+        let opts = QueryOptions { query: query.to_string(), ..Default::default() };
+        let r = search(&map, &opts);
+        let mut paths: Vec<String> = r.entries.iter().map(|e| e.name.clone()).collect();
+        paths.sort();
+        paths
+    }
+
+    #[test]
+    fn and_semantics_within_group() {
+        // Two tokens in one group must AND, not OR (regression: the group was
+        // wrapped in Token::Or and evaluated with ANY, so `file: dm:today`
+        // returned the union of files OR today's files).
+        assert_eq!(run("AGENTS.md demo.gif"), Vec::<String>::new());
+        assert_eq!(run("AGENTS.md | demo.gif"), vec!["AGENTS.md", "demo.gif"]);
+    }
+
+    #[test]
+    fn type_filter_and_date_and() {
+        // `file: dm:2026-08-01` — files modified on 2026-08-01 (unix 1785542400).
+        let got = run("file: dm:2026-08-01");
+        assert_eq!(got, vec!["AGENTS.md", "demo.gif", "readme.md"]);
+        // dm:2026-08-01 alone must still include dirs.
+        assert!(run("dm:2026-08-01").contains(&"docs".to_string()));
+        // Bare term is a substring match, dirs match too.
+        assert_eq!(run("file: md"), vec!["AGENTS.md", "readme.md"]);
+    }
 }
