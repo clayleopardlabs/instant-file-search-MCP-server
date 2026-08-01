@@ -20,7 +20,13 @@ impl EverythingHandler {
         Parameters(params): Parameters<SearchParams>,
     ) -> Result<CallToolResult, ErrorData> {
         let result = tokio::task::spawn_blocking(move || {
-            native::search(&params).or_else(|_| everything::search(params))
+            match native::search(&params) {
+                Ok(r) => Ok(r),
+                Err(e) => {
+                    error!("native search failed, falling back to Everything: {e}");
+                    everything::search(params)
+                }
+            }
         })
         .await
         .map_err(|e| {
@@ -41,7 +47,13 @@ impl EverythingHandler {
         Parameters(params): Parameters<CountParams>,
     ) -> Result<CallToolResult, ErrorData> {
         let (count, note) = tokio::task::spawn_blocking(move || {
-            native::count(&params).or_else(|_| everything::count(params))
+            match native::count(&params) {
+                Ok(r) => Ok(r),
+                Err(e) => {
+                    error!("native count failed, falling back to Everything: {e}");
+                    everything::count(params)
+                }
+            }
         })
         .await
         .map_err(|e| {

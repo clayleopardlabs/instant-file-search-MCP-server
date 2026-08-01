@@ -49,6 +49,37 @@ fn last_error() -> windows::core::Error {
     windows::core::Error::from_thread()
 }
 
+/// A HANDLE is a raw pointer in the windows crate (not Send), but kernel
+/// handles are thread-agnostic: the value may be moved between threads freely.
+struct SendHandle(HANDLE);
+unsafe impl Send for SendHandle {}
+
+/// Serve one connected pipe client until it disconnects. Runs on a
+/// dedicated thread so concurrent clients never block each other.
+fn serve_connection(state: IndexerState, stop: Arc<AtomicBool>, pipe: SendHandle) {
+    let pipe = pipe.0;
+    loop {
+        if stop.load(Ordering::SeqCst) {
+            break;
+        }
+        let response = match read_request(pipe) {
+            Ok(req) => handle(&state, req),
+            Err(_) => break,
+        };
+        let mut body = serde_json::to_vec(&response).unwrap_or_default();
+        body.push(b'\n');
+        unsafe {
+            let mut written = 0u32;
+            let _ = WriteFile(pipe, Some(&body), Some(&mut written), None);
+            let _ = FlushFileBuffers(pipe);
+        }
+    }
+    unsafe {
+        let _ = DisconnectNamedPipe(pipe);
+        let _ = CloseHandle(pipe);
+    }
+}
+
 /// Connect a dummy client to the pipe to unblock a pending ConnectNamedPipe
 /// so the serve loop can observe the stop flag.
 pub fn poke_stop() {
@@ -124,26 +155,13 @@ impl PipeServer {
                 }
             }
 
-            loop {
-                if self.stop.load(Ordering::SeqCst) {
-                    break;
-                }
-                let response = match self.read_request(pipe) {
-                    Ok(req) => self.handle(req),
-                    Err(_) => break,
-                };
-                let mut body = serde_json::to_vec(&response).unwrap_or_default();
-                body.push(b'\n');
-                unsafe {
-                    let mut written = 0u32;
-                    let _ = WriteFile(pipe, Some(&body), Some(&mut written), None);
-                    let _ = FlushFileBuffers(pipe);
-                }
-            };
-            unsafe {
-                let _ = DisconnectNamedPipe(pipe);
-                let _ = CloseHandle(pipe);
-            }
+            // Serve each connection on its own thread so concurrent clients
+            // (the MCP plugin spawns a fresh server per tool call and may
+            // issue parallel calls) never wait on each other.
+            let state = self.state.clone();
+            let stop = self.stop.clone();
+            let pipe = SendHandle(pipe);
+            std::thread::spawn(move || serve_connection(state, stop, pipe));
         }
         Ok(())
     }
@@ -167,8 +185,9 @@ impl PipeServer {
         }
         Ok(pipe)
     }
+}
 
-    fn read_request(&self, pipe: HANDLE) -> Result<Request, &'static str> {
+fn read_request(pipe: HANDLE) -> Result<Request, &'static str> {
         let mut buf = Vec::with_capacity(4096);
         let mut chunk = [0u8; 4096];
         loop {
@@ -195,15 +214,15 @@ impl PipeServer {
         }
     }
 
-    fn handle(&self, req: Request) -> Response<'static> {
+    fn handle(state: &IndexerState, req: Request) -> Response<'static> {
         match req.method.as_str() {
             "ping" => Response { ok: true, data: Some(serde_json::json!({"pong": true})), error: None },
             "status" => {
                 Response {
                     ok: true,
                     data: Some(serde_json::json!({
-                        "indexed": self.state.index.len(),
-                        "volumes": self.state.volumes.iter().map(|v| v.clone()).collect::<Vec<_>>(),
+                        "indexed": state.index.len(),
+                        "volumes": state.volumes.iter().map(|v| v.clone()).collect::<Vec<_>>(),
                     })),
                     error: None,
                 }
@@ -213,7 +232,7 @@ impl PipeServer {
                     Ok(o) => o,
                     Err(_) => return Response { ok: false, data: None, error: Some("bad params") },
                 };
-                let result = self.state.index.with_entries(|entries| query::search(entries, &opts));
+                let result = state.index.with_entries(|entries| query::search(entries, &opts));
                 if req.method == "count" {
                     Response { ok: true, data: Some(serde_json::json!({"total": result.total})), error: None }
                 } else {
@@ -245,4 +264,3 @@ impl PipeServer {
             }
         }
     }
-}

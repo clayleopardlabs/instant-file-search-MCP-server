@@ -83,13 +83,17 @@ impl IndexedFile {
             .unwrap_or_default()
             .to_string();
         self.lower_path = self.path.to_ascii_lowercase();
-        self.extension = self.path.rsplit_once('.').and_then(|(head, ext)| {
-            if head.is_empty() || ext.is_empty() || ext.contains('\\') {
-                None
-            } else {
-                Some(ext.to_ascii_lowercase())
-            }
-        });
+        self.extension = if self.is_dir {
+            None
+        } else {
+            self.path.rsplit_once('.').and_then(|(head, ext)| {
+                if head.is_empty() || ext.is_empty() || ext.contains('\\') {
+                    None
+                } else {
+                    Some(ext.to_ascii_lowercase())
+                }
+            })
+        };
         self.excluded = is_default_excluded(&self.lower_path);
     }
 
