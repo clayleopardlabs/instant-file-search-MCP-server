@@ -27,7 +27,7 @@ jobs:
 
       - run: |
           export PATH="/c/Users/runneradmin/.cargo/bin:$PATH"
-          cargo build --release
+          cargo build --release --workspace
         shell: msys2 {0}
         env:
           CC_x86_64_pc_windows_gnu: gcc
