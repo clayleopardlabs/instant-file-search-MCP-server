@@ -22,13 +22,13 @@ cargo build --release --target x86_64-pc-windows-msvc
 
 ## Vendoring the portable engine
 
-The bundled engine lives at `vendor/everything/Everything-1.5.0.1418b.x64.zip` (SHA256-pinned, MIT-licensed — see `vendor/everything/LICENSE-instant-file-search-fallback-engine-1.5.0.1418b.txt`). To re-fetch or update it:
+The bundled engine lives at `vendor/everything/instant-file-search-fallback-engine-1.5.0.1418b.zip` (SHA256-pinned, MIT-licensed — see `vendor/everything/LICENSE-instant-file-search-fallback-engine-1.5.0.1418b.txt`). To re-fetch or update it:
 
 ```powershell
 .\scripts\fetch-everything.ps1
 ```
 
-The installer (`scripts\install.ps1`) extracts this zip into the stable install root's `everything\` folder alongside `Everything.ini`.
+The installer (`scripts\install.ps1`) extracts this zip into the stable install root's `everything\` folder alongside `instant-file-search-fallback-engine-1.5.0.1418b.ini`.
 
 ## Plugin (optional — OpenCode sub-agent support)
 

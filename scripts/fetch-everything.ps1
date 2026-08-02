@@ -18,7 +18,7 @@ if (-not $Destination) {
 
 $url = "https://www.voidtools.com/Everything-1.5.0.1418b.x64.zip"
 $expectedSha256 = "2240F7055D772983DA5AD3A433DBB9250C501CCB3E835451F76D29FE121C1571"
-$target = Join-Path $Destination "Everything-1.5.0.1418b.x64.zip"
+$target = Join-Path $Destination "instant-file-search-fallback-engine-1.5.0.1418b.zip"
 
 New-Item -ItemType Directory -Path $Destination -Force | Out-Null
 
@@ -34,3 +34,4 @@ if ($actual -ne $expectedSha256) {
 
 Write-Host "OK: $target ($actual)"
 Write-Host "Remember: LICENSE-instant-file-search-fallback-engine-1.5.0.1418b.txt must be distributed alongside Everything.exe."
+Write-Host "Saved as: instant-file-search-fallback-engine-1.5.0.1418b.zip"

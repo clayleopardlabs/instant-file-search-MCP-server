@@ -58,10 +58,10 @@ if (Test-Path -LiteralPath $bundledEngine) {
 } else {
     Warn "Bundled Everything engine missing ('$bundledEngine'). find_files will fall back to an installed Everything."
 }
-if (Test-Path -LiteralPath (Join-Path $bundleDir 'Everything.ini')) {
-    Pass 'Bundled Everything.ini config present.'
+if (Test-Path -LiteralPath (Join-Path $bundleDir 'instant-file-search-fallback-engine-1.5.0.1418b.ini')) {
+    Pass 'Bundled Fallback Engine ini config present.'
 } else {
-    Warn 'Bundled Everything.ini is missing; the engine will use default settings.'
+    Warn 'Bundled Fallback Engine ini is missing; the engine will use default settings.'
 }
 if (Test-Path -LiteralPath (Join-Path $InstallRoot 'LICENSE-instant-file-search-fallback-engine-1.5.0.1418b.txt')) {
     Pass 'Everything license notice present (required for redistribution).'

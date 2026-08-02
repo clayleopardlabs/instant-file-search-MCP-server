@@ -39,8 +39,8 @@ jobs:
           path: |
             target/release/instant-file-search-mcp-server.exe
             target/release/instant-file-search-indexer.exe
-            vendor/everything/Everything-1.5.0.1418b.x64.zip
-            vendor/everything/Everything.ini
+            vendor/everything/instant-file-search-fallback-engine-1.5.0.1418b.zip
+            vendor/everything/instant-file-search-fallback-engine-1.5.0.1418b.ini
             vendor/everything/LICENSE-instant-file-search-fallback-engine-1.5.0.1418b.txt
           if-no-files-found: error
 
@@ -61,8 +61,8 @@ jobs:
           mkdir -p release-files
           cp target/release/instant-file-search-mcp-server.exe release-files/
           cp target/release/instant-file-search-indexer.exe release-files/
-          cp vendor/everything/Everything-1.5.0.1418b.x64.zip release-files/
-          cp vendor/everything/Everything.ini release-files/
+          cp vendor/everything/instant-file-search-fallback-engine-1.5.0.1418b.zip release-files/
+          cp vendor/everything/instant-file-search-fallback-engine-1.5.0.1418b.ini release-files/
           cp vendor/everything/LICENSE-instant-file-search-fallback-engine-1.5.0.1418b.txt release-files/
 
       - name: Publish release

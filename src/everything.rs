@@ -222,7 +222,7 @@ fn launch_engine(path: &Path, bundled: bool) -> anyhow::Result<()> {
         let ini = path
             .parent()
             .unwrap_or_else(|| Path::new("."))
-            .join("Everything.ini");
+            .join("instant-file-search-fallback-engine-1.5.0.1418b.ini");
         // Run as the DEFAULT instance (no -instance flag): the Everything
         // service only serves the default instance, so the bundled GUI can
         // connect to a running service for indexing.

@@ -110,8 +110,8 @@ function Resolve-IndexerBinary {
 
 function Deploy-BundledEngine {
     $bundleDir = Join-Path $InstallRoot 'everything'
-    $zipName = 'Everything-1.5.0.1418b.x64.zip'
-    $iniName = 'Everything.ini'
+    $zipName = 'instant-file-search-fallback-engine-1.5.0.1418b.zip'
+    $iniName = 'instant-file-search-fallback-engine-1.5.0.1418b.ini'
     $licenseName = 'LICENSE-instant-file-search-fallback-engine-1.5.0.1418b.txt'
 
     $vendorSource = $VendorDir

@@ -23,11 +23,11 @@ instantaneous-windows-file-search-mcp-server/   # repo name (legacy); binary: in
 │   ├── package.json
 │   ├── tsconfig.json
 │   └── src/index.ts
-├── vendor/everything/      # Bundled portable Everything engine (zip + Everything.ini + LICENSE)
+├── vendor/everything/      # Bundled portable Fallback Engine (zip + ini + LICENSE)
 ├── scripts/
 │   ├── install.ps1         # Installer: build, bundle deploy, indexer service registration, client registration
 │   ├── doctor.ps1          # Diagnostics: binary, bundle, service, registrations
-│   └── fetch-everything.ps1# Re-fetch pinned portable Everything zip (SHA256-verified)
+│   └── fetch-everything.ps1# Re-fetch pinned portable Fallback Engine zip (SHA256-verified)
 ├── docs/                   # Detailed documentation
 │   ├── architecture.md
 │   ├── build.md
