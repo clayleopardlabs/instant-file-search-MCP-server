@@ -378,7 +378,7 @@ if (`$existing) {
   & sc.exe delete `$serviceName | Out-Null
   Start-Sleep -Seconds 1
 }
-& sc.exe create `$serviceName binPath= "`"`$serviceIndexer service`"" start= auto | Out-Null
+& sc.exe create `$serviceName binPath= "`$serviceIndexer service" start= auto | Out-Null
 if (`$LASTEXITCODE -ne 0) { throw "sc.exe create failed for service `$serviceName." }
 Start-Service -Name `$serviceName
 "@
