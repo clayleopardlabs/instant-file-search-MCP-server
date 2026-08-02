@@ -1,7 +1,7 @@
 # Instant File Search MCP Server — Repository Map
 
 ```
-instantaneous-windows-file-search-mcp-server/   # repo name (legacy); binary: instant-file-search-mcp-server
+instant-file-search-MCP-server/             # repo name; binary: instant-file-search-mcp-server
 ├── Cargo.toml              # Cargo workspace (MCP server + indexer crate)
 ├── Cargo.lock
 ├── src/

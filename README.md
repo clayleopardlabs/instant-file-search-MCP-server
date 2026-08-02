@@ -36,7 +36,7 @@ This tool is **Windows-only**: it reads the master file list that only Windows m
 2. Copy this one line, paste it into the PowerShell window, and press Enter:
 
    ```powershell
-   powershell -c "irm https://raw.githubusercontent.com/clayleopardlabs/instantaneous-windows-file-search-mcp-server/master/scripts/install.ps1 | iex"
+   powershell -c "irm https://raw.githubusercontent.com/clayleopardlabs/instant-file-search-MCP-server/master/scripts/install.ps1 | iex"
    ```
 
    The installer downloads the MCP server, the native indexer, and the `instant-file-search-fallback-engine` straight from the latest GitHub release — no Rust toolchain, no compiling.

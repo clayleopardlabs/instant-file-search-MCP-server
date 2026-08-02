@@ -5,7 +5,7 @@ edition = "2021"
 license = "MIT"
 authors = ["Clay Leopard Labs"]
 description = "MCP server providing instant PC file search via the Everything NTFS index engine (self-contained engine bundle)"
-repository = "https://github.com/clayleopardlabs/instant-file-search-mcp-server"
+repository = "https://github.com/clayleopardlabs/instant-file-search-MCP-server"
 
 [workspace]
 members = [".", "indexer"]

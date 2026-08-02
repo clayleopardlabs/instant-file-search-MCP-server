@@ -3,7 +3,7 @@ param(
     [ValidateSet('codex', 'opencode', 'claude', 'all')]
     [string[]]$Clients,
     [string]$InstallRoot = (Join-Path $env:LOCALAPPDATA 'ClayLeopardLabs\EverythingMCP'),
-    [string]$ReleaseBase = 'https://github.com/clayleopardlabs/instantaneous-windows-file-search-mcp-server/releases/latest/download',
+    [string]$ReleaseBase = 'https://github.com/clayleopardlabs/instant-file-search-MCP-server/releases/latest/download',
     [string]$ServerBinary,
     [string]$IndexerBinary,
     [string]$VendorDir,
