@@ -39,6 +39,8 @@ This tool is **Windows-only**: it reads the master file list that only Windows m
    powershell -c "irm https://raw.githubusercontent.com/clayleopardlabs/instantaneous-windows-file-search-mcp-server/master/scripts/install.ps1 | iex"
    ```
 
+   The installer downloads the MCP server, the native indexer, and the bundled backup engine straight from the latest GitHub release — no Rust toolchain, no compiling.
+
 3. If Windows asks for permission, click **Yes**. (This registers the background indexer — the only step that needs administrator rights.)
 4. Restart your AI app (VS Code, Cursor, Claude Desktop, or OpenCode).
 
@@ -52,7 +54,7 @@ If you downloaded or cloned this repository, run the installer from inside the f
 .\scripts\install.ps1
 ```
 
-It detects which AI apps you have (Codex, OpenCode, and Claude Desktop) and asks which ones to set up. Press **A** for all detected apps, or type a comma-separated list. It backs up your configuration files before touching them, and it's safe to run again any time.
+It detects which AI apps you have (Codex, OpenCode, and Claude Desktop) and asks which ones to set up. Press **A** for all detected apps, or type a comma-separated list. It backs up your configuration files before touching them, and it's safe to run again any time. When run from a checkout, it prefers freshly built binaries in `target/release` and downloads the rest from the release.
 
 To make sure everything is healthy later:
 

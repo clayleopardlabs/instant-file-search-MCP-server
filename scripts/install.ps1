@@ -1,10 +1,14 @@
 [CmdletBinding()]
 param(
-    [string]$BinaryPath,
-    [string]$InstallRoot = (Join-Path $env:LOCALAPPDATA 'ClayLeopardLabs\EverythingMCP'),
     [ValidateSet('codex', 'opencode', 'claude', 'all')]
     [string[]]$Clients,
-    [switch]$SkipBuild,
+    [string]$InstallRoot = (Join-Path $env:LOCALAPPDATA 'ClayLeopardLabs\EverythingMCP'),
+    [string]$ReleaseBase = 'https://github.com/clayleopardlabs/instantaneous-windows-file-search-mcp-server/releases/latest/download',
+    [string]$ServerBinary,
+    [string]$IndexerBinary,
+    [string]$VendorDir,
+    [string]$ExpectedSha256,
+    [switch]$SkipDownload,
     [switch]$SkipCodex,
     [switch]$SkipOpenCode,
     [switch]$SkipClaude,
@@ -14,8 +18,11 @@ param(
 $ErrorActionPreference = 'Stop'
 $serverName = 'instant-file-search'
 $binaryName = 'instant-file-search-mcp-server.exe'
-$repoRoot = Split-Path -Parent $PSScriptRoot
+$indexerName = 'instant-file-search-indexer.exe'
+$repoRoot = if ($PSScriptRoot) { Split-Path -Parent $PSScriptRoot } else { $null }
+$isCheckout = $repoRoot -and (Test-Path -LiteralPath (Join-Path $repoRoot 'Cargo.toml'))
 $stableBinary = Join-Path $InstallRoot $binaryName
+$stableIndexer = Join-Path $InstallRoot $indexerName
 $openCodeConfigDir = Join-Path $env:USERPROFILE '.config\opencode'
 $openCodeConfig = Join-Path $openCodeConfigDir 'opencode.json'
 $openCodePluginRoot = Join-Path $openCodeConfigDir 'plugins\instant-file-search-mcp-plugin'
@@ -53,6 +60,88 @@ function Select-InstallClients {
     $invalid = @($selected | Where-Object { $_ -notin @('codex', 'opencode', 'claude') })
     if ($invalid) { throw "Unknown client(s): $($invalid -join ', '). Use codex, opencode, claude, or all detected." }
     return @($selected | Select-Object -Unique)
+}
+
+function Get-ReleaseAsset([string]$Name, [string]$Dest) {
+    $url = "$ReleaseBase/$Name"
+    Write-Host "   Downloading $Name..." -ForegroundColor Gray
+    Invoke-WebRequest -Uri $url -OutFile $Dest -UseBasicParsing
+    if (-not (Test-Path -LiteralPath $Dest)) { throw "Download failed: $url" }
+    Write-Host "   Saved $Dest" -ForegroundColor Green
+}
+
+function Resolve-ServerBinary {
+    if ($ServerBinary) {
+        if (-not (Test-Path -LiteralPath $ServerBinary)) { throw "Server binary not found: $ServerBinary" }
+        return $ServerBinary
+    }
+    if ($isCheckout) {
+        $local = Join-Path $repoRoot "target\release\$binaryName"
+        if (Test-Path -LiteralPath $local) { return $local }
+    }
+    if ($SkipDownload) { throw "Server binary not found and -SkipDownload was set. Pass -ServerBinary or remove -SkipDownload." }
+    New-Item -ItemType Directory -Path $InstallRoot -Force | Out-Null
+    Get-ReleaseAsset $binaryName $stableBinary
+    if ($ExpectedSha256) {
+        $actual = (Get-FileHash -LiteralPath $stableBinary -Algorithm SHA256).Hash
+        if ($actual -ne $ExpectedSha256.ToUpperInvariant()) {
+            Remove-Item -LiteralPath $stableBinary -Force
+            throw "SHA-256 verification failed for '$binaryName'. Expected '$ExpectedSha256', got '$actual'."
+        }
+        Write-Host "   SHA-256 verified." -ForegroundColor Green
+    }
+    return $stableBinary
+}
+
+function Resolve-IndexerBinary {
+    if ($IndexerBinary) {
+        if (-not (Test-Path -LiteralPath $IndexerBinary)) { throw "Indexer binary not found: $IndexerBinary" }
+        return $IndexerBinary
+    }
+    if ($isCheckout) {
+        $local = Join-Path $repoRoot "target\release\$indexerName"
+        if (Test-Path -LiteralPath $local) { return $local }
+    }
+    if ($SkipDownload) { return $null }
+    New-Item -ItemType Directory -Path $InstallRoot -Force | Out-Null
+    Get-ReleaseAsset $indexerName $stableIndexer
+    return $stableIndexer
+}
+
+function Deploy-BundledEngine {
+    $bundleDir = Join-Path $InstallRoot 'everything'
+    $zipName = 'Everything-1.5.0.1418b.x64.zip'
+    $iniName = 'Everything.ini'
+    $licenseName = 'LICENSE-Everything.txt'
+
+    $vendorSource = $VendorDir
+    if (-not $vendorSource -and $isCheckout) {
+        $candidate = Join-Path $repoRoot 'vendor\everything'
+        if (Test-Path -LiteralPath $candidate) { $vendorSource = $candidate }
+    }
+
+    if ($vendorSource -and (Test-Path -LiteralPath (Join-Path $vendorSource $zipName))) {
+        New-Item -ItemType Directory -Path $bundleDir -Force | Out-Null
+        Expand-Archive -LiteralPath (Join-Path $vendorSource $zipName) -DestinationPath $bundleDir -Force
+        Copy-Item -LiteralPath (Join-Path $vendorSource $iniName) -Destination $bundleDir -Force
+        Copy-Item -LiteralPath (Join-Path $vendorSource $licenseName) -Destination $InstallRoot -Force
+        Write-Host "PASS: Bundled Everything deployed to '$bundleDir'." -ForegroundColor Green
+        return
+    }
+
+    if ($SkipDownload) {
+        Write-Host 'WARN: bundled engine not available (no local vendor, -SkipDownload set). The MCP will use an installed Everything if present.' -ForegroundColor Yellow
+        return
+    }
+
+    New-Item -ItemType Directory -Path $bundleDir -Force | Out-Null
+    $tmpZip = Join-Path $env:TEMP $zipName
+    Get-ReleaseAsset $zipName $tmpZip
+    Expand-Archive -LiteralPath $tmpZip -DestinationPath $bundleDir -Force
+    Remove-Item -LiteralPath $tmpZip -Force -ErrorAction SilentlyContinue
+    Get-ReleaseAsset $iniName (Join-Path $bundleDir $iniName)
+    Get-ReleaseAsset $licenseName (Join-Path $InstallRoot $licenseName)
+    Write-Host "PASS: Bundled Everything downloaded to '$bundleDir'." -ForegroundColor Green
 }
 
 function Backup-Config([string]$Path) {
@@ -111,7 +200,7 @@ function Install-OpenCode {
     Write-Step 'Configuring OpenCode'
     $pluginSource = Join-Path $repoRoot 'plugin'
     $pluginDist = Join-Path $pluginSource 'dist'
-    if (-not (Test-Path -LiteralPath $pluginDist)) { throw "OpenCode plugin build output was not found at '$pluginDist'." }
+    $hasPlugin = $isCheckout -and (Test-Path -LiteralPath $pluginDist)
 
     if ($DryRun) {
         Write-Action "Install plugin files into '$openCodePluginRoot'"
@@ -120,22 +209,27 @@ function Install-OpenCode {
         return
     }
 
-    New-Item -ItemType Directory -Path $openCodePluginRoot -Force | Out-Null
-    Copy-Item -LiteralPath $pluginDist -Destination $openCodePluginRoot -Recurse -Force
-    Copy-Item -LiteralPath (Join-Path $pluginSource 'package.json') -Destination $openCodePluginRoot -Force
-    $lockfile = Join-Path $pluginSource 'package-lock.json'
-    if (Test-Path -LiteralPath $lockfile) { Copy-Item -LiteralPath $lockfile -Destination $openCodePluginRoot -Force }
+    if ($hasPlugin) {
+        New-Item -ItemType Directory -Path $openCodePluginRoot -Force | Out-Null
+        Copy-Item -LiteralPath $pluginDist -Destination $openCodePluginRoot -Recurse -Force
+        Copy-Item -LiteralPath (Join-Path $pluginSource 'package.json') -Destination $openCodePluginRoot -Force
+        $lockfile = Join-Path $pluginSource 'package-lock.json'
+        if (Test-Path -LiteralPath $lockfile) { Copy-Item -LiteralPath $lockfile -Destination $openCodePluginRoot -Force }
 
-    $npm = Get-Command npm -ErrorAction SilentlyContinue
-    if ($npm) {
-        Push-Location $openCodePluginRoot
-        try {
-            & $npm.Source ci --omit=dev --ignore-scripts
-            if ($LASTEXITCODE -ne 0) { throw 'npm dependency installation for the OpenCode plugin failed.' }
-        } finally { Pop-Location }
-    } elseif (Test-Path -LiteralPath (Join-Path $pluginSource 'node_modules')) {
-        Copy-Item -LiteralPath (Join-Path $pluginSource 'node_modules') -Destination $openCodePluginRoot -Recurse -Force
-    } else { Write-Host 'WARN: npm and plugin/node_modules were not found; OpenCode plugin dependencies are missing.' -ForegroundColor Yellow }
+        $npm = Get-Command npm -ErrorAction SilentlyContinue
+        if ($npm) {
+            Push-Location $openCodePluginRoot
+            try {
+                & $npm.Source ci --omit=dev --ignore-scripts
+                if ($LASTEXITCODE -ne 0) { throw 'npm dependency installation for the OpenCode plugin failed.' }
+            } finally { Pop-Location }
+        } elseif (Test-Path -LiteralPath (Join-Path $pluginSource 'node_modules')) {
+            Copy-Item -LiteralPath (Join-Path $pluginSource 'node_modules') -Destination $openCodePluginRoot -Recurse -Force
+        } else { Write-Host 'WARN: npm and plugin/node_modules were not found; OpenCode plugin dependencies are missing.' -ForegroundColor Yellow }
+        Write-Host "PASS: OpenCode plugin installed globally at '$openCodePluginRoot'." -ForegroundColor Green
+    } else {
+        Write-Host 'NOTE: no plugin build found in this checkout; skipping the OpenCode sub-agent adapter. The MCP entry below still serves the main OpenCode session.' -ForegroundColor Yellow
+    }
 
     [Environment]::SetEnvironmentVariable('INSTANT_FS_MCP_BINARY', $stableBinary, 'User')
     $config = Read-JsonConfig $openCodeConfig
@@ -143,7 +237,7 @@ function Install-OpenCode {
     if (-not $mcp) { $mcp = [pscustomobject]@{}; Ensure-Property $config 'mcp' $mcp }
     Ensure-Property $mcp $serverName ([pscustomobject]@{ command = @($stableBinary); enabled = $true })
     Write-JsonConfig $openCodeConfig $config
-    Write-Host "PASS: OpenCode plugin installed globally at '$openCodePluginRoot'." -ForegroundColor Green
+    Write-Host "PASS: OpenCode MCP server '$serverName' added to '$openCodeConfig'." -ForegroundColor Green
 }
 
 function Install-Claude {
@@ -159,30 +253,29 @@ function Install-Claude {
 
 function Install-NativeService {
     Write-Step 'Installing the native indexer service'
-    $indexerName = 'instant-file-search-indexer.exe'
     $indexerDir = Join-Path $InstallRoot 'indexer'
-    $stableIndexer = Join-Path $indexerDir $indexerName
+    $serviceIndexer = Join-Path $indexerDir $indexerName
     $serviceName = 'instant-file-search-indexer'
 
-    if ($DryRun) {
-        Write-Action "Copy '$(Join-Path $repoRoot "target\release\$indexerName")' to '$stableIndexer'"
-        Write-Action "sc.exe create $serviceName binPath= `"$stableIndexer service`" start= auto"
+    $resolved = Resolve-IndexerBinary
+    if (-not $resolved) {
+        Write-Host 'WARN: no indexer binary available; the native engine will not be installed. Searches will use the bundled Everything engine.' -ForegroundColor Yellow
         return
     }
 
-    $buildIndexer = Join-Path $repoRoot "target\release\$indexerName"
-    if (-not (Test-Path -LiteralPath $buildIndexer)) {
-        Write-Host 'WARN: indexer release binary not found; the native engine will not be installed. Use the Everything fallback or rebuild.' -ForegroundColor Yellow
+    if ($DryRun) {
+        Write-Action "Copy '$resolved' to '$serviceIndexer'"
+        Write-Action "sc.exe create $serviceName binPath= `"$serviceIndexer service`" start= auto"
         return
     }
 
     New-Item -ItemType Directory -Path $indexerDir -Force | Out-Null
-    Copy-Item -LiteralPath $buildIndexer -Destination $stableIndexer -Force
+    Copy-Item -LiteralPath $resolved -Destination $serviceIndexer -Force
 
     $elevated = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
     if (-not $elevated) {
         Write-Host 'WARN: not running elevated — cannot register the indexer service. Re-run this installer from an elevated prompt (or register it manually):' -ForegroundColor Yellow
-        Write-Host "  sc.exe create $serviceName binPath= `"$stableIndexer service`" start= auto" -ForegroundColor DarkGray
+        Write-Host "  sc.exe create $serviceName binPath= `"$serviceIndexer service`" start= auto" -ForegroundColor DarkGray
         return
     }
 
@@ -192,13 +285,17 @@ function Install-NativeService {
         & sc.exe delete $serviceName | Out-Null
         Start-Sleep -Seconds 1
     }
-    & sc.exe create $serviceName binPath= "`"$stableIndexer service`"" start= auto | Out-Null
+    & sc.exe create $serviceName binPath= "`"$serviceIndexer service`"" start= auto | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "sc.exe create failed for service '$serviceName'." }
     Start-Service -Name $serviceName
     Write-Host "PASS: indexer service '$serviceName' installed and started (auto-start)." -ForegroundColor Green
 }
 
 Write-Host 'Instant File Search MCP installer' -ForegroundColor Green
+Write-Host "Install root: $InstallRoot" -ForegroundColor Gray
+if ($isCheckout) { Write-Host 'Source: local checkout' -ForegroundColor Gray }
+else { Write-Host "Source: GitHub release ($ReleaseBase)" -ForegroundColor Gray }
+
 $selected = @(Select-InstallClients)
 if ($SkipCodex) { $selected = @($selected | Where-Object { $_ -ne 'codex' }) }
 if ($SkipOpenCode) { $selected = @($selected | Where-Object { $_ -ne 'opencode' }) }
@@ -206,41 +303,17 @@ if ($SkipClaude) { $selected = @($selected | Where-Object { $_ -ne 'claude' }) }
 if (-not $selected) { Write-Host 'No clients selected. Nothing was installed.' -ForegroundColor Yellow; exit 0 }
 Write-Host "Selected: $($selected -join ', ')" -ForegroundColor Green
 
-if (-not $BinaryPath) { $BinaryPath = Join-Path $repoRoot "target\release\$binaryName" }
-if (-not (Test-Path -LiteralPath $BinaryPath)) {
-    $cargo = Get-Command cargo -ErrorAction SilentlyContinue
-    if ($SkipBuild) { throw "Binary not found at '$BinaryPath'. Remove -SkipBuild or pass -BinaryPath." }
-    if (-not $cargo) { throw 'Rust/Cargo is not installed and the release binary was not found.' }
-    Write-Step 'Building the release binary'
-    if ($DryRun) { Write-Action "cargo build --release --locked --manifest-path '$repoRoot\Cargo.toml'" }
-    else {
-        # rustup's self-contained dlltool wrapper is broken; use WinLibs mingw if present.
-        $winLibs = Get-ChildItem (Join-Path $env:LOCALAPPDATA 'Microsoft\WinGet\Packages') -Directory -Filter 'BrechtSanders.WinLibs*' -ErrorAction SilentlyContinue | Where-Object { Test-Path (Join-Path $_.FullName 'mingw64\bin\dlltool.exe') } | Select-Object -First 1
-        if ($winLibs) { $env:PATH = "$(Join-Path $winLibs.FullName 'mingw64\bin');$env:PATH" }
-        & $cargo.Source build --release --locked --manifest-path (Join-Path $repoRoot 'Cargo.toml'); if ($LASTEXITCODE -ne 0) { throw 'Cargo build failed.' }
-    }
+Write-Step 'Obtaining the MCP server binary'
+$serverSource = Resolve-ServerBinary
+if (-not $DryRun -and $serverSource -ne $stableBinary) {
+    New-Item -ItemType Directory -Path $InstallRoot -Force | Out-Null
+    Copy-Item -LiteralPath $serverSource -Destination $stableBinary -Force
+    Write-Host "PASS: MCP server installed at '$stableBinary'." -ForegroundColor Green
 }
-
-Write-Step 'Installing a stable copy of the MCP server'
-if ($DryRun) { Write-Action "Create '$InstallRoot' and copy '$BinaryPath' to '$stableBinary'" }
-else { New-Item -ItemType Directory -Path $InstallRoot -Force | Out-Null; Copy-Item -LiteralPath $BinaryPath -Destination $stableBinary -Force }
 
 Write-Step 'Deploying the bundled Everything engine'
-$bundleDir = Join-Path $InstallRoot 'everything'
-$vendorZip = Join-Path $repoRoot 'vendor\everything\Everything-1.5.0.1418b.x64.zip'
-if (Test-Path -LiteralPath $vendorZip) {
-    if ($DryRun) {
-        Write-Action "Extract '$vendorZip' to '$bundleDir' and copy Everything.ini/LICENSE"
-    } else {
-        New-Item -ItemType Directory -Path $bundleDir -Force | Out-Null
-        Expand-Archive -LiteralPath $vendorZip -DestinationPath $bundleDir -Force
-        Copy-Item -LiteralPath (Join-Path $repoRoot 'vendor\everything\Everything.ini') -Destination $bundleDir -Force
-        Copy-Item -LiteralPath (Join-Path $repoRoot 'vendor\everything\LICENSE-Everything.txt') -Destination $InstallRoot -Force
-        Write-Host "PASS: Bundled Everything deployed to '$bundleDir'." -ForegroundColor Green
-    }
-} else {
-    Write-Host 'WARN: vendor\everything zip was not found; the MCP will use an installed Everything if present (fallback to search_status diagnostics).' -ForegroundColor Yellow
-}
+if ($DryRun) { Write-Action "Deploy bundled engine into '$(Join-Path $InstallRoot 'everything')'" }
+else { Deploy-BundledEngine }
 
 foreach ($client in $selected) {
     switch ($client) {
@@ -257,7 +330,7 @@ if ($everything) { Write-Host 'PASS: Everything is running.' -ForegroundColor Gr
 elseif (Test-Path -LiteralPath (Join-Path $InstallRoot 'everything\Everything.exe')) {
     Write-Host 'PASS: Everything is not running, but the bundled engine will start automatically on first search.' -ForegroundColor Green
 } else {
-    Write-Host 'WARN: Everything is not running and no bundled engine was deployed. Install Everything or re-run the installer with the vendor zip present.' -ForegroundColor Yellow
+    Write-Host 'WARN: Everything is not running and no bundled engine was deployed.' -ForegroundColor Yellow
 }
 Write-Host "`nInstalled binary: $stableBinary" -ForegroundColor Green
 Write-Host 'Restart selected clients so they reload the MCP configuration.'

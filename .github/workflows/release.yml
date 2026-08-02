@@ -32,20 +32,17 @@ jobs:
         env:
           CC_x86_64_pc_windows_gnu: gcc
 
-      - name: Upload binary
+      - name: Upload release assets
         uses: actions/upload-artifact@v4
         with:
-          name: instant-file-search-mcp-server.exe
-          path: target/release/instant-file-search-mcp-server.exe
-
-      - name: Upload bundled engine files
-        uses: actions/upload-artifact@v4
-        with:
-          name: everything-engine-files
+          name: release-assets
           path: |
+            target/release/instant-file-search-mcp-server.exe
+            target/release/instant-file-search-indexer.exe
             vendor/everything/Everything-1.5.0.1418b.x64.zip
             vendor/everything/Everything.ini
             vendor/everything/LICENSE-Everything.txt
+          if-no-files-found: error
 
   release:
     needs: build
@@ -56,18 +53,20 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: instant-file-search-mcp-server.exe
+          name: release-assets
+          merge-multiple: true
 
-      - uses: actions/download-artifact@v4
-        with:
-          name: everything-engine-files
+      - name: Stage release files
+        run: |
+          mkdir -p release-files
+          cp target/release/instant-file-search-mcp-server.exe release-files/
+          cp target/release/instant-file-search-indexer.exe release-files/
+          cp vendor/everything/Everything-1.5.0.1418b.x64.zip release-files/
+          cp vendor/everything/Everything.ini release-files/
+          cp vendor/everything/LICENSE-Everything.txt release-files/
 
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
-          files: |
-            instant-file-search-mcp-server.exe
-            vendor/everything/Everything-1.5.0.1418b.x64.zip
-            vendor/everything/Everything.ini
-            vendor/everything/LICENSE-Everything.txt
+          files: release-files/*
           generate_release_notes: true
