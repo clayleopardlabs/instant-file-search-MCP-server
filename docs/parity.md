@@ -127,20 +127,45 @@ characterized residual gap, not a native bug.
   in-memory lists go stale in build-churn trees; native serves its own scan
   which matches disk truth.
 
-### How to exceed Everything for agents (not yet built)
+### Exceed capabilities (3 of 4 shipped)
 
-These are proposals, not shipped features. Each is a confirmed capability gap
-in Everything that the native engine could genuinely beat it on:
+The native engine beats Everything on agent-relevant capability gaps. Three of
+the four are shipped; the fourth is designed but needs external embedding infra.
 
-1. **Content search.** Everything's `content:` depends on the Windows Search
-   indexer and is slow/unreliable. A native on-demand or incremental text index
-   would be genuinely better for agents.
-2. **Change queries.** The USN journal already gives native real-time change
-   history; Everything has no "what changed since X" API.
-3. **Aggregations.** "Largest files in a tree", counts by extension, size sums.
-   Everything's API returns raw result lists only.
-4. **Semantic search.** Nothing in Everything; native could integrate with the
-   existing hindsight/embedding infrastructure.
+1. **Aggregations — SHIPPED.** `aggregate` pipe method + `aggregate_files` MCP
+   tool. Runs the same filter as search, then returns the matched totals (file
+   count, folder count, total size, largest files) and a per-extension
+   breakdown (count + size). Works entirely off the existing in-memory index,
+   using the recursive folder sizes for directory entries. Everything's API
+   returns raw result lists only — aggregating requires the caller to fetch
+   and sum everything.
+2. **Change queries — SHIPPED.** `recent_changes` pipe method + MCP tool. The
+   USN Change Journal watcher records every applied mutation (CREATE, WRITE,
+   RENAME, DELETE, HARD_LINK) into a bounded in-memory ring buffer (cap
+   100,000 events), keyed by event reason, local FILETIME timestamp, path, and
+   is_dir. Query with `since` (FILETIME) and `limit`. Everything has no
+   "what changed since X" API at all.
+3. **Content search — SHIPPED.** `content:"phrase"` query token (works through
+   `find_files`/`count_files`). A bounded `ContentStore` indexes file contents
+   for a text-extension allowlist (see `indexer/src/content.rs`: md, txt, rs,
+   py, js, ts, json, yml, toml, csv, log, etc.) with a per-file size cap
+   (256KB read) and a global 256MB budget. Built as a non-blocking background
+   pass after the scan and maintained incrementally via USN (re-read on
+   WRITE/CLOSE, removed on DELETE/RENAME). Content tokens are extracted by the
+   pipe layer and resolved against the store, then injected into the query as
+   a `content_paths` constraint, composing with all existing AND/OR semantics.
+   This genuinely exceeds Everything's `content:`, which depends on the
+   Windows Search indexer and is slow/unreliable when the content indexer is
+   not running. Note: native-only — if the indexer is down the MCP server
+   falls back to Everything's `content:` (which needs the Windows Search
+   indexer).
+4. **Semantic search — DESIGNED, NOT BUILT.** Nothing in Everything. The
+   native engine could integrate with the existing hindsight/embedding
+   infrastructure, but this requires an embedding model backend, vector
+   storage, and a query-time similarity search — a separate project that
+   should not be invented silently. Design sketch: embed the text of
+   content-indexed files at scan time (or lazily), store vectors keyed by
+   path, and expose a `similar:"phrase"` token returning nearest neighbours.
 
 The honest framing: the project makes Everything *unnecessary* for the agent
 use case and matches it on the search surface agents use, while Everything
