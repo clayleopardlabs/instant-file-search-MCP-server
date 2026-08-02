@@ -268,6 +268,25 @@ fn read_request(pipe: HANDLE) -> Result<Request, &'static str> {
                     .with_entries(|entries| query::aggregate(entries, &opts));
                 Response { ok: true, data: Some(serde_json::json!(result)), error: None }
             }
+            "recent_changes" => {
+                #[derive(serde::Deserialize)]
+                #[serde(default)]
+                struct RecentParams {
+                    since: i64,
+                    limit: usize,
+                }
+                impl Default for RecentParams {
+                    fn default() -> Self {
+                        Self { since: 0, limit: 100 }
+                    }
+                }
+                let p: RecentParams = match serde_json::from_value(req.params) {
+                    Ok(o) => o,
+                    Err(_) => return Response { ok: false, data: None, error: Some("bad params") },
+                };
+                let changes = state.index.recent_changes(p.since, p.limit);
+                Response { ok: true, data: Some(serde_json::json!({"changes": changes})), error: None }
+            }
             other => {
                 tracing::warn!("unknown method {other}");
                 Response { ok: false, data: None, error: Some("unknown method") }

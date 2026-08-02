@@ -61,3 +61,12 @@ pub struct AggregateParams {
     /// How many of the largest entries to return (default 20).
     pub top: Option<u32>,
 }
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[schemars(description = "Recent file-system change events captured from the NTFS USN Change Journal by the native indexer: created/modified/renamed/deleted files with the event reason, a local timestamp, and the path. This is an exceed capability with no Everything equivalent. Native-only; if the indexer is down this returns an explanatory error.")]
+pub struct RecentChangesParams {
+    /// Only return events with a timestamp (FILETIME, 100ns since 1601) strictly newer than this. 0 returns all retained events.
+    pub since: Option<i64>,
+    /// Maximum number of events to return. 0 (default) returns all retained events (ring buffer capped at 100,000).
+    pub limit: Option<usize>,
+}

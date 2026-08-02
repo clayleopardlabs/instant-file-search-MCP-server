@@ -7,7 +7,7 @@ use tracing::error;
 
 use crate::everything;
 use crate::native;
-use crate::tools::{AggregateParams, CountParams, SearchParams};
+use crate::tools::{AggregateParams, CountParams, RecentChangesParams, SearchParams};
 
 #[derive(Clone, Default)]
 pub struct EverythingHandler;
@@ -72,6 +72,24 @@ impl EverythingHandler {
         Parameters(params): Parameters<AggregateParams>,
     ) -> Result<CallToolResult, ErrorData> {
         let result = tokio::task::spawn_blocking(move || native::aggregate(&params))
+            .await
+            .map_err(|e| {
+                error!("spawn_blocking failed: {e}");
+                ErrorData::internal_error(format!("task join failed: {e}"), None)
+            })?
+            .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
+
+        let text = serde_json::to_string_pretty(&result)
+            .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
+    }
+
+    #[tool(description = "RECENT file-system changes from the NTFS USN Change Journal via the native indexer (exceed capability, native-only). Returns the most recent change events: created/modified/renamed/deleted files with reason, a local timestamp, and path. Pass since (FILETIME, 100ns since 1601) to only return events newer than that, and limit to cap how many events come back. The ring buffer retains the most recent 100,000 events since the indexer started. This capability has no Everything equivalent; if the native indexer is down it returns an explanatory error instead of falling back.")]
+    async fn recent_changes(
+        &self,
+        Parameters(params): Parameters<RecentChangesParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let result = tokio::task::spawn_blocking(move || native::recent_changes(&params))
             .await
             .map_err(|e| {
                 error!("spawn_blocking failed: {e}");

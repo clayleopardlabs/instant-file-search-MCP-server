@@ -9,7 +9,7 @@
 //! no Everything dependency). When it is not, everything.rs takes over.
 
 use crate::everything::{ns100_to_iso_string, SearchResult, SearchResults};
-use crate::tools::{AggregateParams, CountParams, SearchParams};
+use crate::tools::{AggregateParams, CountParams, RecentChangesParams, SearchParams};
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -297,4 +297,31 @@ fn options_from_aggregate(params: &AggregateParams) -> serde_json::Value {
 pub fn aggregate(params: &AggregateParams) -> Result<AggregateResult> {
     let data = exchange("aggregate", Some(options_from_aggregate(params)))?;
     Ok(serde_json::from_value(data).map_err(|e| anyhow!("native aggregate: bad response: {e}"))?)
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct ChangeEvent {
+    pub timestamp: i64,
+    pub reason: String,
+    pub path: String,
+    pub is_dir: bool,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct RecentChanges {
+    pub changes: Vec<ChangeEvent>,
+}
+
+fn options_from_recent(since: i64, limit: usize) -> serde_json::Value {
+    json!({ "since": since, "limit": limit })
+}
+
+/// Recent USN change events from the native indexer. Exceed capability with
+/// no Everything equivalent; if the indexer pipe is unavailable the caller
+/// surfaces an explanatory error rather than falling back.
+pub fn recent_changes(params: &RecentChangesParams) -> Result<RecentChanges> {
+    let since = params.since.unwrap_or(0);
+    let limit = params.limit.unwrap_or(0);
+    let data = exchange("recent_changes", Some(options_from_recent(since, limit)))?;
+    Ok(serde_json::from_value(data).map_err(|e| anyhow!("native recent_changes: bad response: {e}"))?)
 }

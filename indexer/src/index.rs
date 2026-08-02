@@ -1,9 +1,25 @@
 //! In-memory file index shared between the scanner, USN watcher, and query engine.
 
+use std::collections::VecDeque;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
+use serde::Serialize;
+
 use crate::mft::IndexedFile;
+
+/// One recorded change event (populated from the USN journal).
+#[derive(Clone, Serialize, Debug)]
+pub struct ChangeEvent {
+    /// Windows FILETIME (100ns since 1601) of the change.
+    pub timestamp: i64,
+    /// Human-readable reason (e.g. "CREATE", "DELETE", "RENAME", "CLOSE").
+    pub reason: String,
+    /// Full path affected.
+    pub path: String,
+    /// Whether the affected entry is a directory.
+    pub is_dir: bool,
+}
 
 /// Thread-safe index of every known file.
 #[derive(Default)]
@@ -17,7 +33,12 @@ struct Inner {
     entries: HashMap<String, IndexedFile>,
     /// MFT record number -> full path (USN parent resolution)
     refs: HashMap<u64, String>,
+    /// Bounded ring buffer of recent change events (USN watcher).
+    changes: VecDeque<ChangeEvent>,
 }
+
+/// Maximum number of change events retained in memory.
+const MAX_CHANGES: usize = 10_000;
 
 impl FileIndex {
     pub fn new() -> Self {
@@ -112,6 +133,33 @@ impl FileIndex {
                 adjust_ancestors(&mut inner, path, -(old.size as i64));
             }
         }
+    }
+
+    /// Record a change event into the bounded ring buffer.
+    pub fn record_change(&self, timestamp: i64, reason: &str, path: &str, is_dir: bool) {
+        let mut inner = self.inner.write().unwrap();
+        inner.changes.push_back(ChangeEvent {
+            timestamp,
+            reason: reason.to_string(),
+            path: path.to_string(),
+            is_dir,
+        });
+        while inner.changes.len() > MAX_CHANGES {
+            inner.changes.pop_front();
+        }
+    }
+
+    /// Return change events since a timestamp (exclusive), oldest-first.
+    /// `limit` caps the result (0 = no cap, bounded by the ring buffer size).
+    pub fn recent_changes(&self, since: i64, limit: usize) -> Vec<ChangeEvent> {
+        let inner = self.inner.read().unwrap();
+        inner
+            .changes
+            .iter()
+            .filter(|c| c.timestamp > since)
+            .take(if limit == 0 { usize::MAX } else { limit })
+            .cloned()
+            .collect()
     }
 
     /// Remove an entry and everything under it (directory delete). The whole
@@ -220,7 +268,10 @@ pub type SharedIndex = Arc<FileIndex>;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::mft::IndexedFile;
+use crate::mft::IndexedFile;
+
+/// Maximum number of recent change events retained in the ring buffer.
+const MAX_CHANGES: usize = 100_000;
 
     fn e(path: &str) -> IndexedFile {
         IndexedFile::new(path.to_string(), 0, 0, 0, 0, false, 0)
@@ -248,6 +299,26 @@ mod tests {
             e(r"C:\olddir"),
         ]);
         ix
+    }
+
+    #[test]
+    fn change_log_ring_buffers_and_orders() {
+        let ix = FileIndex::new();
+        ix.record_change(100, "CREATE", r"C:\a.txt", false);
+        ix.record_change(200, "RENAME", r"C:\b.txt", false);
+        ix.record_change(300, "DELETE", r"C:\a.txt", false);
+        let log = ix.recent_changes(0, 0);
+        assert_eq!(log.len(), 3);
+        assert_eq!(log[0].reason, "CREATE");
+        assert_eq!(log[2].reason, "DELETE");
+        // since filter: strictly newer than 100 -> last two
+        let filtered = ix.recent_changes(100, 0);
+        assert_eq!(filtered.len(), 2);
+        assert_eq!(filtered[0].timestamp, 200);
+        // limit caps
+        let capped = ix.recent_changes(0, 2);
+        assert_eq!(capped.len(), 2);
+        assert_eq!(capped[0].timestamp, 100);
     }
 
     #[test]

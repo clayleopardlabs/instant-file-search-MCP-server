@@ -226,6 +226,7 @@ fn apply_records(
                             index.remove(&path);
                         }
                         pending_renames.remove(&file_ref);
+                        index.record_change(rec.TimeStamp, "DELETE", &path, is_dir);
                         tracing::debug!("USN {}: DELETE {}", volume, path);
                     } else if reason & USN_REASON_RENAME_OLD != 0 {
                         // Remember the old path so the matching NEW_NAME
@@ -238,6 +239,7 @@ fn apply_records(
                         if !is_dir {
                             index.remove(&path);
                         }
+                        index.record_change(rec.TimeStamp, "RENAME", &path, is_dir);
                         tracing::debug!("USN {}: RENAME_OLD {} (ref {file_ref})", volume, path);
                     } else if reason & USN_REASON_RENAME_NEW != 0 {
                         if let Some(old_path) = pending_renames.remove(&file_ref) {
@@ -254,11 +256,13 @@ fn apply_records(
                         // The new path exists on disk; (re)index it. A trailing
                         // CLOSE record would do this anyway, but the rename
                         // record may be the last one we see for this file.
+                        index.record_change(rec.TimeStamp, "RENAME_NEW", &path, is_dir);
                         upsert_or_remove(index, &path, rec);
                     } else if reason & USN_REASON_CLOSE != 0
                         || reason & USN_REASON_CREATE != 0
                         || reason & USN_REASON_HARD_LINK_CHANGE != 0
                     {
+                        index.record_change(rec.TimeStamp, "WRITE", &path, is_dir);
                         upsert_or_remove(index, &path, rec);
                     }
                 }
