@@ -1,6 +1,8 @@
 mod everything;
 mod handler;
 mod native;
+#[cfg(test)]
+mod parity;
 mod tools;
 
 use rmcp::ServiceExt;

@@ -69,12 +69,15 @@ pub enum DateOp {
     After,
     On,
     Range { end: i64 },
+    Span { start: i64, end: i64 },
 }
 
 #[derive(Debug, Clone)]
 pub enum SizeFilter {
     Greater(u64),
+    GreaterOrEqual(u64),
     Less(u64),
+    LessOrEqual(u64),
     Equal(u64),
     Range { min: u64, max: u64 },
 }
@@ -95,14 +98,19 @@ pub const DEFAULT_EXCLUDES: &[&str] = &[
 ];
 
 /// Parse a size string like `10mb`, `1kb`, `>5gb`, `1kb..1mb`.
-fn parse_size(s: &str) -> Option<u64> {
+/// Everything's default size standard is JEDEC: kb=1024, mb=1024^2, gb=1024^3
+/// (the `metric:` modifier opts into decimal 1000-based units).
+/// Returns the byte value and the unit multiplier (>1 when a unit suffix was
+/// present). Everything treats a bare unit value as a range up to the next
+/// unit (`size:1kb` = 1024..2048), so the caller needs to know the multiplier.
+fn parse_size_parts(s: &str) -> Option<(u64, u64)> {
     let s = s.trim().to_ascii_lowercase();
     let (num, mult) = if let Some(n) = s.strip_suffix("kb") {
-        (n, 1000u64)
+        (n, 1024u64)
     } else if let Some(n) = s.strip_suffix("mb") {
-        (n, 1000 * 1000)
+        (n, 1024 * 1024)
     } else if let Some(n) = s.strip_suffix("gb") {
-        (n, 1000 * 1000 * 1000)
+        (n, 1024 * 1024 * 1024)
     } else if let Some(n) = s.strip_suffix("kib") {
         (n, 1024)
     } else if let Some(n) = s.strip_suffix("mib") {
@@ -115,7 +123,11 @@ fn parse_size(s: &str) -> Option<u64> {
         (s.as_str(), 1)
     };
     let val: f64 = num.trim().parse().ok()?;
-    Some((val * mult as f64) as u64)
+    Some(((val * mult as f64) as u64, mult))
+}
+
+fn parse_size(s: &str) -> Option<u64> {
+    parse_size_parts(s).map(|(v, _)| v)
 }
 
 /// Parse a date token: `today`, `yesterday`, `Ndays`, or an ISO date.
@@ -147,14 +159,45 @@ fn parse_date(s: &str) -> Option<i64> {
             days += days_in_month(year, m);
         }
         days += day - 1;
-        return Some(days * 86400);
+        return Some(days * 86400 + local_offset_secs());
     }
     None
 }
 
 fn chrono_now() -> i64 {
     use std::time::{SystemTime, UNIX_EPOCH};
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
+    let utc = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
+    utc + local_offset_secs()
+}
+
+/// Seconds east of UTC for the local timezone, resolved once per process.
+/// Everything evaluates relative dates (today/yesterday/last7days/...) in
+/// local time, so our boundaries must too. Cached because GetLocalTime is
+/// not cheap enough for per-query use.
+fn local_offset_secs() -> i64 {
+    use std::sync::OnceLock;
+    use windows::Win32::System::SystemInformation::{
+        GetLocalTime, GetSystemTimeAsFileTime,
+    };
+    static CACHE: OnceLock<i64> = OnceLock::new();
+    *CACHE.get_or_init(|| {
+        let lt = unsafe { GetLocalTime() };
+        let ft = unsafe { GetSystemTimeAsFileTime() };
+        let utc_unix = {
+            const EPOCH: i64 = 116_444_736_000_000_000;
+            let raw = (ft.dwHighDateTime as i64) << 32 | ft.dwLowDateTime as i64;
+            if raw < EPOCH {
+                0
+            } else {
+                (raw - EPOCH) / 10_000_000
+            }
+        };
+        let local_unix = unix_from_ymd(lt.wYear as i64, lt.wMonth as i64, lt.wDay as i64)
+            + (lt.wHour as i64) * 3600
+            + (lt.wMinute as i64) * 60
+            + (lt.wSecond as i64) as i64;
+        local_unix - utc_unix
+    })
 }
 
 fn start_of_day(unix: i64) -> i64 {
@@ -317,6 +360,14 @@ fn parse_size_filter(s: &str) -> Option<SizeFilter> {
             max: parse_size(range.1)?,
         });
     }
+    // Inclusive operators must be checked before their strict counterparts:
+    // stripping `>` from `>=1mb` leaves `=1mb`, which would parse as Equal.
+    if let Some(v) = s.strip_prefix(">=") {
+        return Some(SizeFilter::GreaterOrEqual(parse_size(v)?));
+    }
+    if let Some(v) = s.strip_prefix("<=") {
+        return Some(SizeFilter::LessOrEqual(parse_size(v)?));
+    }
     if let Some(v) = s.strip_prefix('>') {
         return Some(SizeFilter::Greater(parse_size(v)?));
     }
@@ -326,7 +377,16 @@ fn parse_size_filter(s: &str) -> Option<SizeFilter> {
     if let Some(v) = s.strip_prefix('=') {
         return Some(SizeFilter::Equal(parse_size(v)?));
     }
-    Some(SizeFilter::Equal(parse_size(s)?))
+    // Bare size with a unit suffix is a granularity range to the next unit
+    // (`size:1kb` = 1024..2048 per Everything). A bare unitless number is an
+    // exact match (`size:100` = exactly 100 bytes).
+    if let Some((v, mult)) = parse_size_parts(s) {
+        if mult > 1 {
+            return Some(SizeFilter::Range { min: v, max: v + mult - 1 });
+        }
+        return Some(SizeFilter::Equal(v));
+    }
+    None
 }
 
 fn parse_date_filter(s: &str) -> Option<(DateOp, i64)> {
@@ -343,7 +403,133 @@ fn parse_date_filter(s: &str) -> Option<(DateOp, i64)> {
             parse_date(r.0)?,
         ));
     }
+    if let Some((start, end)) = parse_relative_span(s) {
+        return Some((DateOp::Span { start, end }, start));
+    }
     Some((DateOp::On, parse_date(s)?))
+}
+
+/// Everything-style relative date span: `last7days` / `past7days` /
+/// `7days` / `thisweek` / `lastweek` / `thismonth` / `lastyear` etc.
+/// Returns `(start_unix, end_unix)` for a `DateOp::Span` window, or `None`
+/// if `s` is not a relative span.
+fn parse_relative_span(s: &str) -> Option<(i64, i64)> {
+    parse_relative_span_at(s, chrono_now())
+}
+
+/// Everything-style relative date span evaluated at local time `now`.
+///
+/// Semantics locked by live probes against Everything:
+/// - `lastNdays` / `pastNdays` / bare `Ndays` : rolling window ending now.
+/// - `prevNdays` / `previousNdays` : trailing window ending at today's start
+///   (`[today_start - N*day, today_start)`), NOT a rolling window.
+/// - `lastweek` / `pastweek` : rolling 7 days (Everything treats it as
+///   `last7days`); `prevweek` / `previousweek` : calendar previous week
+///   (Sunday-start).
+/// - `lastmonth` / `pastmonth` : rolling 31 days (probe: equals
+///   `last31days` EXACTLY); `prevmonth` / `previousmonth` : calendar month.
+/// - `lastyear` / `pastyear` : rolling 365 days; `prevyear` /
+///   `previousyear` : calendar previous year.
+fn parse_relative_span_at(s: &str, now: i64) -> Option<(i64, i64)> {
+    let s = s.trim().to_ascii_lowercase();
+    let today = start_of_day(now);
+    let span_for = |unit: &str, n: i64| -> i64 {
+        match unit {
+            "days" => n * 86400,
+            "weeks" => n * 7 * 86400,
+            "months" => n * 31 * 86400, // Everything: month = 31 days
+            "years" => n * 365 * 86400,
+            _ => n * 86400,
+        }
+    };
+    let rolling = |span: i64| Some((now - span, now + 86400));
+    let trailing = |span: i64| Some((today - span, today));
+
+    // lastNdays / pastNdays / prevNdays / previousNdays (numeric body).
+    for (prefix, roll) in [("last", true), ("past", true), ("prev", false), ("previous", false)] {
+        if let Some(body) = s.strip_prefix(prefix) {
+            for unit in ["days", "weeks", "months", "years"] {
+                if let Some(num) = body.strip_suffix(unit) {
+                    if let Ok(n) = num.trim().parse::<i64>() {
+                        if n > 0 {
+                            let span = span_for(unit, n);
+                            return if roll { rolling(span) } else { trailing(span) };
+                        }
+                    }
+                    return None;
+                }
+            }
+            // No numeric body: fall through to the named spans below
+            // (`lastweek`, `prevweek`, `lastmonth`, `lastyear`, ...).
+        }
+    }
+    // bare Ndays / Nweeks (Everything accepts `dm:7days` = last 7 days)
+    for unit in ["days", "weeks", "months", "years"] {
+        if let Some(num) = s.strip_suffix(unit) {
+            if let Ok(n) = num.trim().parse::<i64>() {
+                if n > 0 {
+                    return rolling(span_for(unit, n));
+                }
+            }
+            return None;
+        }
+    }
+    // thisweek / lastweek / prevweek / thismonth / lastmonth / ...
+    let week_start = today - (((today / 86400) + 4) % 7) * 86400;
+    let (y, m, _) = unix_to_ymd(now);
+    let month_start = unix_from_ymd(y, m, 1);
+    let prev_month_start = if m == 1 {
+        unix_from_ymd(y - 1, 12, 1)
+    } else {
+        unix_from_ymd(y, m - 1, 1)
+    };
+    let year_start = unix_from_ymd(y, 1, 1);
+    match s.as_str() {
+        "thisweek" => Some((week_start, now + 86400)),
+        "lastweek" | "pastweek" => rolling(7 * 86400),
+        "prevweek" | "previousweek" => Some((week_start - 7 * 86400, week_start)),
+        "thismonth" => Some((month_start, now + 86400)),
+        "lastmonth" | "pastmonth" => rolling(31 * 86400),
+        "prevmonth" | "previousmonth" => Some((prev_month_start, month_start)),
+        "thisyear" => Some((year_start, now + 86400)),
+        "lastyear" | "pastyear" => rolling(365 * 86400),
+        "prevyear" | "previousyear" => Some((unix_from_ymd(y - 1, 1, 1), year_start)),
+        _ => None,
+    }
+}
+
+fn unix_to_ymd(unix: i64) -> (i64, i64, i64) {
+    let mut days = unix.div_euclid(86400);
+    let mut year = 1970i64;
+    loop {
+        let yd = if is_leap(year) { 366 } else { 365 };
+        if days < yd {
+            break;
+        }
+        days -= yd;
+        year += 1;
+    }
+    let mut month = 1i64;
+    loop {
+        let md = days_in_month(year, month);
+        if days < md {
+            break;
+        }
+        days -= md;
+        month += 1;
+    }
+    (year, month, days + 1)
+}
+
+fn unix_from_ymd(year: i64, month: i64, day: i64) -> i64 {
+    let mut days = 0i64;
+    for y in 1970..year {
+        days += if is_leap(y) { 366 } else { 365 };
+    }
+    for m in 1..month {
+        days += days_in_month(year, m);
+    }
+    (days + day - 1) * 86400
 }
 
 fn eq_ci(a: u8, b: u8) -> bool {
@@ -516,7 +702,7 @@ fn token_matches(
                 DateKind::Created => entry.created,
                 DateKind::Accessed => entry.accessed,
             };
-            let unix = windows_ts_to_unix(ts);
+            let unix = windows_ts_to_unix(ts) + local_offset_secs();
             date_match(op, *value, unix)
         }
         Token::TypeFilter(tf) => match tf {
@@ -543,7 +729,9 @@ fn file_matches(
 fn size_match(f: &SizeFilter, size: u64) -> bool {
     match f {
         SizeFilter::Greater(v) => size > *v,
+        SizeFilter::GreaterOrEqual(v) => size >= *v,
         SizeFilter::Less(v) => size < *v,
+        SizeFilter::LessOrEqual(v) => size <= *v,
         SizeFilter::Equal(v) => size == *v,
         SizeFilter::Range { min, max } => size >= *min && size <= *max,
     }
@@ -555,6 +743,7 @@ fn date_match(op: &DateOp, value: i64, ts: i64) -> bool {
         DateOp::After => ts >= value + 86400,
         DateOp::On => ts >= value && ts < value + 86400,
         DateOp::Range { end } => ts >= value && ts < *end,
+        DateOp::Span { start, end } => ts >= *start && ts < *end,
     }
 }
 
@@ -867,5 +1056,192 @@ mod tests {
         assert_eq!(run("case:Case*"), vec!["CaseFile.txt"]);
         // Non-case: token remains case-insensitive.
         assert_eq!(run("casefile.txt"), vec!["CaseFile.txt"]);
+    }
+
+    #[test]
+    fn size_units_are_jedec() {
+        // Regression: Everything's default size standard is JEDEC (kb=1024,
+        // mb=1024^2, gb=1024^3); the native engine used decimal 1000-based
+        // units, so `size:1mb` missed files of exactly 1 MiB.
+        let opts = QueryOptions { query: "size:1mb".to_string(), ..Default::default() };
+        let map: HashMap<String, IndexedFile> = HashMap::from([
+            ("exact".to_string(), entry(r"B:\p\exact.bin", false, 1_700_000_000)),
+            ("decimal".to_string(), entry(r"B:\p\decimal.bin", false, 1_700_000_000)),
+        ]);
+        let mut exact = map["exact"].clone();
+        exact.size = 1024 * 1024;
+        let mut decimal = map["decimal"].clone();
+        decimal.size = 1_000_000;
+        let map = HashMap::from([
+            ("exact".to_string(), exact),
+            ("decimal".to_string(), decimal),
+        ]);
+        let r = search(&map, &opts);
+        assert_eq!(r.entries.len(), 1);
+        assert_eq!(r.entries[0].path, r"B:\p\exact.bin");
+        // Plain byte values are unaffected.
+        let opts = QueryOptions { query: "size:1000000".to_string(), ..Default::default() };
+        let r = search(&map, &opts);
+        assert_eq!(r.entries.len(), 1);
+        assert_eq!(r.entries[0].path, r"B:\p\decimal.bin");
+    }
+
+    #[test]
+    fn size_inclusive_operators() {
+        // Regression: `size:>=1mb` and `size:<=1mb` were parsed as `=1mb`
+        // (the `>`/`<` was stripped first), so `>=` fell back to Equal and
+        // `<=` to Less. Both inclusive forms must now work.
+        let mut one_mb = entry(r"B:\p\one.bin", false, 1_700_000_000);
+        one_mb.size = 1024 * 1024;
+        let mut two_mb = entry(r"B:\p\two.bin", false, 1_700_000_000);
+        two_mb.size = 2 * 1024 * 1024;
+        let map = HashMap::from([
+            ("one".to_string(), one_mb),
+            ("two".to_string(), two_mb),
+        ]);
+        let r = search(&map, &QueryOptions {
+            query: "size:>=1mb".to_string(),
+            ..Default::default()
+        });
+        assert_eq!(r.entries.len(), 2, ">=1mb must include both");
+        let r = search(&map, &QueryOptions {
+            query: "size:>1mb".to_string(),
+            ..Default::default()
+        });
+        assert_eq!(r.entries.len(), 1, ">1mb must exclude exactly-1mb");
+        let r = search(&map, &QueryOptions {
+            query: "size:<=1mb".to_string(),
+            ..Default::default()
+        });
+        assert_eq!(r.entries.len(), 1, "<=1mb must include only 1mb");
+    }
+
+    #[test]
+    fn size_bare_unit_is_granularity_range() {
+        // Regression: Everything treats a bare unit value as a range up to
+        // the next unit (`size:1kb` = 1024..2047), not an exact match. The
+        // unitless `size:100` remains an exact match.
+        let mut at = entry(r"B:\p\at.bin", false, 1_700_000_000);
+        at.size = 1024; // 1kb, the low edge
+        let mut over = entry(r"B:\p\over.bin", false, 1_700_000_000);
+        over.size = 2048; // 2kb, just past the 1kb range
+        let map = HashMap::from([
+            ("at".to_string(), at),
+            ("over".to_string(), over),
+        ]);
+        let r = search(&map, &QueryOptions {
+            query: "size:1kb".to_string(),
+            ..Default::default()
+        });
+        assert_eq!(r.entries.len(), 1, "size:1kb must be 1024..2047");
+        assert_eq!(r.entries[0].path, r"B:\p\at.bin");
+        let r = search(&map, &QueryOptions {
+            query: "size:1024".to_string(),
+            ..Default::default()
+        });
+        assert_eq!(r.entries.len(), 1, "size:1024 exact");
+        let r = search(&map, &QueryOptions {
+            query: "size:1024..2048".to_string(),
+            ..Default::default()
+        });
+        assert_eq!(r.entries.len(), 2, "explicit range 1024..2048");
+    }
+
+    #[test]
+    fn date_rolling_vs_calendar() {
+        // Regression: `dm:lastweek` is a ROLLING 7-day window (Everything
+        // treats it as `last7days`), NOT the calendar previous week; only
+        // `dm:prevweek` is the calendar week. Also `dm:lastmonth` is rolling
+        // 31 days, `dm:prevmonth` is the calendar month.
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64;
+        let entry_mod = |path: &str, ts: i64| {
+            let mut e = entry(path, false, ts);
+            e.modified = ft(ts);
+            e
+        };
+        let map: HashMap<String, IndexedFile> = HashMap::from([
+            // modified now (in the rolling week)
+            ("now".to_string(), entry_mod(r"B:\p\now.txt", now - 3600)),
+            // 10 days ago: in rolling lastweek, not in prevweek
+            ("10d".to_string(), entry_mod(r"B:\p\ten.txt", now - 10 * 86400)),
+            // 40 days ago: in rolling lastmonth, not in prevmonth
+            ("40d".to_string(), entry_mod(r"B:\p\forty.txt", now - 40 * 86400)),
+        ]);
+        let r = search(&map, &QueryOptions {
+            query: "dm:lastweek".to_string(),
+            ..Default::default()
+        });
+        assert_eq!(r.entries.len(), 1, "lastweek = rolling 7d");
+        assert_eq!(r.entries[0].path, r"B:\p\now.txt");
+        let r = search(&map, &QueryOptions {
+            query: "dm:pastweek".to_string(),
+            ..Default::default()
+        });
+        assert_eq!(r.entries.len(), 1, "pastweek = rolling 7d");
+        let r = search(&map, &QueryOptions {
+            query: "dm:lastmonth".to_string(),
+            ..Default::default()
+        });
+        assert_eq!(r.entries.len(), 2, "lastmonth = rolling 31d (now + 10d)");
+        let r = search(&map, &QueryOptions {
+            query: "dm:prevmonth".to_string(),
+            ..Default::default()
+        });
+        // 10 days ago falls in the calendar previous month (July, from Aug);
+        // 40 days ago and now do not.
+        assert_eq!(r.entries.len(), 1, "prevmonth = calendar previous month");
+        assert_eq!(r.entries[0].path, r"B:\p\ten.txt");
+    }
+
+    #[test]
+    fn date_prev_nd_is_trailing_not_rolling() {
+        // Regression: `dm:prev7days` is a trailing window ending at today's
+        // start (everything between today_start-7d and today_start), NOT a
+        // rolling window ending at now. `last7days`/`7days` stay rolling.
+        // Use a fixed `now` so the assertion is time-of-day independent.
+        let now = 1_785_600_000 + 5 * 3600; // 2026-08-04T05:00:00Z (local)
+        let today = start_of_day(now);
+        let cases = [
+            ("last7days", now - 2 * 3600, true, "rolling: earlier today"),
+            ("prev7days", now - 2 * 3600, false, "trailing: earlier today >= today_start"),
+            ("last7days", today - 2 * 86400, true, "rolling: 2d before today"),
+            ("prev7days", today - 2 * 86400, true, "trailing: 2d before today"),
+            ("last7days", now - 30 * 86400, false, "rolling: 30d ago"),
+            ("prev7days", now - 30 * 86400, false, "trailing: 30d ago"),
+        ];
+        for (token, ts, expect, why) in cases {
+            let (start, end) = parse_relative_span_at(token, now).unwrap();
+            let got = ts >= start && ts < end;
+            assert_eq!(got, expect, "{token} @ {ts}: {why} (window {start}..{end})");
+        }
+    }
+
+    #[test]
+    fn relative_date_spans() {
+        // Regression: `dm:last7days` / `dm:7days` are ranges (last 7 days),
+        // not a single day 7 days ago; `dm:thisweek` spans the current week.
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64;
+        let entry_mod = |path: &str, ts: i64| {
+            let mut e = entry(path, false, ts);
+            e.modified = ft(ts);
+            e
+        };
+        let map: HashMap<String, IndexedFile> = HashMap::from([
+            ("today".to_string(), entry_mod(r"B:\p\today.txt", now)),
+            ("2days".to_string(), entry_mod(r"B:\p\two.txt", now - 2 * 86400)),
+            ("10days".to_string(), entry_mod(r"B:\p\ten.txt", now - 10 * 86400)),
+        ]);
+        let opts = QueryOptions { query: "dm:last7days".to_string(), ..Default::default() };
+        let r = search(&map, &opts);
+        let paths: Vec<&str> = r.entries.iter().map(|e| e.path.as_str()).collect();
+        assert_eq!(paths, vec![r"B:\p\today.txt", r"B:\p\two.txt"]);
+        let opts = QueryOptions { query: "dm:7days".to_string(), ..Default::default() };
+        let r = search(&map, &opts);
+        assert_eq!(r.entries.len(), 2);
+        let opts = QueryOptions { query: "dm:yesterday".to_string(), ..Default::default() };
+        let r = search(&map, &opts);
+        assert_eq!(r.entries.len(), 0);
     }
 }

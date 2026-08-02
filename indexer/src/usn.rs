@@ -231,8 +231,13 @@ fn apply_records(
                         // Remember the old path so the matching NEW_NAME
                         // record can re-prefix the subtree. The old path no
                         // longer exists on disk; drop it from the index.
+                        // Directories keep their entry (with its recursive
+                        // size) so rename_prefix can move the whole subtree
+                        // including the dir entry itself.
                         pending_renames.insert(file_ref, path.clone());
-                        index.remove(&path);
+                        if !is_dir {
+                            index.remove(&path);
+                        }
                         tracing::debug!("USN {}: RENAME_OLD {} (ref {file_ref})", volume, path);
                     } else if reason & USN_REASON_RENAME_NEW != 0 {
                         if let Some(old_path) = pending_renames.remove(&file_ref) {

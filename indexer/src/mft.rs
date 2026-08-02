@@ -13,6 +13,7 @@
 //!    signature `FILE`, update-sequence-array fixup, attribute walk.
 //! 4. Collect `FILE_NAME` attributes (parent ref, name, times, size, flags).
 
+use std::cmp::Reverse;
 use std::collections::HashMap;
 use std::io::{BufReader, SeekFrom};
 
@@ -38,6 +39,12 @@ pub struct IndexedFile {
     pub is_dir: bool,
     /// NTFS file record number (used as the USN file reference).
     pub file_ref: u64,
+    /// Parent record number for THIS link (hard links: one per directory
+    /// entry; only used during scan-time path resolution).
+    pub parent_ref: u64,
+    /// File name for THIS link (hard links: one per directory entry; only
+    /// used during scan-time path resolution).
+    pub own_name: String,
     /// Precomputed lowercase name (query hot path).
     pub name: String,
     /// Precomputed lowercase path (query hot path).
@@ -66,6 +73,8 @@ impl IndexedFile {
             accessed,
             is_dir,
             file_ref,
+            parent_ref: 0,
+            own_name: String::new(),
             name: String::new(),
             lower_path: String::new(),
             extension: None,
@@ -242,11 +251,16 @@ pub fn scan_volume(volume: &str) -> Result<Vec<IndexedFile>> {
         let mut consumed = 0usize;
         while carry.len() - consumed >= record_size {
             let rec = &carry[consumed..consumed + record_size];
-            if let Some((entry, pname)) = parse_file_record(rec, record_number) {
-                if let Some((parent, n)) = pname {
-                    names.insert(record_number, (parent, n));
+            if let Some((entry, pairs)) = parse_file_record(rec, record_number) {
+                // NTFS hard links: one record, several FILE_NAME attributes
+                // (one per directory entry). Emit one index entry per link.
+                for (parent, n) in &pairs {
+                    names.insert(record_number, (*parent, n.clone()));
+                    let mut e = entry.clone();
+                    e.parent_ref = *parent;
+                    e.own_name = n.clone();
+                    entries.push(e);
                 }
-                entries.push(entry);
             }
             consumed += record_size;
             record_number += 1;
@@ -266,11 +280,68 @@ pub fn scan_volume(volume: &str) -> Result<Vec<IndexedFile>> {
     );
 
     resolve_paths(&mut entries, &names, volume);
+    patch_fragmented_sizes(&mut entries);
+    compute_folder_sizes(&mut entries);
     Ok(entries)
 }
 
-/// Parse one FILE record; returns the entry and its (parent_ref, name).
-fn parse_file_record(buf: &[u8], record_number: u64) -> Option<(IndexedFile, Option<(u64, String)>)> {
+/// Everything evaluates `size:` queries against directories using their
+/// recursive (tree-summed) size. Compute each directory's total as the sum
+/// of all descendant sizes and store it in the entry's `size` field. Files
+/// keep their own size. Must run after `patch_fragmented_sizes` so stat-
+/// patched sizes flow into their parents. Directories are walked deepest
+/// first so children land in the accumulator before their parent reads it.
+fn compute_folder_sizes(entries: &mut [IndexedFile]) {
+    let depth = |p: &str| p.matches('\\').count();
+    entries.sort_by_key(|e| Reverse(depth(&e.path)));
+    let mut acc: HashMap<String, u64> = HashMap::new();
+    for e in entries.iter_mut() {
+        let total = if e.is_dir {
+            acc.get(&e.path).copied().unwrap_or(0)
+        } else {
+            e.size
+        };
+        if e.is_dir {
+            e.size = total;
+        }
+        if let Some(parent) = parent_of(&e.path) {
+            *acc.entry(parent).or_insert(0) += total;
+        }
+    }
+}
+
+/// Parent directory of `path` (`C:\Windows\System32` -> `C:\Windows`;
+/// `C:` -> `None`).
+fn parent_of(path: &str) -> Option<String> {
+    let idx = path.rfind('\\')?;
+    Some(path[..idx].to_string())
+}
+
+/// Highly fragmented files overflow their base MFT record: NTFS moves the
+/// whole $DATA attribute to extension records behind an $ATTRIBUTE_LIST, so
+/// the base-record parse leaves size 0. Patch those entries from the live
+/// filesystem (stat), matching Everything, which reads sizes from the
+/// directory API. Only non-directory entries with size 0 are visited, and
+/// genuinely empty files get the same (correct) value back.
+fn patch_fragmented_sizes(entries: &mut [IndexedFile]) {
+    for e in entries.iter_mut() {
+        if e.is_dir || e.size != 0 || e.path.is_empty() {
+            continue;
+        }
+        if let Ok(m) = std::fs::metadata(&e.path) {
+            e.size = m.len();
+        }
+    }
+}
+
+/// Parse one FILE record; returns the entry and all its distinct
+/// (parent_ref, name) pairs. A single record can have several FILE_NAME
+/// attributes: NTFS hard links put one attribute per directory entry, so a
+/// hard-linked file yields one (parent, name) per link path.
+fn parse_file_record(
+    buf: &[u8],
+    record_number: u64,
+) -> Option<(IndexedFile, Vec<(u64, String)>)> {
     if buf.len() < 56 || &buf[0..4] != b"FILE" {
         return None;
     }
@@ -322,18 +393,19 @@ fn parse_file_record_inner(
     buf: &[u8],
     record_number: u64,
     is_dir: bool,
-) -> Option<(IndexedFile, Option<(u64, String)>)> {
+) -> Option<(IndexedFile, Vec<(u64, String)>)> {
     let first_attr = u16::from_le_bytes([buf[0x14], buf[0x15]]) as usize;
     let mut off = first_attr;
 
-    let mut parent_ref: Option<u64> = None;
-    let mut name: Option<String> = None;
+    // All FILE_NAME (parent, name, namespace) triples. Hard links produce one
+    // triple per directory entry; Win32 + DOS 8.3 aliases produce two triples
+    // with the same parent (the DOS alias must be dropped).
+    let mut names: Vec<(u64, String, i8)> = Vec::new();
     let mut created = 0i64;
     let mut modified = 0i64;
     let mut accessed = 0i64;
     let mut size = 0u64;
     let mut data_seen = false;
-    let mut name_ns = i8::MAX;
 
     while off + 8 <= buf.len() {
         let atype =
@@ -383,11 +455,7 @@ fn parse_file_record_inner(
                             .map(|c| u16::from_le_bytes([c[0], c[1]]))
                             .collect::<Vec<_>>(),
                     );
-                    if ns <= name_ns {
-                        name_ns = ns;
-                        parent_ref = Some(p);
-                        name = Some(n);
-                    }
+                    names.push((p, n, ns));
                 }
             }
         } else if atype == ATTR_DATA {
@@ -410,8 +478,29 @@ fn parse_file_record_inner(
         off += alen;
     }
 
-    let parent = parent_ref?;
-    let name = name?;
+    // Keep the lowest-namespace name per parent (Win32 beats DOS 8.3), then
+    // dedupe identical (parent, name) pairs.
+    let mut by_parent: Vec<(u64, String, i8)> = Vec::new();
+    for (p, n, ns) in names {
+        match by_parent.iter_mut().find(|(bp, _, _)| *bp == p) {
+            Some(slot) => {
+                if ns < slot.2 {
+                    slot.1 = n;
+                    slot.2 = ns;
+                } else if ns == slot.2 && slot.1 != n {
+                    by_parent.push((p, n, ns));
+                }
+            }
+            None => by_parent.push((p, n, ns)),
+        }
+    }
+    if by_parent.is_empty() {
+        return None;
+    }
+    let pairs: Vec<(u64, String)> = by_parent
+        .into_iter()
+        .map(|(p, n, _)| (p, n))
+        .collect();
     Some((
         IndexedFile::new(
             String::new(),
@@ -422,14 +511,15 @@ fn parse_file_record_inner(
             is_dir,
             record_number,
         ),
-        Some((parent, name)),
+        pairs,
     ))
 }
 
 /// Build the full path for every entry by walking parent references.
 ///
 /// `names` maps file_ref -> (parent_ref, name). The volume root (record 5)
-/// resolves to `C:\`.
+/// resolves to `C:\`. Each entry's own (parent_ref, own_name) fields carry its
+/// specific link path (hard links: one entry per directory entry).
 pub fn resolve_paths(
     entries: &mut [IndexedFile],
     names: &HashMap<u64, (u64, String)>,
@@ -441,7 +531,7 @@ pub fn resolve_paths(
 
     for e in entries.iter_mut() {
         let mut refs: Vec<u64> = Vec::new();
-        let mut cur = e.file_ref;
+        let mut cur = e.parent_ref;
         loop {
             if let Some(cached) = cache.get(&cur) {
                 let mut path = cached.clone();
@@ -451,7 +541,13 @@ pub fn resolve_paths(
                         path.push_str(n);
                     }
                 }
-                cache.insert(e.file_ref, path.clone());
+                if !e.own_name.is_empty() && e.file_ref != root_ref {
+                    path.push('\\');
+                    path.push_str(&e.own_name);
+                }
+                if e.is_dir {
+                    cache.insert(e.file_ref, path.clone());
+                }
                 e.set_path(path);
                 break;
             }
@@ -463,7 +559,13 @@ pub fn resolve_paths(
                         path.push_str(n);
                     }
                 }
-                cache.insert(e.file_ref, path.clone());
+                if !e.own_name.is_empty() && e.file_ref != root_ref {
+                    path.push('\\');
+                    path.push_str(&e.own_name);
+                }
+                if e.is_dir {
+                    cache.insert(e.file_ref, path.clone());
+                }
                 e.set_path(path);
                 break;
             }

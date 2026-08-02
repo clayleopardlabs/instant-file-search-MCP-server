@@ -547,7 +547,13 @@ fn build_search_query(
             .to_string_lossy()
             .trim_end_matches('\\')
             .to_string();
-        parts.push(normalised);
+        // A bare path with spaces splits into multiple terms; quote it so
+        // Everything treats it as one folder-scope term.
+        if normalised.contains(' ') {
+            parts.push(format!("\"{}\"", normalised));
+        } else {
+            parts.push(normalised);
+        }
     }
 
     if !include_all {
