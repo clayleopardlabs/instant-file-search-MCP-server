@@ -98,3 +98,50 @@ into two terms.
   are excluded exactly like scan-time ones. Verified live: native returns only
   name-substring matches under a user profile, Everything's larger count is
   its folder-leak.
+
+## Status vs Everything (determination)
+
+The native engine is at **behavioral parity with Everything on the query
+surface agents actually use** — name, path, size (including recursive folder
+sizes), regex, `case:`, excludes, and both relative and absolute date filters.
+The differential battery runs ~170 probes; every remaining DIFF is a
+characterized residual gap, not a native bug.
+
+### Where native is at parity
+
+- Bare-term substring matching (Everything semantics: "AGENTS" matches
+  "AGENTS.md"), not exact.
+- Wildcards, `regex:`, `case:` token, `!` excludes, `|` OR groups, `<>` groups.
+- Size: JEDEC units, `>=`/`<=`/strict/range forms, bare-unit granularity ranges,
+  recursive folder sizes.
+- Dates: `today`/`yesterday`, `lastNdays`/`pastNdays`, `prevNdays` (trailing),
+  `lastweek`/`prevweek`, `lastmonth` (rolling 31d), `lastyear`, and absolute
+  `dm:`/`dc:`/`da:` dates — all in local time.
+- `path`/`parent` scoping, `file:`/`folder:` type filters, `sort`.
+
+### Where native is strictly more correct
+
+- **Folder excludes.** Everything's `!<foo\>` excludes a folder's contents but
+  leaks the folder itself; native excludes the folder too. Native is right.
+- **Freshness of source.** Everything reads live from its MFT index but its
+  in-memory lists go stale in build-churn trees; native serves its own scan
+  which matches disk truth.
+
+### How to exceed Everything for agents (not yet built)
+
+These are proposals, not shipped features. Each is a confirmed capability gap
+in Everything that the native engine could genuinely beat it on:
+
+1. **Content search.** Everything's `content:` depends on the Windows Search
+   indexer and is slow/unreliable. A native on-demand or incremental text index
+   would be genuinely better for agents.
+2. **Change queries.** The USN journal already gives native real-time change
+   history; Everything has no "what changed since X" API.
+3. **Aggregations.** "Largest files in a tree", counts by extension, size sums.
+   Everything's API returns raw result lists only.
+4. **Semantic search.** Nothing in Everything; native could integrate with the
+   existing hindsight/embedding infrastructure.
+
+The honest framing: the project makes Everything *unnecessary* for the agent
+use case and matches it on the search surface agents use, while Everything
+remains the more capable general-purpose search engine underneath.
