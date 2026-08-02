@@ -50,10 +50,11 @@ pub fn journal_tails(volumes: &[String]) -> Vec<(String, u64, i64)> {
     tails
 }
 
-pub fn watch_all(volumes: &[String], index: &Arc<FileIndex>, tails: &[(String, u64, i64)]) -> Result<()> {
+pub fn watch_all(volumes: &[String], index: &Arc<FileIndex>, content: &Arc<crate::content::ContentStore>, tails: &[(String, u64, i64)]) -> Result<()> {
     let mut handles = Vec::new();
     for v in volumes {
         let idx = index.clone();
+        let cts = content.clone();
         let vol = v.clone();
         let start = tails
             .iter()
@@ -61,7 +62,7 @@ pub fn watch_all(volumes: &[String], index: &Arc<FileIndex>, tails: &[(String, u
             .map(|(_, id, usn)| (*id, *usn))
             .unwrap_or((0, 0));
         handles.push(std::thread::spawn(move || {
-            if let Err(e) = watch_one(&vol, &idx, start) {
+            if let Err(e) = watch_one(&vol, &idx, &cts, start) {
                 tracing::warn!("USN watcher for {} exited: {e:#}", vol);
             }
         }));
@@ -108,7 +109,7 @@ fn query_journal(handle: HANDLE) -> Result<USN_JOURNAL_DATA_V0> {
     Ok(out)
 }
 
-fn watch_one(volume: &str, index: &Arc<FileIndex>, start: (u64, i64)) -> Result<()> {
+fn watch_one(volume: &str, index: &Arc<FileIndex>, content: &Arc<crate::content::ContentStore>, start: (u64, i64)) -> Result<()> {
     let handle = open_volume(volume)?;
     let journal = query_journal(handle)?;
     let mut journal_id = start.0;
@@ -175,7 +176,7 @@ fn watch_one(volume: &str, index: &Arc<FileIndex>, start: (u64, i64)) -> Result<
         // (per MSDN "Walking a Buffer of Change Journal Records")
         if returned > 8 {
             next_usn = i64::from_le_bytes(buf[0..8].try_into().unwrap());
-            apply_records(volume, index, &buf[8..returned as usize], &mut pending_renames);
+            apply_records(volume, index, content, &buf[8..returned as usize], &mut pending_renames);
         }
         tracing::info!("USN {}: returned={} next={}", volume, returned, next_usn);
     }
@@ -184,6 +185,7 @@ fn watch_one(volume: &str, index: &Arc<FileIndex>, start: (u64, i64)) -> Result<
 fn apply_records(
     volume: &str,
     index: &Arc<FileIndex>,
+    content: &Arc<crate::content::ContentStore>,
     data: &[u8],
     pending_renames: &mut HashMap<u64, String>,
 ) {
@@ -227,6 +229,7 @@ fn apply_records(
                         }
                         pending_renames.remove(&file_ref);
                         index.record_change(rec.TimeStamp, "DELETE", &path, is_dir);
+                        content.remove(&path);
                         tracing::debug!("USN {}: DELETE {}", volume, path);
                     } else if reason & USN_REASON_RENAME_OLD != 0 {
                         // Remember the old path so the matching NEW_NAME
@@ -240,6 +243,7 @@ fn apply_records(
                             index.remove(&path);
                         }
                         index.record_change(rec.TimeStamp, "RENAME", &path, is_dir);
+                        content.remove(&path);
                         tracing::debug!("USN {}: RENAME_OLD {} (ref {file_ref})", volume, path);
                     } else if reason & USN_REASON_RENAME_NEW != 0 {
                         if let Some(old_path) = pending_renames.remove(&file_ref) {
@@ -257,13 +261,14 @@ fn apply_records(
                         // CLOSE record would do this anyway, but the rename
                         // record may be the last one we see for this file.
                         index.record_change(rec.TimeStamp, "RENAME_NEW", &path, is_dir);
-                        upsert_or_remove(index, &path, rec);
+                        content.remove(&path);
+                        upsert_or_remove(index, content, &path, rec);
                     } else if reason & USN_REASON_CLOSE != 0
                         || reason & USN_REASON_CREATE != 0
                         || reason & USN_REASON_HARD_LINK_CHANGE != 0
                     {
                         index.record_change(rec.TimeStamp, "WRITE", &path, is_dir);
-                        upsert_or_remove(index, &path, rec);
+                        upsert_or_remove(index, content, &path, rec);
                     }
                 }
             }
@@ -275,7 +280,7 @@ fn apply_records(
 /// USN records carry no file size; stat on CLOSE/CREATE so size filters stay
 /// correct for changed files. If the file is gone (deleted before its CLOSE
 /// record, renamed away, or a delete we missed), don't re-add it.
-fn upsert_or_remove(index: &Arc<FileIndex>, path: &str, rec: &USN_RECORD_V2) {
+fn upsert_or_remove(index: &Arc<FileIndex>, content: &Arc<crate::content::ContentStore>, path: &str, rec: &USN_RECORD_V2) {
     let mut entry = IndexedFile::new(
         path.to_string(),
         0,
@@ -303,9 +308,20 @@ fn upsert_or_remove(index: &Arc<FileIndex>, path: &str, rec: &USN_RECORD_V2) {
         entry.created = to_filetime(md.created().unwrap_or(std::time::UNIX_EPOCH));
         entry.modified = to_filetime(md.modified().unwrap_or(std::time::UNIX_EPOCH));
         entry.accessed = to_filetime(md.accessed().unwrap_or(std::time::UNIX_EPOCH));
+        if !entry.is_dir
+            && crate::content::ContentStore::should_index(path, entry.size)
+        {
+            if let Ok(data) = std::fs::read(path) {
+                let keep = data.len().min(crate::content::MAX_FILE_BYTES as usize);
+                content.insert(path, &data[..keep]);
+            }
+        } else {
+            content.remove(path);
+        }
         index.upsert(entry);
     } else {
         index.remove(path);
+        content.remove(path);
     }
 }
 

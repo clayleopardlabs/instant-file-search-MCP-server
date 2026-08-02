@@ -228,10 +228,11 @@ fn read_request(pipe: HANDLE) -> Result<Request, &'static str> {
                 }
             }
             "count" | "search" => {
-                let opts: QueryOptions = match serde_json::from_value(req.params) {
+                let mut opts: QueryOptions = match serde_json::from_value(req.params) {
                     Ok(o) => o,
                     Err(_) => return Response { ok: false, data: None, error: Some("bad params") },
                 };
+                apply_content_filter(state, &mut opts);
                 let result = state.index.with_entries(|entries| query::search(entries, &opts));
                 if req.method == "count" {
                     Response { ok: true, data: Some(serde_json::json!({"total": result.total})), error: None }
@@ -259,10 +260,20 @@ fn read_request(pipe: HANDLE) -> Result<Request, &'static str> {
                 }
             }
             "aggregate" => {
-                let opts: query::AggregateOptions = match serde_json::from_value(req.params) {
+                let mut opts: query::AggregateOptions = match serde_json::from_value(req.params) {
                     Ok(o) => o,
                     Err(_) => return Response { ok: false, data: None, error: Some("bad params") },
                 };
+                let mut qopts = QueryOptions {
+                    query: opts.query.clone(),
+                    path: opts.path.clone(),
+                    exclude_path: opts.exclude_path.clone(),
+                    include_all: opts.include_all,
+                    ..Default::default()
+                };
+                apply_content_filter(state, &mut qopts);
+                opts.query = qopts.query;
+                opts.content_paths = qopts.content_paths;
                 let result = state
                     .index
                     .with_entries(|entries| query::aggregate(entries, &opts));
@@ -293,3 +304,85 @@ fn read_request(pipe: HANDLE) -> Result<Request, &'static str> {
             }
         }
     }
+
+/// Extract `content:"..."` tokens from a query, resolve them against the
+/// content store, strip the tokens from the query, and set `opts.content_paths`
+/// to the lowercase paths whose content matches every needle.
+fn apply_content_filter(state: &IndexerState, opts: &mut QueryOptions) {
+    let (query, needles) = extract_content_terms(&opts.query);
+    opts.query = query;
+    if needles.is_empty() {
+        opts.content_paths = None;
+        return;
+    }
+    let paths = state.content.matching_paths(&needles);
+    opts.content_paths = if paths.is_empty() {
+        Some(Vec::new())
+    } else {
+        Some(paths)
+    };
+}
+
+/// Pull every `content:"..."` (or `content:word`) term out of a query string,
+/// returning the remaining query and the collected needles. Handles quotes
+/// (spaces inside quotes stay in the needle).
+fn extract_content_terms(query: &str) -> (String, Vec<String>) {
+    let mut needles = Vec::new();
+    let mut rest = String::with_capacity(query.len());
+    let bytes = query.as_bytes();
+    let mut i = 0usize;
+    while i < bytes.len() {
+        let start = i;
+        while i < bytes.len() && (bytes[i] as char).is_whitespace() {
+            i += 1;
+        }
+        if i >= bytes.len() {
+            break;
+        }
+        let token_start = i;
+        let mut consumed = false;
+        if bytes[i] == b'"' {
+            i += 1;
+            let inner = i;
+            while i < bytes.len() && bytes[i] != b'"' {
+                i += 1;
+            }
+            let content = &query[inner..i];
+            if i < bytes.len() {
+                i += 1; // closing quote
+            }
+            if let Some(value) = content.strip_prefix("content:") {
+                if !value.is_empty() {
+                    needles.push(value.to_string());
+                    consumed = true;
+                }
+            }
+            if !consumed {
+                rest.push_str(&query[start..inner - 1]);
+                rest.push_str(content);
+                if i <= bytes.len() {
+                    rest.push('"');
+                }
+            }
+        } else {
+            while i < bytes.len() && !(bytes[i] as char).is_whitespace() {
+                i += 1;
+            }
+            let token = &query[token_start..i];
+            if let Some(value) = token.strip_prefix("content:") {
+                if !value.is_empty() {
+                    needles.push(value.to_string());
+                    consumed = true;
+                }
+            }
+            if !consumed {
+                rest.push_str(&query[start..token_start]);
+                rest.push_str(token);
+            }
+        }
+        if !consumed && i < bytes.len() && (bytes[i] as char).is_whitespace() {
+            rest.push(' ');
+        }
+    }
+    (rest.trim().to_string(), needles)
+}

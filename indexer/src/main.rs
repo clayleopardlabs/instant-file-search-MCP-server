@@ -9,6 +9,7 @@
 //!   scan     — one-shot diagnostic scan, print stats, exit
 //!   help     — usage
 
+mod content;
 mod index;
 mod mft;
 mod pipe;
@@ -22,12 +23,14 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use windows_service::service_dispatcher;
 
+use content::ContentStore;
 use index::FileIndex;
 
 /// Shared state handed to the pipe server.
 #[derive(Clone)]
 pub struct IndexerState {
     pub index: Arc<FileIndex>,
+    pub content: Arc<ContentStore>,
     pub volumes: Vec<String>,
 }
 
@@ -147,13 +150,56 @@ fn serve_with_stop(stop: Arc<std::sync::atomic::AtomicBool>) -> Result<()> {
     let n = scan::build_index(&volumes, &index).context("initial scan")?;
     tracing::info!("initial index built: {n} entries");
 
-    let state = IndexerState { index: index.clone(), volumes: volumes.clone() };
+    let content = Arc::new(ContentStore::new());
+    let state = IndexerState { index: index.clone(), content: content.clone(), volumes: volumes.clone() };
+
+    // Background content-indexing pass. Snapshot eligible (path, size) pairs
+    // quickly under the lock, then read files OUTSIDE the lock so queries are
+    // never blocked during the content build.
+    {
+        let fill_index = index.clone();
+        let fill_content = content.clone();
+        std::thread::spawn(move || {
+            let started = std::time::Instant::now();
+            let mut candidates = Vec::new();
+            fill_index.with_entries(|entries| {
+                for (path, entry) in entries {
+                    if entry.is_dir {
+                        continue;
+                    }
+                    if ContentStore::should_index(path, entry.size) {
+                        candidates.push((path.clone(), entry.size));
+                    }
+                }
+            });
+            let mut count = 0usize;
+            for (path, _size) in candidates {
+                if fill_content.total_bytes() >= content::TOTAL_BUDGET {
+                    break;
+                }
+                match std::fs::read(&path) {
+                    Ok(data) => {
+                        let keep = data.len().min(content::MAX_FILE_BYTES as usize);
+                        fill_content.insert(&path, &data[..keep]);
+                        count += 1;
+                    }
+                    Err(_) => {}
+                }
+            }
+            tracing::info!(
+                "content index built: {count} files, {} bytes, {}ms",
+                fill_content.total_bytes(),
+                started.elapsed().as_millis()
+            );
+        });
+    }
 
     // USN watcher thread.
     let watch_index = index.clone();
+    let watch_content = content.clone();
     let watch_volumes = volumes.clone();
     std::thread::spawn(move || {
-        if let Err(e) = usn::watch_all(&watch_volumes, &watch_index, &tails) {
+        if let Err(e) = usn::watch_all(&watch_volumes, &watch_index, &watch_content, &tails) {
             tracing::error!("USN watcher exited: {e:#}");
         }
     });

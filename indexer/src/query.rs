@@ -24,6 +24,11 @@ pub struct QueryOptions {
     pub max_results: usize,
     pub offset: usize,
     pub sort: Option<String>,
+    /// Lowercase paths allowed by a `content:"..."` constraint. When set,
+    /// only entries whose lowercased path appears here pass the filter.
+    /// Populated by the pipe layer from the ContentStore.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content_paths: Option<Vec<String>>,
 }
 
 #[derive(Debug, Default)]
@@ -46,6 +51,9 @@ pub struct AggregateOptions {
     pub match_whole_word: bool,
     /// How many of the largest entries to return (default 20).
     pub top: usize,
+    /// Lowercase paths allowed by a `content:"..."` constraint.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content_paths: Option<Vec<String>>,
 }
 
 /// Result of an aggregation query.
@@ -901,6 +909,11 @@ fn filter_matches<'a>(
                 }
             }
             if excluded {
+                continue;
+            }
+        }
+        if let Some(content_paths) = &opts.content_paths {
+            if !content_paths.iter().any(|cp| cp.as_bytes() == entry.lower_path.as_bytes()) {
                 continue;
             }
         }
