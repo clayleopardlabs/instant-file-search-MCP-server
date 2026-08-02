@@ -63,7 +63,7 @@ if (Test-Path -LiteralPath (Join-Path $bundleDir 'Everything.ini')) {
 } else {
     Warn 'Bundled Everything.ini is missing; the engine will use default settings.'
 }
-if (Test-Path -LiteralPath (Join-Path $InstallRoot 'LICENSE-Everything.txt')) {
+if (Test-Path -LiteralPath (Join-Path $InstallRoot 'LICENSE-instant-file-search-fallback-engine-1.5.0.1418b.txt')) {
     Pass 'Everything license notice present (required for redistribution).'
 } else {
     Warn 'Everything license notice is missing.'

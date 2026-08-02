@@ -112,7 +112,7 @@ function Deploy-BundledEngine {
     $bundleDir = Join-Path $InstallRoot 'everything'
     $zipName = 'Everything-1.5.0.1418b.x64.zip'
     $iniName = 'Everything.ini'
-    $licenseName = 'LICENSE-Everything.txt'
+    $licenseName = 'LICENSE-instant-file-search-fallback-engine-1.5.0.1418b.txt'
 
     $vendorSource = $VendorDir
     if (-not $vendorSource -and $isCheckout) {

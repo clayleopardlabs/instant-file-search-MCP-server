@@ -41,7 +41,7 @@ jobs:
             target/release/instant-file-search-indexer.exe
             vendor/everything/Everything-1.5.0.1418b.x64.zip
             vendor/everything/Everything.ini
-            vendor/everything/LICENSE-Everything.txt
+            vendor/everything/LICENSE-instant-file-search-fallback-engine-1.5.0.1418b.txt
           if-no-files-found: error
 
   release:
@@ -63,7 +63,7 @@ jobs:
           cp target/release/instant-file-search-indexer.exe release-files/
           cp vendor/everything/Everything-1.5.0.1418b.x64.zip release-files/
           cp vendor/everything/Everything.ini release-files/
-          cp vendor/everything/LICENSE-Everything.txt release-files/
+          cp vendor/everything/LICENSE-instant-file-search-fallback-engine-1.5.0.1418b.txt release-files/
 
       - name: Publish release
         uses: softprops/action-gh-release@v2

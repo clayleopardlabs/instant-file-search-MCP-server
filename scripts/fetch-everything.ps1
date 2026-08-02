@@ -3,7 +3,7 @@ param(
 )
 
 # Fetches and verifies the Everything portable zip used by the self-contained
-# MCP bundle. Everything is MIT-licensed (see LICENSE-Everything.txt), so
+# MCP bundle. Everything is MIT-licensed (see LICENSE-instant-file-search-fallback-engine-1.5.0.1418b.txt), so
 # redistribution with the license notice is permitted.
 #
 # Usage:  powershell -ExecutionPolicy Bypass -File scripts/fetch-everything.ps1
@@ -33,4 +33,4 @@ if ($actual -ne $expectedSha256) {
 }
 
 Write-Host "OK: $target ($actual)"
-Write-Host "Remember: LICENSE-Everything.txt must be distributed alongside Everything.exe."
+Write-Host "Remember: LICENSE-instant-file-search-fallback-engine-1.5.0.1418b.txt must be distributed alongside Everything.exe."
