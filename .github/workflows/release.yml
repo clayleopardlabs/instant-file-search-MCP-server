@@ -59,11 +59,11 @@ jobs:
       - name: Stage release files
         run: |
           mkdir -p release-files
-          cp instant-file-search-mcp-server.exe release-files/
-          cp instant-file-search-indexer.exe release-files/
-          cp Everything-1.5.0.1418b.x64.zip release-files/
-          cp Everything.ini release-files/
-          cp LICENSE-Everything.txt release-files/
+          cp target/release/instant-file-search-mcp-server.exe release-files/
+          cp target/release/instant-file-search-indexer.exe release-files/
+          cp vendor/everything/Everything-1.5.0.1418b.x64.zip release-files/
+          cp vendor/everything/Everything.ini release-files/
+          cp vendor/everything/LICENSE-Everything.txt release-files/
 
       - name: Publish release
         uses: softprops/action-gh-release@v2
