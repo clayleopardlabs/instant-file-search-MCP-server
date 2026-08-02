@@ -9,7 +9,7 @@
 //! no Everything dependency). When it is not, everything.rs takes over.
 
 use crate::everything::{ns100_to_iso_string, SearchResult, SearchResults};
-use crate::tools::{CountParams, SearchParams};
+use crate::tools::{AggregateParams, CountParams, SearchParams};
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -245,4 +245,56 @@ fn split_path(full: &str) -> (String, Option<String>) {
         Some(i) => (full[i + 1..].to_string(), Some(full[..i].to_string())),
         None => (full.to_string(), None),
     }
+}
+
+/// Aggregation result mirrored from the indexer's `aggregate` response.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct AggregateResult {
+    /// Number of matched entries (files + folders).
+    pub total: u64,
+    /// Matched file count.
+    pub files: u64,
+    /// Matched folder count.
+    pub folders: u64,
+    /// Sum of sizes over all matched entries.
+    pub total_size: u64,
+    /// The `top` largest matched entries by size.
+    pub largest: Vec<AggregateLargest>,
+    /// Per-extension counts and size totals over matched files.
+    pub by_extension: Vec<AggregateExt>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct AggregateLargest {
+    pub path: String,
+    pub size: u64,
+    pub is_dir: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct AggregateExt {
+    pub extension: String,
+    pub count: u64,
+    pub size: u64,
+}
+
+fn options_from_aggregate(params: &AggregateParams) -> serde_json::Value {
+    json!({
+        "query": params.query,
+        "path": params.path,
+        "exclude_path": params.exclude_path,
+        "include_all": params.include_all.unwrap_or(false),
+        "regex": params.regex.unwrap_or(false),
+        "match_case": params.match_case.unwrap_or(false),
+        "match_whole_word": params.match_whole_word.unwrap_or(false),
+        "top": params.top.unwrap_or(20) as usize,
+    })
+}
+
+/// Native aggregation. This is an exceed capability with no Everything
+/// equivalent; if the indexer pipe is unavailable the caller surfaces an
+/// explanatory error rather than falling back.
+pub fn aggregate(params: &AggregateParams) -> Result<AggregateResult> {
+    let data = exchange("aggregate", Some(options_from_aggregate(params)))?;
+    Ok(serde_json::from_value(data).map_err(|e| anyhow!("native aggregate: bad response: {e}"))?)
 }

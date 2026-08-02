@@ -32,6 +32,54 @@ pub struct QueryResult {
     pub entries: Vec<IndexedFile>,
 }
 
+/// Aggregation options for the `aggregate` query method.
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AggregateOptions {
+    pub query: String,
+    pub path: Option<String>,
+    pub exclude_path: Option<String>,
+    pub include_all: bool,
+    pub match_path: bool,
+    pub regex: bool,
+    pub match_case: bool,
+    pub match_whole_word: bool,
+    /// How many of the largest entries to return (default 20).
+    pub top: usize,
+}
+
+/// Result of an aggregation query.
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct AggregateResult {
+    /// Number of matched entries (files + folders).
+    pub total: usize,
+    /// Matched file count.
+    pub files: usize,
+    /// Matched folder count.
+    pub folders: usize,
+    /// Sum of sizes over all matched entries (files' own size; folders'
+    /// recursive tree-summed size).
+    pub total_size: u64,
+    /// The `top` largest matched entries by size.
+    pub largest: Vec<AggregateLargest>,
+    /// Per-extension counts and size totals over matched files.
+    pub by_extension: Vec<AggregateExt>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AggregateLargest {
+    pub path: String,
+    pub size: u64,
+    pub is_dir: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AggregateExt {
+    pub extension: String,
+    pub count: usize,
+    pub size: u64,
+}
+
 #[derive(Debug, Clone)]
 pub enum Token {
     /// Positive term (name wildcard or bare text).
@@ -796,7 +844,13 @@ fn windows_ts_to_unix(ts: i64) -> i64 {
 }
 
 /// Run a search against a snapshot.
-pub fn search(entries: &HashMap<String, IndexedFile>, opts: &QueryOptions) -> QueryResult {
+/// Shared match filter for search and aggregate: applies the default-exclude
+/// gate, path scope, exclude_path, and the query tokens. Returns references to
+/// every matching entry in the index (allocating a Vec of pointers only).
+fn filter_matches<'a>(
+    entries: &'a HashMap<String, IndexedFile>,
+    opts: &QueryOptions,
+) -> Vec<&'a IndexedFile> {
     let tokens = tokenize(&opts.query);
     let scope = opts.path.as_deref().unwrap_or("").trim_end_matches('\\');
     let scope_lower = scope.to_ascii_lowercase();
@@ -827,8 +881,6 @@ pub fn search(entries: &HashMap<String, IndexedFile>, opts: &QueryOptions) -> Qu
         }
         if !scope_lower.is_empty() {
             let lp = entry.lower_path.as_str();
-            // Scope must be a directory boundary: `B:\Projects` matches
-            // `B:\Projects\...` but not `B:\ProjectsFoo\...`.
             if starts_with_ci(lp, &scope_lower) {
                 let ok = lp.len() == scope_lower.len()
                     || matches!(lp.as_bytes().get(scope_lower.len()), Some(b'\\') | Some(b':'));
@@ -857,7 +909,11 @@ pub fn search(entries: &HashMap<String, IndexedFile>, opts: &QueryOptions) -> Qu
         }
         matched.push(entry);
     }
+    matched
+}
 
+pub fn search(entries: &HashMap<String, IndexedFile>, opts: &QueryOptions) -> QueryResult {
+    let mut matched = filter_matches(entries, opts);
     // Sort: default by name (case-insensitive), then full path.
     // For large result sets only the first max_results (+offset) are ever
     // returned, so use partial selection instead of a full sort.
@@ -929,6 +985,81 @@ pub fn search(entries: &HashMap<String, IndexedFile>, opts: &QueryOptions) -> Qu
         .collect();
 
     QueryResult { total, entries: slice }
+}
+
+/// Aggregation query: runs the same filter as [`search`] but returns summary
+/// statistics (counts, size sums, per-extension breakdown, largest entries)
+/// instead of a paged result list.
+pub fn aggregate(
+    entries: &HashMap<String, IndexedFile>,
+    opts: &AggregateOptions,
+) -> AggregateResult {
+    let qopts = QueryOptions {
+        query: opts.query.clone(),
+        path: opts.path.clone(),
+        exclude_path: opts.exclude_path.clone(),
+        include_all: opts.include_all,
+        match_path: opts.match_path,
+        regex: opts.regex,
+        match_case: opts.match_case,
+        match_whole_word: opts.match_whole_word,
+        ..Default::default()
+    };
+    let matched = filter_matches(entries, &qopts);
+
+    let mut files = 0usize;
+    let mut folders = 0usize;
+    let mut total_size = 0u64;
+    let mut by_ext: HashMap<String, AggregateExt> = HashMap::new();
+    let mut largest: Vec<AggregateLargest> = Vec::new();
+
+    for e in &matched {
+        if e.is_dir {
+            folders += 1;
+        } else {
+            files += 1;
+        }
+        total_size = total_size.saturating_add(e.size);
+        if !e.is_dir {
+            let ext = e
+                .extension
+                .as_deref()
+                .unwrap_or("")
+                .to_ascii_lowercase();
+            let slot = by_ext.entry(ext.clone()).or_insert_with(|| AggregateExt {
+                extension: ext,
+                count: 0,
+                size: 0,
+            });
+            slot.count += 1;
+            slot.size = slot.size.saturating_add(e.size);
+        }
+        largest.push(AggregateLargest {
+            path: e.path.clone(),
+            size: e.size,
+            is_dir: e.is_dir,
+        });
+    }
+
+    largest.sort_by(|a, b| b.size.cmp(&a.size).then_with(|| a.path.cmp(&b.path)));
+    let top = if opts.top == 0 { 20 } else { opts.top };
+    largest.truncate(top);
+
+    let mut by_extension: Vec<AggregateExt> = by_ext.into_values().collect();
+    by_extension.sort_by(|a, b| {
+        b.count
+            .cmp(&a.count)
+            .then_with(|| a.extension.cmp(&b.extension))
+    });
+
+    AggregateResult {
+        total: matched.len(),
+        files,
+        folders,
+        total_size,
+        largest,
+        by_extension,
+    }
 }
 
 fn cmp_ci(a: &[u8], b: &[u8]) -> std::cmp::Ordering {
@@ -1271,5 +1402,53 @@ mod tests {
         let r = search(&map, &opts);
         let paths: Vec<&str> = r.entries.iter().map(|e| e.path.as_str()).collect();
         assert_eq!(paths, vec![r"B:\p\local-side.txt"]);
+    }
+
+    #[test]
+    fn aggregate_largest_ext_and_size() {
+        let aug1_noon = parse_date("2026-08-01").unwrap() + 12 * 3600 - local_offset_secs();
+        let mut e1 = entry(r"B:\p\big.zip", false, aug1_noon);
+        e1.size = 5_000;
+        let mut e2 = entry(r"B:\p\med.zip", false, aug1_noon);
+        e2.size = 3_000;
+        let mut e3 = entry(r"B:\p\small.txt", false, aug1_noon);
+        e3.size = 1_000;
+        let mut e4 = entry(r"B:\p\tiny.txt", false, aug1_noon);
+        e4.size = 500;
+        let d = entry(r"B:\p\folder", true, aug1_noon);
+        let map: HashMap<String, IndexedFile> = HashMap::from([
+            ("big".to_string(), e1),
+            ("med".to_string(), e2),
+            ("small".to_string(), e3),
+            ("tiny".to_string(), e4),
+            ("folder".to_string(), d),
+        ]);
+        let opts = AggregateOptions {
+            query: "file:".to_string(),
+            top: 3,
+            ..Default::default()
+        };
+        let a = aggregate(&map, &opts);
+        assert_eq!(a.total, 4);
+        assert_eq!(a.files, 4);
+        assert_eq!(a.folders, 0);
+        assert_eq!(a.total_size, 9_500);
+        let largest: Vec<(u64, &str)> =
+            a.largest.iter().map(|l| (l.size, l.path.as_str())).collect();
+        assert_eq!(
+            largest,
+            vec![
+                (5_000, r"B:\p\big.zip"),
+                (3_000, r"B:\p\med.zip"),
+                (1_000, r"B:\p\small.txt"),
+            ]
+        );
+        let mut by_ext: Vec<(&str, usize, u64)> = a
+            .by_extension
+            .iter()
+            .map(|e| (e.extension.as_str(), e.count, e.size))
+            .collect();
+        by_ext.sort_by_key(|(ext, _, _)| ext.to_string());
+        assert_eq!(by_ext, vec![("txt", 2, 1_500), ("zip", 2, 8_000)]);
     }
 }

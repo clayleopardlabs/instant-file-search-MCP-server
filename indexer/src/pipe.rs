@@ -258,6 +258,16 @@ fn read_request(pipe: HANDLE) -> Result<Request, &'static str> {
                     }
                 }
             }
+            "aggregate" => {
+                let opts: query::AggregateOptions = match serde_json::from_value(req.params) {
+                    Ok(o) => o,
+                    Err(_) => return Response { ok: false, data: None, error: Some("bad params") },
+                };
+                let result = state
+                    .index
+                    .with_entries(|entries| query::aggregate(entries, &opts));
+                Response { ok: true, data: Some(serde_json::json!(result)), error: None }
+            }
             other => {
                 tracing::warn!("unknown method {other}");
                 Response { ok: false, data: None, error: Some("unknown method") }

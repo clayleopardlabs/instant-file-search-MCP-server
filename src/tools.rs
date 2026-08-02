@@ -42,3 +42,22 @@ pub struct CountParams {
     /// Set to true to count ALL files including node_modules, .git, and WinSxS. Default: false (these dirs are excluded automatically).
     pub include_all: Option<bool>,
 }
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[schemars(description = "Aggregate stats over files matching a query using the native indexer: total/file/folder counts, total size, per-extension count+size breakdown, and the largest matching entries. This is an exceed capability the Everything API cannot express. Native-only; if the indexer is down this returns an explanatory error.")]
+pub struct AggregateParams {
+    pub query: String,
+    /// Narrow aggregation to files under this path (a directory scope). Example: "C:\\Users" or "B:\\Projects".
+    pub path: Option<String>,
+    pub regex: Option<bool>,
+    /// Enable case-sensitive matching (default: case-insensitive).
+    pub match_case: Option<bool>,
+    /// Match whole words only, not substrings.
+    pub match_whole_word: Option<bool>,
+    /// Directories to exclude. Supports Everything ! prefix syntax. Pass one or more paths separated by `;`.
+    pub exclude_path: Option<String>,
+    /// Set to true to include node_modules, .git, and WinSxS. Default: false.
+    pub include_all: Option<bool>,
+    /// How many of the largest entries to return (default 20).
+    pub top: Option<u32>,
+}

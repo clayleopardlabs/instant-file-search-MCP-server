@@ -7,7 +7,7 @@ use tracing::error;
 
 use crate::everything;
 use crate::native;
-use crate::tools::{CountParams, SearchParams};
+use crate::tools::{AggregateParams, CountParams, SearchParams};
 
 #[derive(Clone, Default)]
 pub struct EverythingHandler;
@@ -63,6 +63,24 @@ impl EverythingHandler {
         .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
 
         let text = serde_json::json!({ "total": count, "note": note }).to_string();
+        Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
+    }
+
+    #[tool(description = "AGGREGATE stats over files matching a query using the native indexer (exceed capability, native-only). Returns: total (matched entries), files, folders, total_size (sum over matches), largest (the top-N biggest entries by size), and by_extension (per-extension count + size breakdown). Pass query to filter (same syntax as find_files), path to scope to a directory, exclude_path/include_all to control exclusions, top to set how many largest entries to return. This capability has no Everything equivalent; if the native indexer is down it returns an explanatory error instead of falling back.")]
+    async fn aggregate_files(
+        &self,
+        Parameters(params): Parameters<AggregateParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let result = tokio::task::spawn_blocking(move || native::aggregate(&params))
+            .await
+            .map_err(|e| {
+                error!("spawn_blocking failed: {e}");
+                ErrorData::internal_error(format!("task join failed: {e}"), None)
+            })?
+            .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
+
+        let text = serde_json::to_string_pretty(&result)
+            .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
         Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
 
