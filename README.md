@@ -22,7 +22,7 @@ Typical agent use cases:
 No separate programs to install. This tool brings its own search engine, so it works out of the box:
 
 1. **A background indexer.** A small Windows service keeps a live, always-up-to-date list of everything on your drives. The first scan takes about 15 seconds on a typical PC (roughly 2.4 million files). After that it stays current on its own by watching for new, renamed, or deleted files.
-2. **A Fallback Engine (1.5.0.1418b).** Just in case. If the background indexer is ever stopped, your searches are answered automatically by the Fallback Engine instead. You never have to start or manage anything.
+2. **A Fallback Engine (`instant-file-search-fallback-engine-1.5.0.1418b`).** Just in case. If the background indexer is ever stopped, your searches are answered automatically by the Fallback Engine instead. You never have to start or manage anything.
 
 Searches are answered in milliseconds straight from memory. Nothing gets written to disk, and nothing leaves your machine.
 
@@ -39,7 +39,7 @@ This tool is **Windows-only**: it reads the master file list that only Windows m
    powershell -c "irm https://raw.githubusercontent.com/clayleopardlabs/instantaneous-windows-file-search-mcp-server/master/scripts/install.ps1 | iex"
    ```
 
-   The installer downloads the MCP server, the native indexer, and the Fallback Engine straight from the latest GitHub release — no Rust toolchain, no compiling.
+   The installer downloads the MCP server, the native indexer, and the `instant-file-search-fallback-engine` straight from the latest GitHub release — no Rust toolchain, no compiling.
 
 3. If Windows asks for permission, click **Yes**. (This registers the background indexer — the only step that needs administrator rights.)
 4. Restart your AI app (VS Code, Cursor, Claude Desktop, or OpenCode).
@@ -187,10 +187,10 @@ MCP Host (VS Code / Cursor / Claude Desktop / OpenCode)
                             └─ NTFS master file list + change journal
 ```
 
-If the indexer service is unreachable, the server answers from the Fallback Engine instead, with the same tools and results and no setup.
+If the indexer service is unreachable, the server answers from the `instant-file-search-fallback-engine` instead, with the same tools and results and no setup.
 
 ## License
 
 This project (the MCP server, the native indexer, and the plugin adapter) is licensed under the MIT License.
 
-The bundled **Fallback Engine** is **Everything**, a file search utility by David Carpenter (https://www.voidtools.com) that maintains its own index of the filesystem; it ships here as the fallback search engine when the indexer service is unreachable. Everything is copyright (C) 2018 David Carpenter, distributed under the MIT License, and its embedded **PCRE** component is copyright (c) 1997-2012 University of Cambridge, distributed under the MIT-style license reproduced in its terms. The full license texts ship with the installer at `%LOCALAPPDATA%\ClayLeopardLabs\EverythingMCP\LICENSE-Everything.txt` (source copy: `vendor/everything/LICENSE-Everything.txt`), alongside the engine itself, as those licenses require.
+The bundled **Fallback Engine** (`instant-file-search-fallback-engine-1.5.0.1418b`) is **Everything**, a file search utility by David Carpenter (https://www.voidtools.com) that maintains its own index of the filesystem; it ships here as the fallback search engine when the indexer service is unreachable. Everything is copyright (C) 2018 David Carpenter, distributed under the MIT License, and its embedded **PCRE** component is copyright (c) 1997-2012 University of Cambridge, distributed under the MIT-style license reproduced in its terms. The full license texts ship with the installer at `%LOCALAPPDATA%\ClayLeopardLabs\EverythingMCP\LICENSE-Everything.txt` (source copy: `vendor/everything/LICENSE-Everything.txt`), alongside the engine itself, as those licenses require.
