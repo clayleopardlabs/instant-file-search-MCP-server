@@ -64,12 +64,25 @@ into two terms.
 
 ## Known residual gaps (accepted)
 
-- Entries added via USN upsert after a scan may lack the default-excluded
-  flag, so `node_modules`-style queries can show a small over-count vs
-  Everything (which excludes them at index time).
 - Everything's `!<foo\>` exclude syntax excludes a folder's contents but the
   folder itself still leaks into results; native excludes the folder too.
-  This shows up as small under-counts on scoped queries over excluded trees.
+  This shows up as small deltas on queries whose terms hit excluded trees
+  (e.g. a `node_modules` query scoped to a user profile: native returns only
+  files whose *name* contains the term, Everything adds the leaked folders).
+  Native is the more correct engine here; the divergence is accepted.
 - Everything reads live from its MFT index; native serves its in-memory scan.
   Immediately after a scan finishes, a few files changed in the last minutes
   can differ. Deltas of a few hundred out of millions are expected.
+- Recency deltas on relative-date filters (`dm:today` etc.) right after
+  midnight: Everything's index timestamps and native's in-memory scan can
+  disagree on a small set of files touched in the last minutes.
+
+## Non-gaps checked and rejected
+
+- **USN-upserted entries and default excludes.** A concern that entries added
+  via USN upsert after a scan would lack the `excluded` flag is unfounded:
+  `IndexedFile::new` computes it in `refresh()` (mft.rs) from the entry path,
+  and `upsert` stores the entry whole, so live-created `node_modules` trees
+  are excluded exactly like scan-time ones. Verified live: native returns only
+  name-substring matches under a user profile, Everything's larger count is
+  its folder-leak.

@@ -159,7 +159,11 @@ fn parse_date(s: &str) -> Option<i64> {
             days += days_in_month(year, m);
         }
         days += day - 1;
-        return Some(days * 86400 + local_offset_secs());
+        // Local midnight of the date, in wall-clock-unix scale. The entry side
+        // (query.rs) compares ts as `windows_ts_to_unix + local_offset`, so the
+        // offset must NOT be added here or the two cancel and absolute dates
+        // shift to UTC midnights (Everything uses local midnights).
+        return Some(days * 86400);
     }
     None
 }
@@ -955,14 +959,18 @@ mod tests {
     }
 
     fn run(query: &str) -> Vec<String> {
-        // unix 1785542400 = 2026-08-01T00:00:00Z (today); 1700000000 = 2023-11.
+        // Local noon 2026-08-01, expressed as the UTC unix that maps to it.
+        // Offset-independent: local noon is safely inside the local day for
+        // any real timezone, unlike UTC midnight (which is local Jul 31 in
+        // western zones). 1700000000 = 2023-11.
+        let aug1_noon = parse_date("2026-08-01").unwrap() + 12 * 3600 - local_offset_secs();
         let map: HashMap<String, IndexedFile> = HashMap::from([
             (".gitignore".to_string(), entry(r"B:\p\.gitignore", false, 1_700_000_000)),
             (".env".to_string(), entry(r"B:\p\.env", false, 1_700_000_000)),
-            ("AGENTS.md".to_string(), entry(r"B:\p\AGENTS.md", false, 1_785_542_400)),
-            ("demo.gif".to_string(), entry(r"B:\p\demo.gif", false, 1_785_542_400)),
-            ("readme.md".to_string(), entry(r"B:\p\readme.md", false, 1_785_542_400)),
-            ("docs".to_string(), entry(r"B:\p\docs", true, 1_785_542_400)),
+            ("AGENTS.md".to_string(), entry(r"B:\p\AGENTS.md", false, aug1_noon)),
+            ("demo.gif".to_string(), entry(r"B:\p\demo.gif", false, aug1_noon)),
+            ("readme.md".to_string(), entry(r"B:\p\readme.md", false, aug1_noon)),
+            ("docs".to_string(), entry(r"B:\p\docs", true, aug1_noon)),
             ("target".to_string(), entry(r"B:\p\target\debug\x.o", false, 1_700_000_000)),
             ("roottarget".to_string(), entry(r"C:\target\root.o", false, 1_700_000_000)),
             ("rootrecycle".to_string(), entry(r"C:\$Recycle.Bin\gone.txt", false, 1_700_000_000)),
@@ -1243,5 +1251,25 @@ mod tests {
         let opts = QueryOptions { query: "dm:yesterday".to_string(), ..Default::default() };
         let r = search(&map, &opts);
         assert_eq!(r.entries.len(), 0);
+    }
+
+    #[test]
+    fn absolute_date_uses_local_midnight() {
+        // Regression: `dm:2026-08-01` must match local-midnight boundaries,
+        // not UTC. A file modified at 2026-08-01T00:30:00Z (local Jul 31
+        // 20:30 in western zones) belongs to dm:2026-07-31, and a file at
+        // local 00:30 on Aug 1 belongs to dm:2026-08-01.
+        let aug1 = parse_date("2026-08-01").unwrap(); // wall-clock-unix of local midnight Aug 1
+        // Stored `modified` is interpreted as UTC unix; wall-clock = modified + offset.
+        let utc_side = aug1 + 30 * 60; // UTC Aug 1 00:30 -> wall-clock Jul 31 20:30 (offset -4h)
+        let local_side = aug1 + 30 * 60 - local_offset_secs(); // wall-clock Aug 1 00:30
+        let map: HashMap<String, IndexedFile> = HashMap::from([
+            ("utc-side".to_string(), entry(r"B:\p\utc-side.txt", false, utc_side)),
+            ("local-side".to_string(), entry(r"B:\p\local-side.txt", false, local_side)),
+        ]);
+        let opts = QueryOptions { query: "dm:2026-08-01".to_string(), ..Default::default() };
+        let r = search(&map, &opts);
+        let paths: Vec<&str> = r.entries.iter().map(|e| e.path.as_str()).collect();
+        assert_eq!(paths, vec![r"B:\p\local-side.txt"]);
     }
 }

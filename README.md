@@ -331,6 +331,23 @@ OpenCode (main + sub-agents)
 
 If the indexer service is unreachable, the server answers from the bundled backup engine instead, with the same tools and results and no setup. All communication stays on the local machine: no HTTP, no network, no sockets.
 
+## How It Compares to the Bundled Engine
+
+The backup engine (Everything by voidtools) is the reference implementation this project is tested against. The native indexer is a drop-in replacement for the agent use case, not a clone of Everything's full feature set.
+
+**Where the native engine goes beyond Everything:**
+
+* **Self-contained.** Everything is a GUI application that must be launched (or run as a service) and keeps its index on disk. The native indexer runs as an auto-start Windows service with an in-memory index, so there is no GUI, no on-disk index, and no per-machine configuration.
+* **Agent-facing by design.** Everything has no API that an AI agent can call directly. The MCP tools (`find_files`, `count_files`, `search_status`) are the entire point of this project; Everything can only be driven through its GUI, CLI, or HTTP server.
+* **Portable-hygienic backup.** When the bundled Everything instance does run, it uses a named instance with a pre-seeded ini/db, so it never touches a user's real Everything installation.
+
+**Where Everything remains more capable:**
+
+* **Richer query language.** Everything supports `content:` (full-text), `dupe:` deduplication, attribute filters, extension lists, functions, and more. The native engine matches a subset: `dm:`/`dc:`/`da:` dates, `size:`, `case:`, `regex:`, `!` excludes, `|` OR, and path scoping.
+* **Reference parity.** Because Everything is the reference, every query the native engine does support is differentially tested against it, and the two are kept within ~0.1% (residual gaps are documented in `docs/parity.md`).
+
+The honest summary: this project makes Everything **unnecessary** for the agent use case and matches it on the search surface agents actually use, while Everything remains the more capable search engine underneath.
+
 ## Development
 
 ```sh
