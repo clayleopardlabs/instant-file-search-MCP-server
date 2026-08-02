@@ -24,11 +24,12 @@ jobs:
         with:
           targets: x86_64-pc-windows-gnu
 
-      - run: cargo build --release
+      - run: |
+          export PATH="$HOME/.cargo/bin:$PATH"
+          cargo build --release
         shell: msys2 {0}
         env:
           CC_x86_64_pc_windows_gnu: gcc
-          PATH: "$HOME/.cargo/bin:$PATH"
 
       - name: Upload binary
         uses: actions/upload-artifact@v4
