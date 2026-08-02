@@ -53,6 +53,18 @@ adds the local offset to span boundaries and to entry FILETIME timestamps.
   calendar previous month.
 - `lastyear` / `pastyear`: rolling 365 days. `prevyear` / `previousyear`:
   calendar previous year.
+- **Absolute dates (`dm:2026-07-01`) match by local midnight, not UTC.**
+  Everything buckets a file by the calendar day its modified time falls in
+  *locally*. The ISO branch of `parse_date` must NOT add `local_offset_secs()`:
+  the entry-side comparison already adds it, so adding it again makes the
+  offsets cancel and the window becomes UTC midnights, which shifts adjacent
+  days by the offset (a file modified `2026-07-02T00:00:04Z` is local
+  `2026-07-01 20:00` and belongs to `dm:2026-07-01`). Fixed by returning
+  `days * 86400` (wall-clock-unix of local midnight). This was a real bug
+  caught by the battery: `dm:2026-07-01` native=4,344 vs Everything=4,804 and
+  `dm:2026-07-02` native=3,908 vs 2,509 diverged in opposite directions; after
+  the fix both match (4,769/4,804 and 2,508/2,509, residual = folder-leak
+  noise).
 
 ### Path scoping
 
