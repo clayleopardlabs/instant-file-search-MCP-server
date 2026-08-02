@@ -39,9 +39,9 @@ This tool is **Windows-only**: it reads the master file list that only Windows m
    powershell -c "irm https://raw.githubusercontent.com/clayleopardlabs/instant-file-search-MCP-server/master/scripts/install.ps1 | iex"
    ```
 
-   The installer downloads the MCP server, the native indexer, and the `instant-file-search-fallback-engine` straight from the latest GitHub release — no Rust toolchain, no compiling.
+   The installer downloads the MCP server, the native indexer, and the `instant-file-search-fallback-engine` straight from the latest GitHub release — no Rust toolchain, no compiling. It also installs the OpenCode plugin automatically, so sub-agents can use the same search tools.
 
-3. If Windows asks for permission, click **Yes**. (This registers the background indexer — the only step that needs administrator rights.)
+3. When Windows asks for permission, click **Yes**. (This registers the background indexer as a service — the only step that needs administrator rights.) If you skip or miss the prompt, the tools still work using the Fallback Engine, just a little slower — you can register the fast native indexer later by running the installer elevated.
 4. Restart your AI app (VS Code, Cursor, Claude Desktop, or OpenCode).
 
 That's it. Your AI assistant now has five new tools — `find_files`, `count_files`, `search_status`, `recent_changes`, and `aggregate_files`.
@@ -59,8 +59,10 @@ It detects which AI apps you have (Codex, OpenCode, and Claude Desktop) and asks
 To make sure everything is healthy later:
 
 ```powershell
-.\scripts\doctor.ps1
+& "$env:LOCALAPPDATA\ClayLeopardLabs\EverythingMCP\doctor.ps1"
 ```
+
+(If you installed from a checkout, the equivalent is `./scripts/doctor.ps1` from inside the repo.)
 
 ### Set up a single app yourself
 
@@ -84,7 +86,7 @@ For a plain MCP host (VS Code, Cursor, Claude Desktop), add it to your MCP clien
 }
 ```
 
-For **OpenCode**, add it under the `mcp` key in `~/.config/opencode/opencode.json`. OpenCode sub-agents also need the plugin adapter — see [docs/development.md](docs/development.md) if you want that.
+For **OpenCode**, add it under the `mcp` key in `~/.config/opencode/opencode.json` (or `opencode.jsonc`). The installer adds the plugin adapter automatically, so OpenCode sub-agents can use the same search tools.
 
 After setting it up, restart your AI app. The tools appear in its tool list.
 

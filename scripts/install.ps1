@@ -9,6 +9,7 @@ param(
     [string]$VendorDir,
     [string]$ExpectedSha256,
     [switch]$SkipDownload,
+    [switch]$SkipElevation,
     [switch]$SkipCodex,
     [switch]$SkipOpenCode,
     [switch]$SkipClaude,
@@ -19,17 +20,22 @@ $ErrorActionPreference = 'Stop'
 $serverName = 'instant-file-search'
 $binaryName = 'instant-file-search-mcp-server.exe'
 $indexerName = 'instant-file-search-indexer.exe'
+$serviceName = 'instant-file-search-indexer'
+$doctorName = 'doctor.ps1'
 $repoRoot = if ($PSScriptRoot) { Split-Path -Parent $PSScriptRoot } else { $null }
 $isCheckout = $repoRoot -and (Test-Path -LiteralPath (Join-Path $repoRoot 'Cargo.toml'))
 $stableBinary = Join-Path $InstallRoot $binaryName
 $stableIndexer = Join-Path $InstallRoot $indexerName
 $openCodeConfigDir = Join-Path $env:USERPROFILE '.config\opencode'
-$openCodeConfig = Join-Path $openCodeConfigDir 'opencode.json'
 $openCodePluginRoot = Join-Path $openCodeConfigDir 'plugins\instant-file-search-mcp-plugin'
 $claudeConfig = Join-Path $env:APPDATA 'Claude\claude_desktop_config.json'
 
 function Write-Step([string]$Message) { Write-Host "`n==> $Message" -ForegroundColor Cyan }
 function Write-Action([string]$Message) { if ($DryRun) { Write-Host "DRY RUN: $Message" -ForegroundColor Yellow } }
+
+function Test-Elevated {
+    return ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+}
 
 function Test-ClaudeInstalled {
     return (Test-Path -LiteralPath $claudeConfig) -or
@@ -125,12 +131,12 @@ function Deploy-BundledEngine {
         Expand-Archive -LiteralPath (Join-Path $vendorSource $zipName) -DestinationPath $bundleDir -Force
         Copy-Item -LiteralPath (Join-Path $vendorSource $iniName) -Destination $bundleDir -Force
         Copy-Item -LiteralPath (Join-Path $vendorSource $licenseName) -Destination $InstallRoot -Force
-        Write-Host "PASS: Bundled Everything deployed to '$bundleDir'." -ForegroundColor Green
+        Write-Host "PASS: Bundled Fallback Engine deployed to '$bundleDir'." -ForegroundColor Green
         return
     }
 
     if ($SkipDownload) {
-        Write-Host 'WARN: bundled engine not available (no local vendor, -SkipDownload set). The MCP will use an installed Everything if present.' -ForegroundColor Yellow
+        Write-Host 'WARN: fallback engine not available (no local vendor, -SkipDownload set). The MCP will use an installed Everything if present.' -ForegroundColor Yellow
         return
     }
 
@@ -141,7 +147,7 @@ function Deploy-BundledEngine {
     Remove-Item -LiteralPath $tmpZip -Force -ErrorAction SilentlyContinue
     Get-ReleaseAsset $iniName (Join-Path $bundleDir $iniName)
     Get-ReleaseAsset $licenseName (Join-Path $InstallRoot $licenseName)
-    Write-Host "PASS: Bundled Everything downloaded to '$bundleDir'." -ForegroundColor Green
+    Write-Host "PASS: Fallback Engine downloaded to '$bundleDir'." -ForegroundColor Green
 }
 
 function Backup-Config([string]$Path) {
@@ -151,12 +157,54 @@ function Backup-Config([string]$Path) {
     Write-Host "Backup created: $backup" -ForegroundColor DarkGray
 }
 
+# JSONC-aware parse: strips // and /* */ comments and trailing commas
+# while staying string-aware (so URLs and `"rm -rf /*"` survive).
+function ConvertFrom-JsonC([string]$Text) {
+    $sb = New-Object System.Text.StringBuilder
+    $n = $Text.Length
+    $i = 0
+    $inString = $false
+    while ($i -lt $n) {
+        $c = $Text[$i]
+        $next = if ($i + 1 -lt $n) { $Text[$i + 1] } else { '' }
+        if ($inString) {
+            [void]$sb.Append($c)
+            if ($c -eq '\' -and $next) { $i++; if ($i -lt $n) { [void]$sb.Append($Text[$i]) } }
+            elseif ($c -eq '"') { $inString = $false }
+            $i++
+        } elseif ($c -eq '"') {
+            $inString = $true
+            [void]$sb.Append($c)
+            $i++
+        } elseif ($c -eq '/' -and $next -eq '/') {
+            while ($i -lt $n -and $Text[$i] -ne "`n") { $i++ }
+        } elseif ($c -eq '/' -and $next -eq '*') {
+            $i += 2
+            while ($i -lt $n -and -not ($Text[$i] -eq '*' -and $i + 1 -lt $n -and $Text[$i + 1] -eq '/')) { $i++ }
+            if ($i -lt $n) { $i += 2 }
+        } elseif ($c -eq ',') {
+            # skip the comma if the next non-whitespace char is } or ]
+            $j = $i + 1
+            while ($j -lt $n -and $Text[$j] -match '\s') { $j++ }
+            if ($j -lt $n -and ($Text[$j] -eq '}' -or $Text[$j] -eq ']')) { $i++ }
+            else { [void]$sb.Append($c); $i++ }
+        } else {
+            [void]$sb.Append($c)
+            $i++
+        }
+    }
+    return ($sb.ToString() | ConvertFrom-Json)
+}
+
 function Read-JsonConfig([string]$Path) {
     if (-not (Test-Path -LiteralPath $Path)) { return [pscustomobject]@{} }
     $raw = Get-Content -LiteralPath $Path -Raw
     if (-not $raw.Trim()) { return [pscustomobject]@{} }
     try { return ($raw | ConvertFrom-Json) }
-    catch { throw "Could not parse '$Path' as JSON. A backup was not changed; edit JSON/JSONC comments first or use the client-specific manual configuration." }
+    catch {
+        try { return (ConvertFrom-JsonC $raw) }
+        catch { throw "Could not parse '$Path' as JSON. A backup was not changed; edit JSON/JSONC comments first or use the client-specific manual configuration." }
+    }
 }
 
 function Ensure-Property($Object, [string]$Name, $Value) {
@@ -170,6 +218,34 @@ function Write-JsonConfig([string]$Path, $Config) {
     New-Item -ItemType Directory -Path $parent -Force | Out-Null
     Backup-Config $Path
     $Config | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $Path -Encoding UTF8
+}
+
+# Use the existing config file (opencode.jsonc preferred over opencode.json),
+# falling back to creating opencode.json for a fresh install.
+function Resolve-OpenCodeConfig {
+    $json = Join-Path $openCodeConfigDir 'opencode.json'
+    $jsonc = Join-Path $openCodeConfigDir 'opencode.jsonc'
+    if (Test-Path -LiteralPath $jsonc) { return $jsonc }
+    if (Test-Path -LiteralPath $json) { return $json }
+    return $json
+}
+
+# If we switched to opencode.jsonc but a previous install left an opencode.json
+# whose only entry was ours, remove it so the config isn't split across files.
+function Remove-OrphanOpenCodeJson([string]$ActiveConfig) {
+    $json = Join-Path $openCodeConfigDir 'opencode.json'
+    $jsonc = Join-Path $openCodeConfigDir 'opencode.jsonc'
+    if ($ActiveConfig -ne $jsonc -or -not (Test-Path -LiteralPath $json)) { return }
+    try {
+        $cfg = Read-JsonConfig $json
+        $mcp = $cfg.PSObject.Properties['mcp'].Value
+        $keys = @($mcp.PSObject.Properties.Name)
+        if ($keys.Count -eq 1 -and $keys[0] -eq $serverName) {
+            Backup-Config $json
+            Remove-Item -LiteralPath $json -Force
+            Write-Host "Removed orphaned config '$json' (its only entry was '$serverName', now merged into '$jsonc')." -ForegroundColor Gray
+        }
+    } catch { /* leave it alone */ }
 }
 
 function Install-Codex {
@@ -198,9 +274,11 @@ function Install-Codex {
 
 function Install-OpenCode {
     Write-Step 'Configuring OpenCode'
+    $openCodeConfig = Resolve-OpenCodeConfig
     $pluginSource = Join-Path $repoRoot 'plugin'
     $pluginDist = Join-Path $pluginSource 'dist'
-    $hasPlugin = $isCheckout -and (Test-Path -LiteralPath $pluginDist)
+    $localPlugin = $isCheckout -and (Test-Path -LiteralPath $pluginDist)
+    $npm = Get-Command npm -ErrorAction SilentlyContinue
 
     if ($DryRun) {
         Write-Action "Install plugin files into '$openCodePluginRoot'"
@@ -209,26 +287,39 @@ function Install-OpenCode {
         return
     }
 
-    if ($hasPlugin) {
-        New-Item -ItemType Directory -Path $openCodePluginRoot -Force | Out-Null
+    New-Item -ItemType Directory -Path $openCodePluginRoot -Force | Out-Null
+    if ($localPlugin) {
         Copy-Item -LiteralPath $pluginDist -Destination $openCodePluginRoot -Recurse -Force
         Copy-Item -LiteralPath (Join-Path $pluginSource 'package.json') -Destination $openCodePluginRoot -Force
         $lockfile = Join-Path $pluginSource 'package-lock.json'
         if (Test-Path -LiteralPath $lockfile) { Copy-Item -LiteralPath $lockfile -Destination $openCodePluginRoot -Force }
-
-        $npm = Get-Command npm -ErrorAction SilentlyContinue
-        if ($npm) {
-            Push-Location $openCodePluginRoot
-            try {
-                & $npm.Source ci --omit=dev --ignore-scripts
-                if ($LASTEXITCODE -ne 0) { throw 'npm dependency installation for the OpenCode plugin failed.' }
-            } finally { Pop-Location }
-        } elseif (Test-Path -LiteralPath (Join-Path $pluginSource 'node_modules')) {
-            Copy-Item -LiteralPath (Join-Path $pluginSource 'node_modules') -Destination $openCodePluginRoot -Recurse -Force
-        } else { Write-Host 'WARN: npm and plugin/node_modules were not found; OpenCode plugin dependencies are missing.' -ForegroundColor Yellow }
-        Write-Host "PASS: OpenCode plugin installed globally at '$openCodePluginRoot'." -ForegroundColor Green
+        Write-Host "   Plugin files copied from checkout to '$openCodePluginRoot'." -ForegroundColor Gray
+    } elseif (-not $SkipDownload) {
+        try {
+            Get-ReleaseAsset 'instant-file-search-mcp-plugin-index.js' (Join-Path $openCodePluginRoot 'dist\index.js')
+            Get-ReleaseAsset 'instant-file-search-mcp-plugin-package.json' (Join-Path $openCodePluginRoot 'package.json')
+            Get-ReleaseAsset 'instant-file-search-mcp-plugin-package-lock.json' (Join-Path $openCodePluginRoot 'package-lock.json')
+        } catch {
+            Write-Host 'WARN: could not download the OpenCode plugin from the release; skipping the sub-agent adapter.' -ForegroundColor Yellow
+            $npm = $null
+        }
     } else {
-        Write-Host 'NOTE: no plugin build found in this checkout; skipping the OpenCode sub-agent adapter. The MCP entry below still serves the main OpenCode session.' -ForegroundColor Yellow
+        Write-Host 'WARN: no local plugin build and -SkipDownload was set; skipping the OpenCode sub-agent adapter.' -ForegroundColor Yellow
+        $npm = $null
+    }
+
+    if ($npm -and (Test-Path -LiteralPath (Join-Path $openCodePluginRoot 'package.json'))) {
+        Push-Location $openCodePluginRoot
+        try {
+            & $npm.Source ci --omit=dev --ignore-scripts
+            if ($LASTEXITCODE -ne 0) { throw 'npm dependency installation for the OpenCode plugin failed.' }
+            Write-Host "PASS: OpenCode plugin installed globally at '$openCodePluginRoot'." -ForegroundColor Green
+        } finally { Pop-Location }
+    } elseif (Test-Path -LiteralPath (Join-Path $pluginSource 'node_modules')) {
+        Copy-Item -LiteralPath (Join-Path $pluginSource 'node_modules') -Destination $openCodePluginRoot -Recurse -Force
+        Write-Host "PASS: OpenCode plugin node_modules copied from checkout." -ForegroundColor Green
+    } elseif (Test-Path -LiteralPath (Join-Path $openCodePluginRoot 'dist\index.js')) {
+        Write-Host "NOTE: plugin dist present but dependencies not installed; sub-agent tools may not load until 'npm ci' runs in '$openCodePluginRoot'." -ForegroundColor Yellow
     }
 
     [Environment]::SetEnvironmentVariable('INSTANT_FS_MCP_BINARY', $stableBinary, 'User')
@@ -238,6 +329,7 @@ function Install-OpenCode {
     Ensure-Property $mcp $serverName ([pscustomobject]@{ command = @($stableBinary); enabled = $true })
     Write-JsonConfig $openCodeConfig $config
     Write-Host "PASS: OpenCode MCP server '$serverName' added to '$openCodeConfig'." -ForegroundColor Green
+    Remove-OrphanOpenCodeJson $openCodeConfig
 }
 
 function Install-Claude {
@@ -255,11 +347,11 @@ function Install-NativeService {
     Write-Step 'Installing the native indexer service'
     $indexerDir = Join-Path $InstallRoot 'indexer'
     $serviceIndexer = Join-Path $indexerDir $indexerName
-    $serviceName = 'instant-file-search-indexer'
+    $registerHelper = Join-Path $indexerDir 'register-indexer-service.ps1'
 
     $resolved = Resolve-IndexerBinary
     if (-not $resolved) {
-        Write-Host 'WARN: no indexer binary available; the native engine will not be installed. Searches will use the bundled Everything engine.' -ForegroundColor Yellow
+        Write-Host 'WARN: no indexer binary available; the native engine will not be installed. Searches will use the Fallback Engine.' -ForegroundColor Yellow
         return
     }
 
@@ -272,23 +364,91 @@ function Install-NativeService {
     New-Item -ItemType Directory -Path $indexerDir -Force | Out-Null
     Copy-Item -LiteralPath $resolved -Destination $serviceIndexer -Force
 
-    $elevated = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-    if (-not $elevated) {
-        Write-Host 'WARN: not running elevated — cannot register the indexer service. Re-run this installer from an elevated prompt (or register it manually):' -ForegroundColor Yellow
-        Write-Host "  sc.exe create $serviceName binPath= `"$serviceIndexer service`" start= auto" -ForegroundColor DarkGray
+    $elevated = Test-Elevated
+
+    # Write a tiny helper that performs the admin-only registration, so we can
+    # run it elevated on demand without quoting gymnastics.
+    $helper = @"
+`$ErrorActionPreference = 'Stop'
+`$serviceName = '$serviceName'
+`$serviceIndexer = '$serviceIndexer'
+`$existing = Get-Service -Name `$serviceName -ErrorAction SilentlyContinue
+if (`$existing) {
+  if (`$existing.Status -ne 'Stopped') { Stop-Service -Name `$serviceName -Force; Start-Sleep -Seconds 2 }
+  & sc.exe delete `$serviceName | Out-Null
+  Start-Sleep -Seconds 1
+}
+& sc.exe create `$serviceName binPath= "`"`$serviceIndexer service`"" start= auto | Out-Null
+if (`$LASTEXITCODE -ne 0) { throw "sc.exe create failed for service `$serviceName." }
+Start-Service -Name `$serviceName
+"@
+    Set-Content -LiteralPath $registerHelper -Value $helper -Encoding UTF8
+
+    if ($elevated) {
+        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $registerHelper
+        if ($LASTEXITCODE -ne 0) { throw "Indexer service registration failed (exit $LASTEXITCODE)." }
+        Write-Host "PASS: indexer service '$serviceName' installed and started (auto-start)." -ForegroundColor Green
         return
     }
 
-    $existing = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
-    if ($existing) {
-        if ($existing.Status -ne 'Stopped') { Stop-Service -Name $serviceName -Force; Start-Sleep -Seconds 2 }
-        & sc.exe delete $serviceName | Out-Null
-        Start-Sleep -Seconds 1
+    if ($SkipElevation) {
+        Write-Host 'WARN: not running elevated and -SkipElevation was set, so the indexer service was NOT registered. Searches will use the Fallback Engine until you register it. When you are ready, run this elevated:' -ForegroundColor Yellow
+        Write-Host "  powershell -NoProfile -ExecutionPolicy Bypass -File `"$registerHelper`"" -ForegroundColor Gray
+        return
     }
-    & sc.exe create $serviceName binPath= "`"$serviceIndexer service`"" start= auto | Out-Null
-    if ($LASTEXITCODE -ne 0) { throw "sc.exe create failed for service '$serviceName'." }
-    Start-Service -Name $serviceName
-    Write-Host "PASS: indexer service '$serviceName' installed and started (auto-start)." -ForegroundColor Green
+
+    Write-Host 'The native indexer service needs administrator rights. A UAC prompt will appear - click Yes.' -ForegroundColor Yellow
+    try {
+        Start-Process -FilePath powershell.exe -Verb RunAs -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$registerHelper`"" -Wait -ErrorAction Stop
+        $svc = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
+        if ($svc) { Write-Host "PASS: indexer service '$serviceName' installed and started (auto-start)." -ForegroundColor Green }
+        else { Write-Host "WARN: elevation did not produce the '$serviceName' service. Run the helper elevated manually:" -ForegroundColor Yellow; Write-Host "  powershell -NoProfile -ExecutionPolicy Bypass -File `"$registerHelper`"" -ForegroundColor Gray }
+    } catch {
+        Write-Host "WARN: elevation was cancelled or failed: $($_.Exception.Message)" -ForegroundColor Yellow
+        Write-Host "Run this elevated when ready:" -ForegroundColor Yellow
+        Write-Host "  powershell -NoProfile -ExecutionPolicy Bypass -File `"$registerHelper`"" -ForegroundColor Gray
+    }
+}
+
+function Install-Doctor {
+    # Make doctor.ps1 available even for one-liner installs (no checkout).
+    $docDest = Join-Path $InstallRoot $doctorName
+    if ($isCheckout -and (Test-Path -LiteralPath (Join-Path $repoRoot "scripts\$doctorName"))) {
+        Copy-Item -LiteralPath (Join-Path $repoRoot "scripts\$doctorName") -Destination $docDest -Force
+        Write-Host "PASS: diagnostics script installed at '$docDest'." -ForegroundColor Green
+    } elseif (-not $SkipDownload) {
+        try {
+            Get-ReleaseAsset $doctorName $docDest
+            Write-Host "PASS: diagnostics script installed at '$docDest'." -ForegroundColor Green
+        } catch {
+            Write-Host "WARN: could not download '$doctorName'; no diagnostics script installed." -ForegroundColor Yellow
+        }
+    }
+}
+
+function Test-Installation {
+    Write-Step 'Verifying the installation'
+    if (-not (Test-Path -LiteralPath $stableBinary)) {
+        Write-Host "FAIL: MCP server binary not found at '$stableBinary'." -ForegroundColor Red
+        return $false
+    }
+    $inFile = Join-Path $env:TEMP "installer-verify-in-$PID.txt"
+    $outFile = Join-Path $env:TEMP "installer-verify-out-$PID.txt"
+    '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"installer","version":"1.0"}}}' |
+        Set-Content -LiteralPath $inFile -Encoding UTF8
+    $proc = Start-Process -FilePath $stableBinary -RedirectStandardInput $inFile -RedirectStandardOutput $outFile -PassThru -NoNewWindow
+    $alive = $proc.WaitForExit(4000)
+    if ($alive) {
+        $out = Get-Content -LiteralPath $outFile -Raw -ErrorAction SilentlyContinue
+        if ($out -match 'jsonrpc') { Write-Host 'PASS: MCP server starts and answers initialize.' -ForegroundColor Green; $ok = $true }
+        else { Write-Host 'WARN: MCP server started but produced no JSON-RPC output.' -ForegroundColor Yellow; $ok = $false }
+        if (-not $proc.HasExited) { $proc.Kill() }
+    } else {
+        Write-Host 'WARN: MCP server exited within 4s of startup. Enable EVERYTHING_MCP_LOG=debug to diagnose.' -ForegroundColor Yellow
+        $ok = $false
+    }
+    Remove-Item $inFile, $outFile -Force -ErrorAction SilentlyContinue
+    return $ok
 }
 
 Write-Host 'Instant File Search MCP installer' -ForegroundColor Green
@@ -311,8 +471,8 @@ if (-not $DryRun -and $serverSource -ne $stableBinary) {
     Write-Host "PASS: MCP server installed at '$stableBinary'." -ForegroundColor Green
 }
 
-Write-Step 'Deploying the bundled Everything engine'
-if ($DryRun) { Write-Action "Deploy bundled engine into '$(Join-Path $InstallRoot 'everything')'" }
+Write-Step 'Deploying the Fallback Engine'
+if ($DryRun) { Write-Action "Deploy Fallback Engine into '$(Join-Path $InstallRoot 'everything')'" }
 else { Deploy-BundledEngine }
 
 foreach ($client in $selected) {
@@ -324,14 +484,21 @@ foreach ($client in $selected) {
 }
 
 Install-NativeService
+Install-Doctor
 
 $everything = Get-Process -Name Everything -ErrorAction SilentlyContinue
-if ($everything) { Write-Host 'PASS: Everything is running.' -ForegroundColor Green }
+if ($everything) { Write-Host 'PASS: Fallback Engine is running.' -ForegroundColor Green }
 elseif (Test-Path -LiteralPath (Join-Path $InstallRoot 'everything\Everything.exe')) {
-    Write-Host 'PASS: Everything is not running, but the bundled engine will start automatically on first search.' -ForegroundColor Green
+    Write-Host 'PASS: Fallback Engine is not running, but the bundled engine will start automatically on first search.' -ForegroundColor Green
 } else {
-    Write-Host 'WARN: Everything is not running and no bundled engine was deployed.' -ForegroundColor Yellow
+    Write-Host 'WARN: Fallback Engine is not running and no bundled engine was deployed.' -ForegroundColor Yellow
 }
+
+Test-Installation | Out-Null
+
 Write-Host "`nInstalled binary: $stableBinary" -ForegroundColor Green
+Write-Host "Diagnostics:      $((Join-Path $InstallRoot $doctorName))" -ForegroundColor Gray
+if (-not $elevated -and (Get-Service -Name $serviceName -ErrorAction SilentlyContinue) -eq $null) {
+    Write-Host 'NOTE: the native indexer service is not registered yet (needs admin). Searches work now via the Fallback Engine; to enable the fast native indexer, run the printed elevated command or re-run this installer elevated.' -ForegroundColor Yellow
+}
 Write-Host 'Restart selected clients so they reload the MCP configuration.'
-Write-Host 'Run .\scripts\doctor.ps1 any time to diagnose the setup.'

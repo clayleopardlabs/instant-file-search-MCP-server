@@ -32,6 +32,13 @@ jobs:
         env:
           CC_x86_64_pc_windows_gnu: gcc
 
+      - name: Build OpenCode plugin
+        run: |
+          cd plugin
+          npm ci
+          npm run build
+        shell: bash
+
       - name: Upload release assets
         uses: actions/upload-artifact@v4
         with:
@@ -42,6 +49,10 @@ jobs:
             vendor/everything/instant-file-search-fallback-engine-1.5.0.1418b.zip
             vendor/everything/instant-file-search-fallback-engine-1.5.0.1418b.ini
             vendor/everything/LICENSE-instant-file-search-fallback-engine-1.5.0.1418b.txt
+            plugin/dist/index.js
+            plugin/package.json
+            plugin/package-lock.json
+            scripts/doctor.ps1
           if-no-files-found: error
 
   release:
@@ -64,6 +75,10 @@ jobs:
           cp vendor/everything/instant-file-search-fallback-engine-1.5.0.1418b.zip release-files/
           cp vendor/everything/instant-file-search-fallback-engine-1.5.0.1418b.ini release-files/
           cp vendor/everything/LICENSE-instant-file-search-fallback-engine-1.5.0.1418b.txt release-files/
+          cp plugin/dist/index.js release-files/instant-file-search-mcp-plugin-index.js
+          cp plugin/package.json release-files/instant-file-search-mcp-plugin-package.json
+          cp plugin/package-lock.json release-files/instant-file-search-mcp-plugin-package-lock.json
+          cp scripts/doctor.ps1 release-files/doctor.ps1
 
       - name: Publish release
         uses: softprops/action-gh-release@v2

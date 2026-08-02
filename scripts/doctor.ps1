@@ -8,7 +8,8 @@ $serverName = 'instant-file-search'
 $binaryName = 'instant-file-search-mcp-server.exe'
 $stableBinary = Join-Path $InstallRoot $binaryName
 $openCodePluginRoot = Join-Path $env:USERPROFILE '.config\opencode\plugins\instant-file-search-mcp-plugin'
-$openCodeConfig = Join-Path $env:USERPROFILE '.config\opencode\opencode.json'
+$openCodeJson = Join-Path $env:USERPROFILE '.config\opencode\opencode.json'
+$openCodeJsonc = Join-Path $env:USERPROFILE '.config\opencode\opencode.jsonc'
 $claudeConfig = Join-Path $env:APPDATA 'Claude\claude_desktop_config.json'
 $failures = 0
 $warnings = 0
@@ -16,6 +17,62 @@ $warnings = 0
 function Pass([string]$Message) { Write-Host "PASS: $Message" -ForegroundColor Green }
 function Warn([string]$Message) { $script:warnings++; Write-Host "WARN: $Message" -ForegroundColor Yellow }
 function Fail([string]$Message) { $script:failures++; Write-Host "FAIL: $Message" -ForegroundColor Red }
+
+# JSONC-aware parse: strips // and /* */ comments and trailing commas
+# while staying string-aware (so URLs and `"rm -rf /*`"` survive).
+function ConvertFrom-JsonC([string]$Text) {
+    $sb = New-Object System.Text.StringBuilder
+    $n = $Text.Length
+    $i = 0
+    $inString = $false
+    while ($i -lt $n) {
+        $c = $Text[$i]
+        $next = if ($i + 1 -lt $n) { $Text[$i + 1] } else { '' }
+        if ($inString) {
+            [void]$sb.Append($c)
+            if ($c -eq '\' -and $next) { $i++; if ($i -lt $n) { [void]$sb.Append($Text[$i]) } }
+            elseif ($c -eq '"') { $inString = $false }
+            $i++
+        } elseif ($c -eq '"') {
+            $inString = $true
+            [void]$sb.Append($c)
+            $i++
+        } elseif ($c -eq '/' -and $next -eq '/') {
+            while ($i -lt $n -and $Text[$i] -ne "`n") { $i++ }
+        } elseif ($c -eq '/' -and $next -eq '*') {
+            $i += 2
+            while ($i -lt $n -and -not ($Text[$i] -eq '*' -and $i + 1 -lt $n -and $Text[$i + 1] -eq '/')) { $i++ }
+            if ($i -lt $n) { $i += 2 }
+        } elseif ($c -eq ',') {
+            $j = $i + 1
+            while ($j -lt $n -and $Text[$j] -match '\s') { $j++ }
+            if ($j -lt $n -and ($Text[$j] -eq '}' -or $Text[$j] -eq ']')) { $i++ }
+            else { [void]$sb.Append($c); $i++ }
+        } else {
+            [void]$sb.Append($c)
+            $i++
+        }
+    }
+    return ($sb.ToString() | ConvertFrom-Json)
+}
+
+function Read-JsonConfig([string]$Path) {
+    if (-not (Test-Path -LiteralPath $Path)) { return [pscustomobject]@{} }
+    $raw = Get-Content -LiteralPath $Path -Raw
+    if (-not $raw.Trim()) { return [pscustomobject]@{} }
+    try { return ($raw | ConvertFrom-Json) }
+    catch {
+        try { return (ConvertFrom-JsonC $raw) }
+        catch { return $null }
+    }
+}
+
+# Use the existing config file (opencode.jsonc preferred over opencode.json).
+function Resolve-OpenCodeConfig {
+    if (Test-Path -LiteralPath $openCodeJsonc) { return $openCodeJsonc }
+    if (Test-Path -LiteralPath $openCodeJson) { return $openCodeJson }
+    return $null
+}
 
 Write-Host 'Instant File Search MCP doctor' -ForegroundColor Cyan
 
@@ -46,17 +103,17 @@ if (-not $codex) {
 
 $everything = Get-Process -Name Everything -ErrorAction SilentlyContinue
 if ($everything) {
-    Pass 'Everything is running.'
+    Pass 'Fallback Engine is running.'
 } else {
-    Warn 'Everything is not running. It will auto-start on first search (if a bundled or installed engine is available).'
+    Warn 'Fallback Engine is not running. It will auto-start on first search (if a bundled or installed engine is available).'
 }
 
 $bundleDir = Join-Path $InstallRoot 'everything'
 $bundledEngine = Join-Path $bundleDir 'Everything.exe'
 if (Test-Path -LiteralPath $bundledEngine) {
-    Pass "Bundled Everything engine present ('$bundledEngine')."
+    Pass "Bundled Fallback Engine present ('$bundledEngine')."
 } else {
-    Warn "Bundled Everything engine missing ('$bundledEngine'). find_files will fall back to an installed Everything."
+    Warn "Bundled Fallback Engine missing ('$bundledEngine'). find_files will fall back to an installed Everything."
 }
 if (Test-Path -LiteralPath (Join-Path $bundleDir 'instant-file-search-fallback-engine-1.5.0.1418b.ini')) {
     Pass 'Bundled Fallback Engine ini config present.'
@@ -64,9 +121,9 @@ if (Test-Path -LiteralPath (Join-Path $bundleDir 'instant-file-search-fallback-e
     Warn 'Bundled Fallback Engine ini is missing; the engine will use default settings.'
 }
 if (Test-Path -LiteralPath (Join-Path $InstallRoot 'LICENSE-instant-file-search-fallback-engine-1.5.0.1418b.txt')) {
-    Pass 'Everything license notice present (required for redistribution).'
+    Pass 'Fallback Engine license notice present (required for redistribution).'
 } else {
-    Warn 'Everything license notice is missing.'
+    Warn 'Fallback Engine license notice is missing.'
 }
 
 $indexerExe = Join-Path $InstallRoot 'indexer\instant-file-search-indexer.exe'
@@ -119,6 +176,19 @@ if ($userBinary -eq $stableBinary) {
     Pass 'OpenCode uses the legacy EVERYTHING_MCP_BINARY env var (still supported).'
 } else {
     Warn 'INSTANT_FS_MCP_BINARY is not set for OpenCode.'
+}
+
+$activeConfig = Resolve-OpenCodeConfig
+if ($activeConfig) {
+    $cfg = Read-JsonConfig $activeConfig
+    $mcp = if ($cfg) { $cfg.PSObject.Properties['mcp'].Value } else { $null }
+    if ($mcp -and $mcp.PSObject.Properties['instant-file-search']) {
+        Pass "OpenCode MCP server '$serverName' is configured in '$activeConfig'."
+    } else {
+        Warn "'$serverName' is not in the OpenCode config '$activeConfig'. Run .\scripts\install.ps1."
+    }
+} else {
+    Warn "No opencode.json or opencode.jsonc found in '$env:USERPROFILE\.config\opencode'. Run .\scripts\install.ps1."
 }
 
 if (Test-Path -LiteralPath $claudeConfig) {
