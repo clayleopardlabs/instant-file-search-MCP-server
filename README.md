@@ -1,4 +1,4 @@
-# Instant File Search for AI Agents
+# 300. 3,000. 3 million. Instantly.
 
 ![](demo.gif)
 
