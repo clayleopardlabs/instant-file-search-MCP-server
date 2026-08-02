@@ -50,7 +50,7 @@ everything (engine_source: existing / installed_launched / bundled / none).
 - SCM service name: `instant-file-search-indexer` (auto-start). Console modes:
   `serve` (pipe + scan + USN watch) and `scan` (one-shot diagnostic).
 - Requires admin/SYSTEM to open `\\.\C:` volume devices for the MFT scan.
-- Deployed at `%LOCALAPPDATA%\ClayLeopardLabs\EverythingMCP\indexer\`.
+- Deployed at `%LOCALAPPDATA%\ClayLeopardLabs\instant-file-search\indexer\`.
 
 ## Everything engine acquisition (fallback, self-contained)
 

@@ -59,7 +59,7 @@ It detects which AI apps you have (Codex, OpenCode, and Claude Desktop) and asks
 To make sure everything is healthy later:
 
 ```powershell
-& "$env:LOCALAPPDATA\ClayLeopardLabs\EverythingMCP\doctor.ps1"
+& "$env:LOCALAPPDATA\ClayLeopardLabs\instant-file-search\doctor.ps1"
 ```
 
 (If you installed from a checkout, the equivalent is `./scripts/doctor.ps1` from inside the repo.)
@@ -69,7 +69,7 @@ To make sure everything is healthy later:
 The installer puts the server here:
 
 ```
-%LOCALAPPDATA%\ClayLeopardLabs\EverythingMCP\instant-file-search-mcp-server.exe
+%LOCALAPPDATA%\ClayLeopardLabs\instant-file-search\instant-file-search-mcp-server.exe
 ```
 
 For a plain MCP host (VS Code, Cursor, Claude Desktop), add it to your MCP client configuration:
@@ -195,4 +195,4 @@ If the indexer service is unreachable, the server answers from the `instant-file
 
 This project (the MCP server, the native indexer, and the plugin adapter) is licensed under the MIT License.
 
-The bundled **Fallback Engine** (`instant-file-search-fallback-engine-1.5.0.1418b`) is **Everything**, a file search utility by David Carpenter (https://www.voidtools.com) that maintains its own index of the filesystem; it ships here as the fallback search engine when the indexer service is unreachable. Everything is copyright (C) 2018 David Carpenter, distributed under the MIT License, and its embedded **PCRE** component is copyright (c) 1997-2012 University of Cambridge, distributed under the MIT-style license reproduced in its terms. The full license texts ship with the installer at `%LOCALAPPDATA%\ClayLeopardLabs\EverythingMCP\LICENSE-instant-file-search-fallback-engine-1.5.0.1418b.txt` (source copy: `vendor/everything/LICENSE-instant-file-search-fallback-engine-1.5.0.1418b.txt`), alongside the engine itself, as those licenses require.
+The bundled **Fallback Engine** (`instant-file-search-fallback-engine-1.5.0.1418b`) is **Everything**, a file search utility by David Carpenter (https://www.voidtools.com) that maintains its own index of the filesystem; it ships here as the fallback search engine when the indexer service is unreachable. Everything is copyright (C) 2018 David Carpenter, distributed under the MIT License, and its embedded **PCRE** component is copyright (c) 1997-2012 University of Cambridge, distributed under the MIT-style license reproduced in its terms. The full license texts ship with the installer at `%LOCALAPPDATA%\ClayLeopardLabs\instant-file-search\LICENSE-instant-file-search-fallback-engine-1.5.0.1418b.txt` (source copy: `vendor/everything/LICENSE-instant-file-search-fallback-engine-1.5.0.1418b.txt`), alongside the engine itself, as those licenses require.

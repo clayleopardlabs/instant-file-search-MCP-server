@@ -2,7 +2,7 @@
 param(
     [ValidateSet('codex', 'opencode', 'claude', 'all')]
     [string[]]$Clients,
-    [string]$InstallRoot = (Join-Path $env:LOCALAPPDATA 'ClayLeopardLabs\EverythingMCP'),
+    [string]$InstallRoot = (Join-Path $env:LOCALAPPDATA 'ClayLeopardLabs\instant-file-search'),
     [string]$ReleaseBase = 'https://github.com/clayleopardlabs/instant-file-search-MCP-server/releases/latest/download',
     [string]$ServerBinary,
     [string]$IndexerBinary,
@@ -56,6 +56,13 @@ function Select-InstallClients {
     $detected = @(Get-DetectedClients)
     if ($Clients -and ($Clients -contains 'all')) { return $detected }
     if ($Clients) { return @($Clients | Where-Object { $_ -ne 'all' } | Select-Object -Unique) }
+
+    # If only one client is present, set it up without prompting - simplest path
+    # for a first-time user.
+    if ($detected.Count -eq 1) {
+        Write-Host "Detected $($detected[0]) only - configuring it automatically." -ForegroundColor Green
+        return $detected
+    }
 
     Write-Host "Detected clients: $(if($detected){$detected -join ', '}else{'none'})" -ForegroundColor Green
     Write-Host 'Choose clients to configure: [A]ll detected, or enter a comma-separated list: codex, opencode, claude'

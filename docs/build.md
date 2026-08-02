@@ -44,7 +44,7 @@ Output: `plugin/dist/index.js`
 
 The plugin adapter finds the MCP binary by (in order):
 1. `INSTANT_FS_MCP_BINARY` environment variable (`EVERYTHING_MCP_BINARY` accepted for backward compatibility)
-2. Stable install: `%LOCALAPPDATA%\ClayLeopardLabs\EverythingMCP\instant-file-search-mcp-server.exe`
+2. Stable install: `%LOCALAPPDATA%\ClayLeopardLabs\instant-file-search\instant-file-search-mcp-server.exe`
 3. Default path relative to the plugin's `dist/` directory: `../../target/release/instant-file-search-mcp-server.exe`
 4. Falls back to `PATH` — fails if not found
 

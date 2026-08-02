@@ -13,7 +13,7 @@ rem diagnosable from outside.
 set "SCRIPT_DIR=%~dp0"
 set "REPO=%~dp0.."
 set "SRC=%REPO%\target\release"
-set "ROOT=%LOCALAPPDATA%\ClayLeopardLabs\EverythingMCP"
+set "ROOT=%LOCALAPPDATA%\ClayLeopardLabs\instant-file-search"
 set "SVC=instant-file-search-indexer"
 set "LOG=%SCRIPT_DIR%deploy.log"
 set "MINGW=C:\Users\Omen\AppData\Local\Microsoft\WinGet\Packages\BrechtSanders.WinLibs.POSIX.UCRT_Microsoft.Winget.Source_8wekyb3d8bbwe\mingw64\bin"

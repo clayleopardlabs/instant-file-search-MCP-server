@@ -22,7 +22,7 @@ const BINARY_PATH: string =
     const installRoot = path.join(
       process.env.LOCALAPPDATA ?? "",
       "ClayLeopardLabs",
-      "EverythingMCP",
+      "instant-file-search",
       "instant-file-search-mcp-server.exe",
     );
     if (installRoot && existsSync(installRoot)) return installRoot;
