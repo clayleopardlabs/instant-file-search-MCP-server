@@ -1,4 +1,4 @@
-# 300. 3,000. 3 million. Instantly.
+# Search a million files. Instantly.
 
 ![](demo.gif)
 
