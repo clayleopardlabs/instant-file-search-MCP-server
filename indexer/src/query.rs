@@ -1123,6 +1123,7 @@ fn token_matches(
         }
         Token::Or(group) => group.iter().all(|t| token_matches(entry, t, compiled, opts)),
         Token::Path(p) | Token::BarePath(p) => {
+            let p = p.replace('/', "\\");
             let p = p.trim_end_matches('\\');
             let mut ok = starts_with_ci(lower_path, p);
             if ok && lower_path.len() > p.len() {
@@ -1252,14 +1253,14 @@ fn filter_matches<'a>(
     opts: &QueryOptions,
 ) -> Vec<&'a IndexedFile> {
     let tokens = tokenize(&opts.query, opts);
-    let scope = opts.path.as_deref().unwrap_or("").trim_end_matches('\\');
+    let scope = opts.path.as_deref().unwrap_or("").replace('/', "\\").trim_end_matches('\\').to_string();
     let scope_lower = scope.to_ascii_lowercase();
     let exclude_parts: Vec<String> = opts
         .exclude_path
         .as_deref()
         .unwrap_or("")
         .split(';')
-        .map(|p| p.trim().trim_end_matches('\\').to_ascii_lowercase())
+        .map(|p| p.trim().replace('/', "\\").trim_end_matches('\\').to_ascii_lowercase())
         .filter(|p| !p.is_empty())
         .collect();
     let mut compiled: HashMap<String, (regex::Regex, bool)> = HashMap::new();
@@ -1683,6 +1684,27 @@ mod tests {
         let r = search(&map, &opts);
         assert_eq!(r.entries.len(), 1);
         assert_eq!(r.entries[0].path, r"C:\target\root.o");
+    }
+
+    #[test]
+    fn path_scope_forward_slashes() {
+        // Forward slashes (C:/Users) must behave like backslashes (C:\Users).
+        // Regression: the engine never normalized separators, so forward-slash
+        // scopes silently matched nothing.
+        let map: HashMap<String, IndexedFile> = HashMap::from([
+            ("inside".to_string(), entry(r"C:\Users\a.txt", false, 1_700_000_000)),
+            ("other".to_string(), entry(r"C:\Windows\a.txt", false, 1_700_000_000)),
+        ]);
+        for scope in [r"C:\Users", "C:/Users"] {
+            let opts = QueryOptions {
+                query: "*".to_string(),
+                path: Some(scope.to_string()),
+                ..Default::default()
+            };
+            let r = search(&map, &opts);
+            let paths: Vec<&str> = r.entries.iter().map(|e| e.path.as_str()).collect();
+            assert_eq!(paths, vec![r"C:\Users\a.txt"], "scope {scope:?}");
+        }
     }
 
     #[test]
