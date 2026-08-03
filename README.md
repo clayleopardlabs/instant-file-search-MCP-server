@@ -147,6 +147,9 @@ The AI can embed these in a search query:
 | `dupe:` | `dupe:filename` | Find duplicate filenames |
 | `!` | `!*.tmp` | Exclude a pattern |
 | `|` | `*.ts | *.tsx` | Match either pattern |
+| `len:` | `len:>10`, `len:1..5` | Filename length filter (same operators as `size:`) |
+| `frn:` | `frn:>1000` | File reference number filter |
+| anchors | `^foo`, `bar$`, `^exact$` | `^` start-of-name, `$` end-of-name; also `start-with:`, `end-with:`, `prefix:`, `suffix:` |
 | `" "` | `"exact phrase"` | Match an exact phrase |
 
 By default the tools skip noisy folders like `node_modules`, `.git`, and `WinSxS` to keep results useful. Use `include_all=true` to include them. To scope a search to one folder, pass the `path` parameter.

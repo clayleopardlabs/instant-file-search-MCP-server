@@ -91,9 +91,9 @@ pub struct AggregateExt {
 #[derive(Debug, Clone)]
 pub enum Token {
     /// Positive term (name wildcard or bare text).
-    Include { pattern: String, whole_word: bool, case_sensitive: bool },
+    Include { pattern: String, whole_word: bool, case_sensitive: bool, anchored_start: bool, anchored_end: bool },
     /// Negative term (`!pattern`).
-    Exclude { pattern: String, whole_word: bool, case_sensitive: bool },
+    Exclude { pattern: String, whole_word: bool, case_sensitive: bool, anchored_start: bool, anchored_end: bool },
     /// Regex term (`regex:...` or regex flag).
     Regex { pattern: String, negate: bool },
     /// Or-group: list of terms where any must match.
@@ -329,18 +329,18 @@ pub fn tokenize(query: &str, opts: &QueryOptions) -> Vec<Token> {
             // `case:term` — case-sensitive term.
             let pat = term[5..].trim().to_string();
             if negate {
-                Token::Exclude { pattern: pat, whole_word: opts.match_whole_word, case_sensitive: true }
+                Token::Exclude { pattern: pat, whole_word: opts.match_whole_word, case_sensitive: true, anchored_start: false, anchored_end: false }
             } else {
-                Token::Include { pattern: pat, whole_word: opts.match_whole_word, case_sensitive: true }
+                Token::Include { pattern: pat, whole_word: opts.match_whole_word, case_sensitive: true, anchored_start: false, anchored_end: false }
             }
         } else if term.starts_with("ww:") || term.starts_with("wholeword:") {
             // `ww:term` / `wholeword:term` — whole-word term (Everything
             // modifier; also forced globally by the match_whole_word param).
             let pat = term[term.find(':').unwrap() + 1..].trim().to_string();
             if negate {
-                Token::Exclude { pattern: pat, whole_word: true, case_sensitive: false }
+                Token::Exclude { pattern: pat, whole_word: true, case_sensitive: false, anchored_start: false, anchored_end: false }
             } else {
-                Token::Include { pattern: pat, whole_word: true, case_sensitive: false }
+                Token::Include { pattern: pat, whole_word: true, case_sensitive: false, anchored_start: false, anchored_end: false }
             }
         } else if term.starts_with("path:") {
             Token::Path(term[5..].trim().trim_matches('"').to_string())
@@ -403,13 +403,29 @@ pub fn tokenize(query: &str, opts: &QueryOptions) -> Vec<Token> {
                 None => continue,
             }
         } else if term.starts_with("!<") && term.ends_with('>') {
-            Token::Exclude { pattern: term[2..term.len() - 1].to_string(), whole_word: false, case_sensitive: false }
+            Token::Exclude { pattern: term[2..term.len() - 1].to_string(), whole_word: false, case_sensitive: false, anchored_start: false, anchored_end: false }
         } else if is_windows_path(term) {
             Token::BarePath(term.to_string())
+        } else if lower.starts_with("start-with:") || lower.starts_with("prefix:") {
+            let pat = if lower.starts_with("start-with:") { &term[10..] } else { &term[7..] };
+            Token::Include { pattern: pat.to_string(), whole_word: false, case_sensitive: false, anchored_start: true, anchored_end: false }
+        } else if lower.starts_with("end-with:") || lower.starts_with("suffix:") {
+            let pat = if lower.starts_with("end-with:") { &term[9..] } else { &term[7..] };
+            Token::Include { pattern: pat.to_string(), whole_word: false, case_sensitive: false, anchored_start: false, anchored_end: true }
         } else if negate {
-            Token::Exclude { pattern: term.to_string(), whole_word: opts.match_whole_word, case_sensitive: false }
+            let mut pat = term;
+            let mut anchored_start = false;
+            let mut anchored_end = false;
+            if pat.starts_with('^') { anchored_start = true; pat = &pat[1..]; }
+            if pat.ends_with('$') && !pat.is_empty() { anchored_end = true; pat = &pat[..pat.len()-1]; }
+            Token::Exclude { pattern: pat.to_string(), whole_word: opts.match_whole_word, case_sensitive: false, anchored_start, anchored_end }
         } else {
-            Token::Include { pattern: term.to_string(), whole_word: opts.match_whole_word, case_sensitive: false }
+            let mut pat = term;
+            let mut anchored_start = false;
+            let mut anchored_end = false;
+            if pat.starts_with('^') { anchored_start = true; pat = &pat[1..]; }
+            if pat.ends_with('$') && !pat.is_empty() { anchored_end = true; pat = &pat[..pat.len()-1]; }
+            Token::Include { pattern: pat.to_string(), whole_word: opts.match_whole_word, case_sensitive: false, anchored_start, anchored_end }
         };
         group.push(token);
     }
@@ -1017,15 +1033,22 @@ fn token_matches(
     let target = if opts.match_path { lower_path } else { name };
 
     match token {
-        Token::Include { pattern, whole_word, case_sensitive } => {
+        Token::Include { pattern, whole_word, case_sensitive, anchored_start, anchored_end } => {
             let cs = opts.match_case || *case_sensitive;
-            if *whole_word {
+            if *anchored_start && *anchored_end {
+                // Exact match.
+                if cs { target == pattern.as_str() } else { target.eq_ignore_ascii_case(pattern) }
+            } else if *anchored_start {
+                if cs { target.starts_with(pattern.as_str()) } else { target.to_ascii_lowercase().starts_with(&pattern.to_ascii_lowercase()) }
+            } else if *anchored_end {
+                if cs { target.ends_with(pattern.as_str()) } else { target.to_ascii_lowercase().ends_with(&pattern.to_ascii_lowercase()) }
+            } else if *whole_word {
                 whole_word_match(target, pattern, cs)
             } else {
                 wildcard_match(pattern, target, cs)
             }
         }
-        Token::Exclude { pattern, whole_word, case_sensitive } => {
+        Token::Exclude { pattern, whole_word, case_sensitive, anchored_start, anchored_end } => {
             // Match against the whole path for `!<dir>` and against the
             // name for plain `!term`.
             let cs = opts.match_case || *case_sensitive;
@@ -1035,6 +1058,12 @@ fn token_matches(
                 } else {
                     contains_ci(&entry.path, pattern)
                 }
+            } else if *anchored_start && *anchored_end {
+                if cs { target == pattern.as_str() } else { target.eq_ignore_ascii_case(pattern) }
+            } else if *anchored_start {
+                if cs { target.starts_with(pattern.as_str()) } else { target.to_ascii_lowercase().starts_with(&pattern.to_ascii_lowercase()) }
+            } else if *anchored_end {
+                if cs { target.ends_with(pattern.as_str()) } else { target.to_ascii_lowercase().ends_with(&pattern.to_ascii_lowercase()) }
             } else if *whole_word {
                 whole_word_match(target, pattern, cs)
             } else {
@@ -1528,6 +1557,43 @@ mod tests {
         // Case-insensitive by default; case-sensitive when requested.
         assert!(wildcard_match("*.TXT", "readme.txt", false));
         assert!(!wildcard_match("*.TXT", "readme.txt", true));
+    }
+
+    #[test]
+    fn anchor_prefix_suffix() {
+        let entry = entry("main.rs", false, 1_700_000_000);
+        let compiled = HashMap::new();
+        let opts = QueryOptions::default();
+
+        // ^ anchors to start of filename.
+        let tok = Token::Include { pattern: "main".into(), whole_word: false, case_sensitive: false, anchored_start: true, anchored_end: false };
+        assert!(token_matches(&entry, &tok, &compiled, &opts));
+        let tok = Token::Include { pattern: "main.rs".into(), whole_word: false, case_sensitive: false, anchored_start: true, anchored_end: false };
+        assert!(token_matches(&entry, &tok, &compiled, &opts));
+        // Should not match if pattern is not at start.
+        let tok = Token::Include { pattern: ".rs".into(), whole_word: false, case_sensitive: false, anchored_start: true, anchored_end: false };
+        assert!(!token_matches(&entry, &tok, &compiled, &opts));
+
+        // $ anchors to end of filename.
+        let tok = Token::Include { pattern: ".rs".into(), whole_word: false, case_sensitive: false, anchored_start: false, anchored_end: true };
+        assert!(token_matches(&entry, &tok, &compiled, &opts));
+        let tok = Token::Include { pattern: "main.rs".into(), whole_word: false, case_sensitive: false, anchored_start: false, anchored_end: true };
+        assert!(token_matches(&entry, &tok, &compiled, &opts));
+        // Should not match if pattern is not at end.
+        let tok = Token::Include { pattern: "main.".into(), whole_word: false, case_sensitive: false, anchored_start: false, anchored_end: true };
+        assert!(!token_matches(&entry, &tok, &compiled, &opts));
+
+        // ^$ combined = exact match.
+        let tok = Token::Include { pattern: "main.rs".into(), whole_word: false, case_sensitive: false, anchored_start: true, anchored_end: true };
+        assert!(token_matches(&entry, &tok, &compiled, &opts));
+        let tok = Token::Include { pattern: "Main.rs".into(), whole_word: false, case_sensitive: true, anchored_start: true, anchored_end: true };
+        assert!(!token_matches(&entry, &tok, &compiled, &opts));
+
+        // Exclude anchors work too.
+        let tok = Token::Exclude { pattern: ".rs".into(), whole_word: false, case_sensitive: false, anchored_start: false, anchored_end: true };
+        assert!(!token_matches(&entry, &tok, &compiled, &opts)); // ends with .rs -> excluded
+        let tok = Token::Exclude { pattern: "main".into(), whole_word: false, case_sensitive: false, anchored_start: true, anchored_end: false };
+        assert!(!token_matches(&entry, &tok, &compiled, &opts)); // starts with main -> excluded
     }
 
     #[test]

@@ -168,8 +168,7 @@ In addition to the surface below (wildcards `*`/`?`, `regex:`, `case:`, `!`,
 - Size constants: `tiny` / `small` / `medium` / `large` / `huge` /
   `gigantic` / `empty`.
 - Date constants: month names (`jan`–`dec`), day names (`sun`–`sat`),
-  `mtd` / `ytd` / `qtd`, `lastNhours` / `lastNminutes` / `lastNseconds`,
-  `thisNdays` / `thisNweeks` / `thisNmonths` / `thisNyears`.
+  `mtd` / `ytd` / `qtd`, `lastNhours` / `lastNminutes` / `lastNseconds`.
 - Anchors: `^` (start) and `$` (end), plus `start-with:` / `end-with:` /
   `prefix:` / `suffix:`.
 - `parent:` / `child:` / `sibling:` relationship scoping.
