@@ -393,6 +393,24 @@ pub fn tokenize(query: &str, opts: &QueryOptions) -> Vec<Token> {
             Token::TypeFilter(TypeFilter::Folders)
         } else if term.starts_with("file:") {
             Token::TypeFilter(TypeFilter::Files)
+        } else if lower.starts_with("is:") {
+            // `is:` predicates — Everything shorthand for type/attribute filters.
+            match lower[3..].trim() {
+                "folder" | "directory" => Token::TypeFilter(TypeFilter::Folders),
+                "file" => Token::TypeFilter(TypeFilter::Files),
+                "hidden" => Token::Attrib { mask: 0x2, negate },
+                "system" => Token::Attrib { mask: 0x4, negate },
+                "readonly" | "read_only" | "read-only" => Token::Attrib { mask: 0x1, negate },
+                "archive" => Token::Attrib { mask: 0x20, negate },
+                "temporary" => Token::Attrib { mask: 0x100, negate },
+                "compressed" => Token::Attrib { mask: 0x800, negate },
+                "encrypted" => Token::Attrib { mask: 0x4000, negate },
+                "offline" => Token::Attrib { mask: 0x1000, negate },
+                "reparse" | "reparse_point" => Token::Attrib { mask: 0x400, negate },
+                "not_content_indexed" | "not-content-indexed" | "nci" => Token::Attrib { mask: 0x2000, negate },
+                "normal" => Token::Attrib { mask: 0x80, negate },
+                _ => Token::Never,
+            }
         } else if lower.starts_with("size:") {
             match parse_size_filter(&term[5..], metric_mode) {
                 Some(f) => Token::Size(f),
