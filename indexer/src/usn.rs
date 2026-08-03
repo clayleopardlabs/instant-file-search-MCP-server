@@ -327,8 +327,8 @@ fn upsert_or_remove(index: &Arc<FileIndex>, content: &Arc<crate::content::Conten
 }
 
 fn resolve_by_ref(index: &FileIndex, volume: &str, parent_ref: u64) -> Option<String> {
-    let _ = volume;
     // USN refs are full 64-bit file references; the index is keyed by
-    // the 48-bit record number (same masking as the MFT scan).
-    index.path_by_ref(parent_ref & 0x0000_FFFF_FFFF_FFFF)
+    // the 48-bit record number (same masking as the MFT scan). The volume
+    // is required because record numbers are only unique within a volume.
+    index.path_by_ref(volume, parent_ref & 0x0000_FFFF_FFFF_FFFF)
 }

@@ -31,8 +31,11 @@ pub struct FileIndex {
 struct Inner {
     /// Full path -> entry
     entries: HashMap<String, IndexedFile>,
-    /// MFT record number -> full path (USN parent resolution)
-    refs: HashMap<u64, String>,
+    /// (volume, MFT record number) -> full path (USN parent resolution).
+    /// Record numbers are only unique WITHIN a volume, so the volume is part
+    /// of the key; keying by record number alone made C:/D:/E: entries with
+    /// the same record number collide (wrong parent paths in recent_changes).
+    refs: HashMap<(String, u64), String>,
     /// Bounded ring buffer of recent change events (USN watcher).
     changes: VecDeque<ChangeEvent>,
 }
@@ -52,7 +55,9 @@ impl FileIndex {
         inner.entries.clear();
         inner.refs.clear();
         for e in entries {
-            inner.refs.insert(e.file_ref, e.path.clone());
+            inner
+                .refs
+                .insert((volume_of(&e.path), e.file_ref), e.path.clone());
             inner.entries.insert(e.path.clone(), e);
         }
         n
@@ -71,16 +76,18 @@ impl FileIndex {
             inner.entries.remove(&p);
         }
         inner.refs.clear();
-        let pairs: Vec<(u64, String)> = inner
+        let pairs: Vec<((String, u64), String)> = inner
             .entries
             .iter()
-            .map(|(path, e)| (e.file_ref, path.clone()))
+            .map(|(path, e)| ((volume_of(path), e.file_ref), path.clone()))
             .collect();
-        for (r, p) in pairs {
-            inner.refs.insert(r, p);
+        for (k, p) in pairs {
+            inner.refs.insert(k, p);
         }
         for e in entries {
-            inner.refs.insert(e.file_ref, e.path.clone());
+            inner
+                .refs
+                .insert((volume_of(&e.path), e.file_ref), e.path.clone());
             inner.entries.insert(e.path.clone(), e);
         }
         inner.entries.len()
@@ -114,9 +121,11 @@ impl FileIndex {
         }
         let old_ref = inner.entries.get(&entry.path).map(|old| old.file_ref);
         if let Some(r) = old_ref {
-            inner.refs.remove(&r);
+            inner.refs.remove(&(volume_of(&entry.path), r));
         }
-        inner.refs.insert(entry.file_ref, entry.path.clone());
+        inner
+            .refs
+            .insert((volume_of(&entry.path), entry.file_ref), entry.path.clone());
         let path = entry.path.clone();
         inner.entries.insert(path.clone(), entry);
         adjust_ancestors(&mut inner, &path, delta);
@@ -128,7 +137,7 @@ impl FileIndex {
     pub fn remove(&self, path: &str) {
         let mut inner = self.inner.write().unwrap();
         if let Some(old) = inner.entries.remove(path) {
-            inner.refs.remove(&old.file_ref);
+            inner.refs.remove(&(volume_of(path), old.file_ref));
             if !old.is_dir {
                 adjust_ancestors(&mut inner, path, -(old.size as i64));
             }
@@ -176,7 +185,7 @@ impl FileIndex {
             .collect();
         for p in doomed {
             if let Some(old) = inner.entries.remove(&p) {
-                inner.refs.remove(&old.file_ref);
+                inner.refs.remove(&(volume_of(&p), old.file_ref));
             }
         }
         adjust_ancestors(&mut inner, prefix, -(root_total as i64));
@@ -199,17 +208,24 @@ impl FileIndex {
             let new_path = format!("{new_prefix}{}", &old_path[old_prefix.len()..]);
             e.set_path(new_path.clone());
             inner.entries.remove(&old_path);
-            inner.refs.remove(&e.file_ref);
+            inner.refs.remove(&(volume_of(&old_path), e.file_ref));
             inner.entries.insert(new_path.clone(), e.clone());
-            inner.refs.insert(e.file_ref, new_path);
+            inner.refs.insert((volume_of(&new_path), e.file_ref), new_path);
         }
         adjust_ancestors(&mut inner, old_prefix, -(root_total as i64));
         adjust_ancestors(&mut inner, new_prefix, root_total as i64);
     }
 
-    /// Resolve an MFT record number to a full path (USN parent resolution).
-    pub fn path_by_ref(&self, file_ref: u64) -> Option<String> {
-        self.inner.read().unwrap().refs.get(&file_ref).cloned()
+    /// Resolve an MFT record number to a full path on a specific volume (USN
+    /// parent resolution). The volume is required because NTFS record numbers
+    /// are only unique within a volume.
+    pub fn path_by_ref(&self, volume: &str, file_ref: u64) -> Option<String> {
+        self.inner
+            .read()
+            .unwrap()
+            .refs
+            .get(&(volume.to_string(), file_ref))
+            .cloned()
     }
 
     pub fn len(&self) -> usize {
@@ -230,6 +246,15 @@ impl FileIndex {
         let inner = self.inner.read().unwrap();
         f(&inner.entries)
     }
+}
+
+/// Extract the volume root (`C:`) from a full path like `C:\Users\x`. Paths
+/// without a drive letter (bare names) are returned unchanged.
+fn volume_of(path: &str) -> String {
+    path.split('\\')
+        .next()
+        .map(|s| s.to_string())
+        .unwrap_or_default()
 }
 
 /// Propagate a size delta up every ancestor directory of `path`, keeping the
@@ -409,6 +434,24 @@ const MAX_CHANGES: usize = 100_000;
             assert_eq!(m[r"C:"].size, 140, "C: total unchanged by rename");
             assert!(!m.contains_key(r"C:\a"));
         });
+    }
+
+    #[test]
+    fn path_by_ref_is_volume_scoped() {
+        // Record numbers are only unique per-volume. Two volumes can both
+        // contain record 0x1001; the refs map must keep them separate or a
+        // USN parent-FRN lookup on C: can resolve to an unrelated D: path
+        // (the cross-volume collision that produced "file.cat\\child.log").
+        let ix = FileIndex::new();
+        let mut d = edir(r"C:\Users\sophi", 0);
+        d.file_ref = 0x1001;
+        let mut e = efile(r"D:\Windows\servicing\x.cat", 0);
+        e.file_ref = 0x1001;
+        ix.replace(vec![d, e]);
+        assert_eq!(ix.path_by_ref(r"C:", 0x1001), Some(r"C:\Users\sophi".to_string()));
+        assert_eq!(ix.path_by_ref(r"D:", 0x1001), Some(r"D:\Windows\servicing\x.cat".to_string()));
+        // Unscoped/unknown volume must NOT resolve to the other volume's path.
+        assert_eq!(ix.path_by_ref(r"E:", 0x1001), None);
     }
 
     #[test]
