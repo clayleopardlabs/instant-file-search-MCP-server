@@ -14,7 +14,7 @@ pub struct EverythingHandler;
 
 #[tool_router]
 impl EverythingHandler {
-    #[tool(description = "Find files instantly across ALL indexed drives. USE THIS instead of glob, grep, or Get-ChildItem. Query examples: '*.rs', 'content:handler', 'dm:lastweek size:>1mb', 'attrib:h'. Supports wildcards, regex, content search, date/size filters, path scoping, and sorting. For broad patterns, call count_files first to gauge size.")]
+    #[tool(description = "Find files instantly across ALL indexed drives. USE THIS instead of glob, grep, or Get-ChildItem. Query examples: '*.rs', 'content:handler', 'dm:lastweek size:>1mb', 'attrib:h'. Supports wildcards, regex, content search, date/size filters, path scoping, and sorting. For broad patterns, call count_files first to gauge size. NOTE: content: search uses a bounded 256MB store and may not cover all files -- use it for targeted searches, not exhaustive scans.")]
     async fn find_files(
         &self,
         Parameters(params): Parameters<SearchParams>,
@@ -84,7 +84,7 @@ impl EverythingHandler {
         Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
 
-    #[tool(description = "List recently created, modified, renamed, or deleted files across all indexed drives. USE THIS to answer 'what files changed recently?' or 'what was modified in the last hour?'. Returns change events with timestamps, paths, and reason (created/modified/renamed/deleted). Optionally filter with 'since' (FILETIME) and 'limit'.")]
+    #[tool(description = "List recently created, modified, renamed, or deleted files across all indexed drives. USE THIS to answer 'what files changed recently?' or 'what was modified in the last hour?'. Returns change events with timestamps, paths, and reason (created/modified/renamed/deleted). Optionally filter with 'since' (FILETIME) and 'limit'. USE limit=50 for reasonable output. To filter by time: 'since' is a Windows FILETIME (100ns intervals since 1601-01-01). To find files from the last N hours, subtract N*36000000000 from the current FILETIME. Without 'since', returns all retained events (up to 100k).")]
     async fn recent_changes(
         &self,
         Parameters(params): Parameters<RecentChangesParams>,
