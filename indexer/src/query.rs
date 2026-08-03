@@ -487,6 +487,17 @@ fn parse_attrib_mask(s: &str) -> Option<u32> {
 
 fn parse_size_filter(s: &str) -> Option<SizeFilter> {
     let s = s.trim();
+    // Everything size constants (JEDEC units).
+    match s.to_ascii_lowercase().as_str() {
+        "tiny" => return Some(SizeFilter::Less(1024)),
+        "small" => return Some(SizeFilter::Less(1024 * 1024)),
+        "medium" => return Some(SizeFilter::Less(1024 * 1024 * 1024)),
+        "large" => return Some(SizeFilter::Greater(1024 * 1024 * 1024)),
+        "huge" => return Some(SizeFilter::Greater(4 * 1024 * 1024 * 1024)),
+        "gigantic" => return Some(SizeFilter::Greater(16 * 1024 * 1024 * 1024)),
+        "empty" => return Some(SizeFilter::Equal(0)),
+        _ => {}
+    }
     if let Some(range) = s.split_once("..") {
         return Some(SizeFilter::Range {
             min: parse_size(range.0)?,
@@ -1595,6 +1606,40 @@ mod tests {
             ..Default::default()
         });
         assert_eq!(r.entries.len(), 2, "explicit range 1024..2048");
+    }
+
+    #[test]
+    fn size_constants() {
+        // Everything size constants: tiny < 1KB, small < 1MB, medium < 1GB,
+        // large > 1GB, huge > 4GB, gigantic > 16GB, empty == 0.
+        let mk = |name: &str, size: u64| {
+            let mut e = entry(&format!(r"B:\p\{name}"), false, 1_700_000_000);
+            e.size = size;
+            (name.to_string(), e)
+        };
+        let map = HashMap::from([
+            mk("zero", 0),
+            mk("halfk", 512),
+            mk("onek", 1024),
+            mk("onem", 1024 * 1024),
+            mk("oneg", 1024 * 1024 * 1024),
+            mk("twog", 2 * 1024 * 1024 * 1024),
+            mk("fiveg", 5 * 1024 * 1024 * 1024),
+            mk("twentyg", 20 * 1024 * 1024 * 1024),
+        ]);
+        let got = |q: &str| {
+            let r = search(&map, &QueryOptions { query: q.to_string(), ..Default::default() });
+            let mut v: Vec<String> = r.entries.iter().map(|e| e.name.clone()).collect();
+            v.sort();
+            v
+        };
+        assert_eq!(got("size:tiny"), vec!["halfk", "zero"]);
+        assert_eq!(got("size:small"), vec!["halfk", "onek", "zero"]);
+        assert_eq!(got("size:medium"), vec!["halfk", "onek", "onem", "zero"]);
+        assert_eq!(got("size:large"), vec!["fiveg", "twentyg", "twog"]);
+        assert_eq!(got("size:huge"), vec!["fiveg", "twentyg"]);
+        assert_eq!(got("size:gigantic"), vec!["twentyg"]);
+        assert_eq!(got("size:empty"), vec!["zero"]);
     }
 
     #[test]

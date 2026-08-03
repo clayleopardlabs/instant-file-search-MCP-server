@@ -141,7 +141,7 @@ The AI can embed these in a search query:
 | `dm:` | `dm:today`, `dm:2days` | Modified in the last 2 days |
 | `dc:` | `dc:thisweek` | Created this week |
 | `da:` | `da:yesterday` | Opened yesterday |
-| `size:` | `size:>10mb` | Larger than 10 MB |
+| `size:` | `size:>10mb` | Larger than 10 MB (constants: tiny<1kb, small<1mb, medium<1gb, large>1gb, huge>4gb, gigantic>16gb, empty=0) |
 | `attrib:` | `attrib:h`, `attrib:!d` | Match by NTFS attribute (h hidden, s system, r readonly, d directory, a archive, t temp, c compressed, e encrypted, o offline, p reparse, i not-indexed, n normal) |
 | wildcards | `*.ts`, `file[0-9].txt`, `img#.png`, `**.rs` | `*` any run (not `\\`), `**` any run incl. `\\`, `?` one char, `[set]`/`[!set]` classes, `#` one digit, `\\x` escape |
 | `dupe:` | `dupe:filename` | Find duplicate filenames |
