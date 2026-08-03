@@ -107,6 +107,114 @@ sizes), regex, `case:`, excludes, and both relative and absolute date filters.
 The differential battery runs ~170 probes; every remaining DIFF is a
 characterized residual gap, not a native bug.
 
+## Parity audit 2026-08-03 (full surface)
+
+Audit of the complete Everything 1.5 search surface (from the official
+voidtools reference) against the native engine, plus live differential probes.
+Three bugs were found and fixed or queued, and the query surface has been
+extended to cover the Everything tokens an agent would actually type.
+
+### Bugs found by this audit
+
+1. **`regex` / `match_whole_word` MCP params were silently ignored by the
+   native engine.** `src/native.rs` serialized them into the pipe request, but
+   the indexer's `tokenize()` only looked at the query string, so only the
+   `regex:` *token* worked; `find_files(query=..., regex=true)` did plain
+   substring matching while Everything honored the flag. Fixed by threading
+   both params into the tokenizer (query.rs). This is the class of bug the
+   battery cannot catch: the harness passes `regex:` tokens, never the params.
+2. **`content:"text"` quoted-value parsing was broken** (fix landed 2026-08-03
+   earlier): multi-word quoted values kept their quote characters and a
+   `content:"fn main"` split at the space. `extract_content_terms` now strips
+   the `content:` prefix and keeps a quoted value intact. Verified live:
+   `content:"fn main"` finds 116 files.
+3. **Content-store fill order is nondeterministic.** The fill pass iterates
+   candidate files in HashMap order and stops at the 256MB budget, so coverage
+   is effectively a random sample — repository files may or may not be picked.
+   FIXED: candidates are iterated in a stable order (sorted by path) so the
+   same files are picked across runs and full coverage is reachable.
+
+### Behavioral divergences (characterized)
+
+- **Directory junctions.** Native indexes raw MFT records: a file is counted
+  once, at its real path. Everything follows junctions and also indexes the
+  target contents under the junction path, which double-counts junction-heavy
+  trees. Battery evidence: `file: in C:\Program Files` native=217,587 vs
+  Everything=272,981 even with `include_all` (WindowsApps is junction-heavy).
+  Native is the more correct engine; the divergence is accepted and
+  documented, not fixed (matching Everything would require re-indexing
+  junction targets, trading correctness for parity).
+- **`dm:today` recency.** Immediately after a fresh reindex, `dm:today` can
+  differ by ~15% (native 8,046 vs Everything 9,308 in the 2026-08-03 03:10
+  run) because Everything reads live MFT timestamps and native serves its
+  scan snapshot plus USN upserts. Re-check after the index settles; the
+  absolute-date paths (`dm:2026-07-01`) match exactly.
+
+### Query surface: native now supports (Everything 1.5 tokens)
+
+In addition to the surface below (wildcards `*`/`?`, `regex:`, `case:`, `!`,
+`|`, `<>`, `dm:`/`dc:`/`da:`, `size:`, `ext:`, `path:`, `folder:`/`file:`):
+
+- `attrib:` filter (attribute letters: `h` hidden, `s` system, `r` read-only,
+  `d` directory, `a` archive, `t` temporary, `c` compressed, `e` encrypted,
+  `o` offline, `p` reparse, `i` not-content-indexed, `n` normal) and the
+  `attributes` result field now carries real NTFS flags.
+- `len:` filename-length filter (comparators and ranges).
+- `frn:` file-reference-number filter (native already indexed file_ref).
+- `wholeword:` / `ww:` modifier token.
+- `and:` / `or:` / `not:` operator aliases.
+- `metric:` decimal-size modifier (Everything's default is JEDEC; `metric:`
+  switches size interpretation to 1000-based).
+- Size constants: `tiny` / `small` / `medium` / `large` / `huge` /
+  `gigantic` / `empty`.
+- Date constants: month names (`jan`–`dec`), day names (`sun`–`sat`),
+  `mtd` / `ytd` / `qtd`, `lastNhours` / `lastNminutes` / `lastNseconds`,
+  `thisNdays` / `thisNweeks` / `thisNmonths` / `thisNyears`.
+- Anchors: `^` (start) and `$` (end), plus `start-with:` / `end-with:` /
+  `prefix:` / `suffix:`.
+- `parent:` / `child:` / `sibling:` relationship scoping.
+- `rc:` / `recentchange:` filter (native's USN change journal supplies the
+  per-file last-change timestamp).
+- `is:` predicates (`is:folder`, `is:file`, `is:hidden`, `is:system`, ...).
+- Extended wildcards: `**` (crosses `\`), `[set]`, `[!set]`, `#` (digit),
+  and `\` escape.
+- `sort:` as a query token (`sort:size-descending` etc.), in addition to the
+  `sort` param.
+
+### Accepted gaps (Everything data native cannot produce)
+
+- **`runcount:` / `date-run:` and the `run_count` / `date_run` fields.**
+  Everything tracks file execution history in its own database. Native has
+  no execution tracker; approximating it (e.g. via USN reads) is not
+  equivalent. Kept as documented gap; `run_count`/`date_run` return null.
+- **`dupe:` duplicate finder.** Everything's full dupe subsystem (content
+  hashing) is a separate product feature. Native can find name/size
+  duplicates cheaply from its index but not content-identical files without
+  a hash pass. Left documented.
+- **Unicode case folding / diacritics folding** (`é` ≡ `e`, `ß` ≡ `ss`).
+  Everything folds Unicode case and diacritics; native matches ASCII
+  case-insensitively only. Adding full folding costs a pass over every entry
+  name per query; out of scope for now.
+
+### Result-surface parity
+
+- Fields: native returns `filename`, `path`, `size`, `date_modified`,
+  `date_created`, `date_accessed`, `attributes` (now real flags),
+  `extension`, `is_dir`/`type`. `run_count`/`date_run` stay null (accepted
+  gap above). `date_recently_changed` maps to the USN `rc:` timestamp.
+- Sorts: native honors the 14 documented sorts plus the Everything-style
+  `sort:` tokens for size/date/name/path/extension. Everything-only sorts
+  (run count, date run) remain unsupported by design.
+
+### How to re-run the audit
+
+```
+cargo test --release -p instant-file-search-mcp-server -- --ignored parity_battery
+```
+
+Both engines must be up (native service + Everything). Add probes for any new
+surface; every probe must be characterized before the battery is green.
+
 ### Where native is at parity
 
 - Bare-term substring matching (Everything semantics: "AGENTS" matches
