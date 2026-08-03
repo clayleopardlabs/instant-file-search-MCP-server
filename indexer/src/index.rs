@@ -219,12 +219,18 @@ impl FileIndex {
     /// Resolve an MFT record number to a full path on a specific volume (USN
     /// parent resolution). The volume is required because NTFS record numbers
     /// are only unique within a volume.
+    ///
+    /// The volume string is normalized (trailing backslash trimmed) so both
+    /// `C:` and `C:\` resolve: `discover_ntfs_volumes` yields `C:\` while
+    /// `volume_of` on an indexed path yields `C:`. Without this, every USN
+    /// parent lookup misses the refs map and falls back to a bare-root path.
     pub fn path_by_ref(&self, volume: &str, file_ref: u64) -> Option<String> {
+        let vol = volume.trim_end_matches('\\');
         self.inner
             .read()
             .unwrap()
             .refs
-            .get(&(volume.to_string(), file_ref))
+            .get(&(vol.to_string(), file_ref))
             .cloned()
     }
 
@@ -452,6 +458,11 @@ const MAX_CHANGES: usize = 100_000;
         assert_eq!(ix.path_by_ref(r"D:", 0x1001), Some(r"D:\Windows\servicing\x.cat".to_string()));
         // Unscoped/unknown volume must NOT resolve to the other volume's path.
         assert_eq!(ix.path_by_ref(r"E:", 0x1001), None);
+        // The USN watcher passes volume strings WITH a trailing backslash
+        // (discover_ntfs_volumes yields "C:\"); the normalized lookup must
+        // resolve them to the same entries as the bare "C:" form.
+        assert_eq!(ix.path_by_ref(r"C:\", 0x1001), Some(r"C:\Users\sophi".to_string()));
+        assert_eq!(ix.path_by_ref(r"D:\", 0x1001), Some(r"D:\Windows\servicing\x.cat".to_string()));
     }
 
     #[test]
