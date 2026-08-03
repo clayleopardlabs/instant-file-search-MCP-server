@@ -80,6 +80,8 @@ function Select-InstallClients {
 function Get-ReleaseAsset([string]$Name, [string]$Dest) {
     $url = "$ReleaseBase/$Name"
     Write-Host "   Downloading $Name..." -ForegroundColor Gray
+    $parent = Split-Path -Parent $Dest
+    if ($parent) { New-Item -ItemType Directory -Path $parent -Force | Out-Null }
     Invoke-WebRequest -Uri $url -OutFile $Dest -UseBasicParsing
     if (-not (Test-Path -LiteralPath $Dest)) { throw "Download failed: $url" }
     Write-Host "   Saved $Dest" -ForegroundColor Green
@@ -151,12 +153,17 @@ function Deploy-BundledEngine {
 
     New-Item -ItemType Directory -Path $bundleDir -Force | Out-Null
     $tmpZip = Join-Path $env:TEMP $zipName
-    Get-ReleaseAsset $zipName $tmpZip
-    Expand-Archive -LiteralPath $tmpZip -DestinationPath $bundleDir -Force
-    Remove-Item -LiteralPath $tmpZip -Force -ErrorAction SilentlyContinue
-    Get-ReleaseAsset $iniName (Join-Path $bundleDir $iniName)
-    Get-ReleaseAsset $licenseName (Join-Path $InstallRoot $licenseName)
-    Write-Host "PASS: Fallback Engine downloaded to '$bundleDir'." -ForegroundColor Green
+    try {
+        Get-ReleaseAsset $zipName $tmpZip
+        Expand-Archive -LiteralPath $tmpZip -DestinationPath $bundleDir -Force
+        Remove-Item -LiteralPath $tmpZip -Force -ErrorAction SilentlyContinue
+        Get-ReleaseAsset $iniName (Join-Path $bundleDir $iniName)
+        Get-ReleaseAsset $licenseName (Join-Path $InstallRoot $licenseName)
+        Write-Host "PASS: Fallback Engine downloaded to '$bundleDir'." -ForegroundColor Green
+    } catch {
+        Remove-Item -LiteralPath $tmpZip -Force -ErrorAction SilentlyContinue
+        Write-Host "WARN: could not deploy the bundled Fallback Engine ($($_.Exception.Message)). The MCP will use an installed Everything if one is present; otherwise searches will report an engine error until this is resolved." -ForegroundColor Yellow
+    }
 }
 
 function Backup-Config([string]$Path) {
@@ -309,7 +316,9 @@ function Install-OpenCode {
             Get-ReleaseAsset 'instant-file-search-mcp-plugin-package.json' (Join-Path $openCodePluginRoot 'package.json')
             Get-ReleaseAsset 'instant-file-search-mcp-plugin-package-lock.json' (Join-Path $openCodePluginRoot 'package-lock.json')
         } catch {
-            Write-Host 'WARN: could not download the OpenCode plugin from the release; skipping the sub-agent adapter.' -ForegroundColor Yellow
+            Write-Host "WARN: could not download the OpenCode plugin from the release ($($_.Exception.Message)); skipping the sub-agent adapter." -ForegroundColor Yellow
+            Remove-Item -LiteralPath $openCodePluginRoot -Recurse -Force -ErrorAction SilentlyContinue
+            New-Item -ItemType Directory -Path $openCodePluginRoot -Force | Out-Null
             $npm = $null
         }
     } else {
@@ -491,8 +500,12 @@ Write-Step 'Obtaining the MCP server binary'
 $serverSource = Resolve-ServerBinary
 if (-not $DryRun -and $serverSource -ne $stableBinary) {
     New-Item -ItemType Directory -Path $InstallRoot -Force | Out-Null
-    Copy-Item -LiteralPath $serverSource -Destination $stableBinary -Force
-    Write-Host "PASS: MCP server installed at '$stableBinary'." -ForegroundColor Green
+    try {
+        Copy-Item -LiteralPath $serverSource -Destination $stableBinary -Force
+        Write-Host "PASS: MCP server installed at '$stableBinary'." -ForegroundColor Green
+    } catch {
+        Write-Host "WARN: could not replace '$stableBinary' (an MCP host may currently have it loaded). The existing binary will be used; restart your AI app and re-run this installer to update it." -ForegroundColor Yellow
+    }
 }
 
 Write-Step 'Deploying the Fallback Engine'
