@@ -150,6 +150,10 @@ The AI can embed these in a search query:
 | `len:` | `len:>10`, `len:1..5` | Filename length filter (same operators as `size:`) |
 | `frn:` | `frn:>1000` | File reference number filter |
 | anchors | `^foo`, `bar$`, `^exact$` | `^` start-of-name, `$` end-of-name; also `start-with:`, `end-with:`, `prefix:`, `suffix:` |
+| `is:` | `is:hidden`, `is:folder` | Type/attribute shorthand: `folder`/`file`, `hidden`, `system`, `readonly`, `archive`, `temporary`, `compressed`, `encrypted`, `offline`, `reparse`, `not-content-indexed`, `normal` |
+| `and:`/`or:`/`not:` | `and:foo`, `or:bar`, `not:baz` | Operator aliases: `and:` = default AND, `or:` = OR with previous, `not:` = exclude |
+| `metric:` | `metric:size:>1000kb` | Switch size interpretation from JEDEC (1024-based) to decimal (1000-based) |
+| `wholeword:` | `wholeword:foo`, `ww:foo` | Match whole word only |
 | `" "` | `"exact phrase"` | Match an exact phrase |
 
 By default the tools skip noisy folders like `node_modules`, `.git`, and `WinSxS` to keep results useful. Use `include_all=true` to include them. To scope a search to one folder, pass the `path` parameter.
