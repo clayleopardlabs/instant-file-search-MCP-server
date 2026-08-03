@@ -66,8 +66,10 @@ function Select-InstallClients {
 
     Write-Host "Detected clients: $(if($detected){$detected -join ', '}else{'none'})" -ForegroundColor Green
     Write-Host 'Choose clients to configure: [A]ll detected, or enter a comma-separated list: codex, opencode, claude'
-    $choice = (Read-Host 'Selection (default A)').Trim().ToLowerInvariant()
-    if (-not $choice -or $choice -eq 'a') { return $detected }
+    $answer = Read-Host 'Selection (default A)'
+    if ([string]::IsNullOrWhiteSpace($answer)) { return $detected }
+    $choice = $answer.Trim().ToLowerInvariant()
+    if ($choice -eq 'a') { return $detected }
     if ($choice -eq 'n') { return @() }
     $selected = @($choice -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
     $invalid = @($selected | Where-Object { $_ -notin @('codex', 'opencode', 'claude') })
@@ -319,8 +321,10 @@ function Install-OpenCode {
         Push-Location $openCodePluginRoot
         try {
             & $npm.Source ci --omit=dev --ignore-scripts
-            if ($LASTEXITCODE -ne 0) { throw 'npm dependency installation for the OpenCode plugin failed.' }
+            if ($LASTEXITCODE -ne 0) { throw "npm ci exited $LASTEXITCODE" }
             Write-Host "PASS: OpenCode plugin installed globally at '$openCodePluginRoot'." -ForegroundColor Green
+        } catch {
+            Write-Host "WARN: plugin dependency install failed ($($_.Exception.Message)). The MCP server still works for the main session; sub-agents may not have the tools until npm ci succeeds." -ForegroundColor Yellow
         } finally { Pop-Location }
     } elseif (Test-Path -LiteralPath (Join-Path $pluginSource 'node_modules')) {
         Copy-Item -LiteralPath (Join-Path $pluginSource 'node_modules') -Destination $openCodePluginRoot -Recurse -Force
@@ -369,7 +373,11 @@ function Install-NativeService {
     }
 
     New-Item -ItemType Directory -Path $indexerDir -Force | Out-Null
-    Copy-Item -LiteralPath $resolved -Destination $serviceIndexer -Force
+    try {
+        Copy-Item -LiteralPath $resolved -Destination $serviceIndexer -Force
+    } catch {
+        Write-Host "WARN: could not replace '$serviceIndexer' (the running service may hold a lock). The existing indexer binary will be used; restart the service after re-registering." -ForegroundColor Yellow
+    }
 
     $elevated = Test-Elevated
 
@@ -419,6 +427,8 @@ Start-Service -Name `$serviceName
 
 function Install-Doctor {
     # Make doctor.ps1 available even for one-liner installs (no checkout).
+    if ($DryRun) { Write-Action "Install '$doctorName' into '$InstallRoot'"; return }
+    New-Item -ItemType Directory -Path $InstallRoot -Force | Out-Null
     $docDest = Join-Path $InstallRoot $doctorName
     if ($isCheckout -and (Test-Path -LiteralPath (Join-Path $repoRoot "scripts\$doctorName"))) {
         Copy-Item -LiteralPath (Join-Path $repoRoot "scripts\$doctorName") -Destination $docDest -Force
@@ -467,8 +477,15 @@ $selected = @(Select-InstallClients)
 if ($SkipCodex) { $selected = @($selected | Where-Object { $_ -ne 'codex' }) }
 if ($SkipOpenCode) { $selected = @($selected | Where-Object { $_ -ne 'opencode' }) }
 if ($SkipClaude) { $selected = @($selected | Where-Object { $_ -ne 'claude' }) }
-if (-not $selected) { Write-Host 'No clients selected. Nothing was installed.' -ForegroundColor Yellow; exit 0 }
-Write-Host "Selected: $($selected -join ', ')" -ForegroundColor Green
+
+# Always install the server, engines, and diagnostics even when no supported
+# MCP client was detected - a user may configure any MCP host manually.
+if (-not $selected) {
+    Write-Host 'No MCP clients detected (Codex, OpenCode, or Claude Desktop).' -ForegroundColor Yellow
+    Write-Host 'The MCP server and engines will still be installed so you can configure any host manually.' -ForegroundColor Yellow
+} else {
+    Write-Host "Selected: $($selected -join ', ')" -ForegroundColor Green
+}
 
 Write-Step 'Obtaining the MCP server binary'
 $serverSource = Resolve-ServerBinary
@@ -501,11 +518,16 @@ elseif (Test-Path -LiteralPath (Join-Path $InstallRoot 'everything\Everything.ex
     Write-Host 'WARN: Fallback Engine is not running and no bundled engine was deployed.' -ForegroundColor Yellow
 }
 
-Test-Installation | Out-Null
+if (-not $DryRun) { Test-Installation | Out-Null }
 
 Write-Host "`nInstalled binary: $stableBinary" -ForegroundColor Green
 Write-Host "Diagnostics:      $((Join-Path $InstallRoot $doctorName))" -ForegroundColor Gray
+if (-not $selected) {
+    Write-Host '' -ForegroundColor Gray
+    Write-Host 'No MCP client was auto-configured. To use this with your AI app, point it at the binary above.' -ForegroundColor Yellow
+    Write-Host 'See the README section "Set up a single app yourself" for per-app config examples.' -ForegroundColor Yellow
+}
 if (-not $elevated -and (Get-Service -Name $serviceName -ErrorAction SilentlyContinue) -eq $null) {
     Write-Host 'NOTE: the native indexer service is not registered yet (needs admin). Searches work now via the Fallback Engine; to enable the fast native indexer, run the printed elevated command or re-run this installer elevated.' -ForegroundColor Yellow
 }
-Write-Host 'Restart selected clients so they reload the MCP configuration.'
+Write-Host 'Restart your AI app (or start a new session) so it reloads the MCP configuration.'
