@@ -28,7 +28,7 @@ Searches are answered in milliseconds straight from memory. Nothing gets written
 
 ## Install
 
-This tool is Windows-only. It reads the master file list that Windows keeps. Your computer must have Windows 10 or Windows 11. This tool will not operate on other computers.
+This tool is Windows-only.
 
 ### The recommended method
 
