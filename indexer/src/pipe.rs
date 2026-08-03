@@ -286,17 +286,18 @@ fn read_request(pipe: HANDLE) -> Result<Request, &'static str> {
                 struct RecentParams {
                     since: i64,
                     limit: usize,
+                    reasons: Option<String>,
                 }
                 impl Default for RecentParams {
                     fn default() -> Self {
-                        Self { since: 0, limit: 100 }
+                        Self { since: 0, limit: 100, reasons: None }
                     }
                 }
                 let p: RecentParams = match serde_json::from_value(req.params) {
                     Ok(o) => o,
                     Err(_) => return Response { ok: false, data: None, error: Some("bad params") },
                 };
-                let changes = state.index.recent_changes(p.since, p.limit);
+                let changes = state.index.recent_changes_filtered(p.since, p.limit, p.reasons.as_deref());
                 Response { ok: true, data: Some(serde_json::json!({"changes": changes})), error: None }
             }
             other => {

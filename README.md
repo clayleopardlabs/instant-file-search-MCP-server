@@ -117,7 +117,7 @@ Once installed, your AI assistant can:
 | `find_files` | List files that match a search, with details like size and dates |
 | `count_files` | Tell you how many files match, without listing them all |
 | `search_status` | Check whether the search engine is working |
-| `recent_changes` | Show files changed recently (via the Windows change journal) |
+| `recent_changes` | Show files changed recently (via the Windows change journal). Filter by `reasons=created,modified,renamed,deleted` to skip delete noise |
 | `aggregate_files` | Answer roll-up questions like largest files, file counts by type, or total size |
 
 Your AI can use the tools to answer things like:

@@ -318,8 +318,8 @@ pub struct RecentChanges {
     pub changes: Vec<ChangeEvent>,
 }
 
-fn options_from_recent(since: i64, limit: usize) -> serde_json::Value {
-    json!({ "since": since, "limit": limit })
+fn options_from_recent(since: i64, limit: usize, reasons: Option<String>) -> serde_json::Value {
+    json!({ "since": since, "limit": limit, "reasons": reasons })
 }
 
 /// Recent USN change events from the native indexer. Exceed capability with
@@ -341,6 +341,6 @@ pub fn recent_changes(params: &RecentChangesParams) -> Result<RecentChanges> {
         (None, None) => 0,
     };
     let limit = params.limit.unwrap_or(0);
-    let data = exchange("recent_changes", Some(options_from_recent(since, limit)))?;
+    let data = exchange("recent_changes", Some(options_from_recent(since, limit, params.reasons.clone())))?;
     Ok(serde_json::from_value(data).map_err(|e| anyhow!("native recent_changes: bad response: {e}"))?)
 }

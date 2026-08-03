@@ -133,4 +133,6 @@ pub struct RecentChangesParams {
     pub hours: Option<u32>,
     /// Maximum number of events to return. 0 (default) returns all retained events (ring buffer capped at 100,000).
     pub limit: Option<usize>,
+    /// Only return events with these reasons. Comma-separated subset of: created, modified, renamed, deleted. Default: all. USE THIS to skip delete noise (e.g. reasons=created,modified).
+    pub reasons: Option<String>,
 }

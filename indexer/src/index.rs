@@ -171,6 +171,32 @@ impl FileIndex {
             .collect()
     }
 
+    /// Like [`recent_changes`](Self::recent_changes) but also filters by a
+    /// comma-separated `reasons` list. Accepted values (case-insensitive):
+    /// created, modified, renamed, deleted. `None`/empty returns everything.
+    pub fn recent_changes_filtered(&self, since: i64, limit: usize, reasons: Option<&str>) -> Vec<ChangeEvent> {
+        let wants = |reason: &str| -> bool {
+            let Some(list) = reasons else { return true };
+            if list.trim().is_empty() {
+                return true;
+            }
+            let cat = match reason {
+                "DELETE" => "deleted",
+                "RENAME" | "RENAME_NEW" => "renamed",
+                _ => "modified", // CREATE and CLOSE both surface as WRITE
+            };
+            list.split(',').any(|w| w.trim().eq_ignore_ascii_case(cat))
+        };
+        let inner = self.inner.read().unwrap();
+        inner
+            .changes
+            .iter()
+            .filter(|c| c.timestamp > since && wants(&c.reason))
+            .take(if limit == 0 { usize::MAX } else { limit })
+            .cloned()
+            .collect()
+    }
+
     /// Remove an entry and everything under it (directory delete). The whole
     /// subtree vanishes at once, so only the ancestors of `prefix` need their
     /// recursive total reduced by the subtree's size.
@@ -463,6 +489,34 @@ const MAX_CHANGES: usize = 100_000;
         // resolve them to the same entries as the bare "C:" form.
         assert_eq!(ix.path_by_ref(r"C:\", 0x1001), Some(r"C:\Users\sophi".to_string()));
         assert_eq!(ix.path_by_ref(r"D:\", 0x1001), Some(r"D:\Windows\servicing\x.cat".to_string()));
+    }
+
+    #[test]
+    fn recent_changes_filters_by_reason() {
+        let ix = FileIndex::new();
+        ix.record_change(100, "CREATE", r"C:\a\new.txt", false);
+        ix.record_change(200, "WRITE", r"C:\a\changed.txt", false);
+        ix.record_change(300, "RENAME", r"C:\a\old.txt", false);
+        ix.record_change(400, "RENAME_NEW", r"C:\a\newer.txt", false);
+        ix.record_change(500, "DELETE", r"C:\a\gone.txt", false);
+        // No filter: everything back, oldest-first.
+        let all = ix.recent_changes_filtered(0, 0, None);
+        assert_eq!(all.len(), 5);
+        // Filter to created/modified only: CREATE and WRITE both map to "modified".
+        let cm = ix.recent_changes_filtered(0, 0, Some("created,modified"));
+        let reasons: Vec<_> = cm.iter().map(|c| c.reason.as_str()).collect();
+        assert_eq!(reasons, vec!["CREATE", "WRITE"]);
+        // Deleted only.
+        let del = ix.recent_changes_filtered(0, 0, Some("deleted"));
+        assert_eq!(del.len(), 1);
+        assert_eq!(del[0].reason, "DELETE");
+        // Renamed covers both RENAME and RENAME_NEW.
+        let ren = ix.recent_changes_filtered(0, 0, Some("renamed"));
+        assert_eq!(ren.len(), 2);
+        // Empty string behaves like None (no filtering).
+        assert_eq!(ix.recent_changes_filtered(0, 0, Some("   ")).len(), 5);
+        // Case-insensitive.
+        assert_eq!(ix.recent_changes_filtered(0, 0, Some("DELETED")).len(), 1);
     }
 
     #[test]
