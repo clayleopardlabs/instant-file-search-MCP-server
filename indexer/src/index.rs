@@ -158,13 +158,14 @@ impl FileIndex {
         }
     }
 
-    /// Return change events since a timestamp (exclusive), oldest-first.
+    /// Return change events since a timestamp (exclusive), newest-first.
     /// `limit` caps the result (0 = no cap, bounded by the ring buffer size).
     pub fn recent_changes(&self, since: i64, limit: usize) -> Vec<ChangeEvent> {
         let inner = self.inner.read().unwrap();
         inner
             .changes
             .iter()
+            .rev()
             .filter(|c| c.timestamp > since)
             .take(if limit == 0 { usize::MAX } else { limit })
             .cloned()
@@ -191,6 +192,7 @@ impl FileIndex {
         inner
             .changes
             .iter()
+            .rev()
             .filter(|c| c.timestamp > since && wants(&c.reason))
             .take(if limit == 0 { usize::MAX } else { limit })
             .cloned()
@@ -364,18 +366,18 @@ const MAX_CHANGES: usize = 100_000;
         ix.record_change(100, "CREATE", r"C:\a.txt", false);
         ix.record_change(200, "RENAME", r"C:\b.txt", false);
         ix.record_change(300, "DELETE", r"C:\a.txt", false);
-        let log = ix.recent_changes(0, 0);
-        assert_eq!(log.len(), 3);
-        assert_eq!(log[0].reason, "CREATE");
-        assert_eq!(log[2].reason, "DELETE");
-        // since filter: strictly newer than 100 -> last two
-        let filtered = ix.recent_changes(100, 0);
-        assert_eq!(filtered.len(), 2);
-        assert_eq!(filtered[0].timestamp, 200);
-        // limit caps
-        let capped = ix.recent_changes(0, 2);
-        assert_eq!(capped.len(), 2);
-        assert_eq!(capped[0].timestamp, 100);
+              let log = ix.recent_changes(0, 0);
+              assert_eq!(log.len(), 3);
+              assert_eq!(log[0].reason, "DELETE");
+              assert_eq!(log[2].reason, "CREATE");
+              // since filter: strictly newer than 100 -> last two, newest first
+              let filtered = ix.recent_changes(100, 0);
+              assert_eq!(filtered.len(), 2);
+              assert_eq!(filtered[0].timestamp, 300);
+              // limit caps from the newest end
+              let capped = ix.recent_changes(0, 2);
+              assert_eq!(capped.len(), 2);
+              assert_eq!(capped[0].timestamp, 300);
     }
 
     #[test]
@@ -499,13 +501,16 @@ const MAX_CHANGES: usize = 100_000;
         ix.record_change(300, "RENAME", r"C:\a\old.txt", false);
         ix.record_change(400, "RENAME_NEW", r"C:\a\newer.txt", false);
         ix.record_change(500, "DELETE", r"C:\a\gone.txt", false);
-        // No filter: everything back, oldest-first.
+        // No filter: everything back, newest-first.
         let all = ix.recent_changes_filtered(0, 0, None);
         assert_eq!(all.len(), 5);
+        // Newest-first: the most recent event (DELETE, ts 500) comes first.
+        assert_eq!(all[0].reason, "DELETE");
+        assert_eq!(all[0].path, r"C:\a\gone.txt");
         // Filter to created/modified only: CREATE and WRITE both map to "modified".
         let cm = ix.recent_changes_filtered(0, 0, Some("created,modified"));
         let reasons: Vec<_> = cm.iter().map(|c| c.reason.as_str()).collect();
-        assert_eq!(reasons, vec!["CREATE", "WRITE"]);
+        assert_eq!(reasons, vec!["WRITE", "CREATE"]);
         // Deleted only.
         let del = ix.recent_changes_filtered(0, 0, Some("deleted"));
         assert_eq!(del.len(), 1);

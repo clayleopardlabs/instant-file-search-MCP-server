@@ -340,7 +340,7 @@ pub fn recent_changes(params: &RecentChangesParams) -> Result<RecentChanges> {
         }
         (None, None) => 0,
     };
-    let limit = params.limit.unwrap_or(0);
+    let limit = params.limit.unwrap_or(100);
     let data = exchange("recent_changes", Some(options_from_recent(since, limit, params.reasons.clone())))?;
     Ok(serde_json::from_value(data).map_err(|e| anyhow!("native recent_changes: bad response: {e}"))?)
 }

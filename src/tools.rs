@@ -131,7 +131,7 @@ pub struct RecentChangesParams {
     pub since: Option<i64>,
     /// EASIER ALTERNATIVE to 'since': return events from the last N hours. Pass a small integer like 1 or 24. The server computes the FILETIME for you. Use this instead of 'since' to avoid 18-digit FILETIME math.
     pub hours: Option<u32>,
-    /// Maximum number of events to return. 0 (default) returns all retained events (ring buffer capped at 100,000).
+    /// Maximum number of events to return. Default 100 (newest first). 0 returns all retained events (ring buffer capped at 100,000).
     pub limit: Option<usize>,
     /// Only return events with these reasons. Comma-separated subset of: created, modified, renamed, deleted. Default: all. USE THIS to skip delete noise (e.g. reasons=created,modified).
     pub reasons: Option<String>,
