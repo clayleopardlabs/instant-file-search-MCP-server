@@ -117,7 +117,7 @@ Once installed, your AI assistant can:
 | `find_files` | List files that match a search, with details like size and dates |
 | `count_files` | Tell you how many files match, without listing them all |
 | `search_status` | Check whether the search engine is working |
-| `recent_changes` | Show files changed recently (via the Windows change journal). Filter by `reasons=created,modified,renamed,deleted` to skip delete noise |
+| `recent_changes` | Show files changed recently (via the Windows change journal), newest first. Pass `hours=1` for the last hour (server computes the time); cap results with `limit` (default 100); filter with `reasons=created,modified,renamed,deleted` to skip delete noise |
 | `aggregate_files` | Answer roll-up questions like largest files, file counts by type, or total size |
 
 Your AI can use the tools to answer things like:
@@ -155,8 +155,9 @@ The AI can embed these in a search query:
 | `metric:` | `metric:size:>1000kb` | Switch size interpretation from JEDEC (1024-based) to decimal (1000-based) |
 | `wholeword:` | `wholeword:foo`, `ww:foo` | Match whole word only |
 | `" "` | `"exact phrase"` | Match an exact phrase |
+| `content:` | `content:"fn main"` | Match file contents. Backed by a bounded 256 MB store, so coverage is a subset of files — use it for targeted searches, not exhaustive counts |
 
-By default the tools skip noisy folders like `node_modules`, `.git`, and `WinSxS` to keep results useful. Use `include_all=true` to include them. To scope a search to one folder, pass the `path` parameter.
+By default the tools skip noisy folders like `node_modules`, `.git`, and `WinSxS` to keep results useful. Use `include_all=true` to include them. To scope a search to one folder, pass the `path` parameter (forward slashes like `C:/Users` work fine, and the engine normalizes them).
 
 ## Common Questions
 
