@@ -82,9 +82,28 @@ function Get-ReleaseAsset([string]$Name, [string]$Dest) {
     Write-Host "   Downloading $Name..." -ForegroundColor Gray
     $parent = Split-Path -Parent $Dest
     if ($parent) { New-Item -ItemType Directory -Path $parent -Force | Out-Null }
-    Invoke-WebRequest -Uri $url -OutFile $Dest -UseBasicParsing
+    $attempts = 0
+    while ($true) {
+        $attempts++
+        # Remove any stale partial file from a prior interrupted run.
+        if (Test-Path -LiteralPath $Dest) { Remove-Item -LiteralPath $Dest -Force -ErrorAction SilentlyContinue }
+        try {
+            Invoke-WebRequest -Uri $url -OutFile $Dest -UseBasicParsing -TimeoutSec 60
+            break
+        } catch {
+            Remove-Item -LiteralPath $Dest -Force -ErrorAction SilentlyContinue
+            if ($attempts -ge 3) { throw "Download failed for '$Name': $($_.Exception.Message)" }
+            Write-Host "   Download attempt $attempts failed; retrying..." -ForegroundColor DarkYellow
+            Start-Sleep -Seconds 2
+        }
+    }
     if (-not (Test-Path -LiteralPath $Dest)) { throw "Download failed: $url" }
-    Write-Host "   Saved $Dest" -ForegroundColor Green
+    $len = (Get-Item -LiteralPath $Dest).Length
+    if ($len -eq 0) {
+        Remove-Item -LiteralPath $Dest -Force -ErrorAction SilentlyContinue
+        throw "Download of '$Name' produced an empty file; aborting to avoid installing a corrupt asset."
+    }
+    Write-Host "   Saved $Dest ($([math]::Round($len / 1KB, 1)) KB)" -ForegroundColor Green
 }
 
 function Resolve-ServerBinary {
@@ -236,6 +255,130 @@ function Write-JsonConfig([string]$Path, $Config) {
     $Config | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $Path -Encoding UTF8
 }
 
+# Add the MCP server entry to an opencode config while preserving the file's
+# comments and formatting. If the entry already exists with the same command,
+# the file is left untouched (no churn, no comment loss on reinstall).
+#
+# Returns $true if the file was written or was already up to date.
+function Write-McpConfigPreserving([string]$Path) {
+    if (-not (Test-Path -LiteralPath $Path)) {
+        $cfg = [pscustomobject]@{ mcp = [pscustomobject]@{ $serverName = [pscustomobject]@{ command = @($stableBinary); enabled = $true } } }
+        Write-JsonConfig $Path $cfg
+        return $true
+    }
+
+    $raw = Get-Content -LiteralPath $Path -Raw
+    $config = Read-JsonConfig $Path
+    if ($null -eq $config) { return $false }
+
+    $mcp = $config.PSObject.Properties['mcp'].Value
+    $existing = $null
+    if ($mcp) { $existing = $mcp.PSObject.Properties[$serverName].Value }
+    if ($existing) {
+        $cmd = @($existing.command)
+        if ($cmd -contains $stableBinary) {
+            Write-Host "   MCP entry '$serverName' already present and current; leaving config untouched." -ForegroundColor Gray
+            return $true
+        }
+    }
+
+    # The entry is stale (points at an old binary path) - replace it cleanly
+    # via the object model rather than appending a duplicate.
+    if ($existing) {
+        Write-Host "   MCP entry '$serverName' points at an old path; updating it." -ForegroundColor Gray
+        $cfg2 = $config
+        Ensure-Property $mcp $serverName ([pscustomobject]@{ command = @($stableBinary); enabled = $true })
+        Write-JsonConfig $Path $cfg2
+        return $true
+    }
+
+    # The entry is missing. Try a surgical, comment-preserving insert into the
+    # top-level "mcp" object; fall back to a full rewrite otherwise.
+    try {
+        $inserted = Insert-McpEntryText $raw $stableBinary
+        if ($inserted) {
+            Backup-Config $Path
+            Set-Content -LiteralPath $Path -Value $inserted -Encoding UTF8
+            Write-Host "   MCP entry inserted into '$Path' (comments preserved)." -ForegroundColor Gray
+            return $true
+        }
+    } catch { /* fall through to rewrite */ }
+
+    Write-Host "   Config has comments we cannot preserve automatically; backing up and rewriting as plain JSON." -ForegroundColor DarkGray
+    $cfg2 = $config
+    if (-not $mcp) { $mcp = [pscustomobject]@{}; Ensure-Property $cfg2 'mcp' $mcp }
+    Ensure-Property $mcp $serverName ([pscustomobject]@{ command = @($stableBinary); enabled = $true })
+    Write-JsonConfig $Path $cfg2
+    return $true
+}
+
+# Insert the MCP entry into the top-level "mcp" block of a JSONC file by text,
+# preserving all comments/formatting. Returns the new text, or $null if it
+# cannot be done safely.
+function Insert-McpEntryText([string]$Raw, [string]$BinaryPath) {
+    # Find the top-level "mcp" key and the braces of its value object.
+    $depth = 0; $inStr = $false; $inStr2 = $false
+    $mcpStart = -1; $mcpEnd = -1; $braceStart = -1
+    $esc = $false
+    $n = $Raw.Length
+    $i = 0
+    # locate the "mcp" key at any depth (top-level is what we need, but jsonc is
+    # typically top-level) - walk tokenizing
+    $needle = '"mcp"'
+    while ($i -lt $n) {
+        $c = $Raw[$i]
+        $next = if ($i + 1 -lt $n) { $Raw[$i + 1] } else { '' }
+        if ($inStr) {
+            if ($esc) { $esc = $false }
+            elseif ($c -eq '\') { $esc = $true }
+            elseif ($c -eq '"') { $inStr = $false }
+        } elseif ($c -eq '"') { $inStr = $true }
+        elseif ($c -eq '/' -and $next -eq '/') { while ($i -lt $n -and $Raw[$i] -ne "`n") { $i++ } }
+        elseif ($c -eq '/' -and $next -eq '*') { $i += 2; while ($i -lt $n -and -not ($Raw[$i] -eq '*' -and $i + 1 -lt $n -and $Raw[$i + 1] -eq '/')) { $i++ }; if ($i -lt $n) { $i += 2 } }
+        else {
+            if ($Raw.Substring($i) -match '^\s*"mcp"') {
+                $mcpStart = $i
+                # find the value: skip to the opening brace
+                $j = $i
+                while ($j -lt $n) {
+                    $cj = $Raw[$j]
+                    if ($cj -eq '{') { $braceStart = $j; break }
+                    $j++
+                }
+                break
+            }
+        }
+        $i++
+    }
+    if ($braceStart -lt 0) { return $null }
+
+    # find matching close brace (string/comment aware)
+    $k = $braceStart; $d = 0; $inStr = $false; $esc = $false
+    while ($k -lt $n) {
+        $c = $Raw[$k]
+        $next = if ($k + 1 -lt $n) { $Raw[$k + 1] } else { '' }
+        if ($inStr) { if ($esc) { $esc = $false } elseif ($c -eq '\') { $esc = $true } elseif ($c -eq '"') { $inStr = $false } }
+        elseif ($c -eq '"') { $inStr = $true }
+        elseif ($c -eq '/' -and $next -eq '/') { while ($k -lt $n -and $Raw[$k] -ne "`n") { $k++ } }
+        elseif ($c -eq '/' -and $next -eq '*') { $k += 2; while ($k -lt $n -and -not ($Raw[$k] -eq '*' -and $k + 1 -lt $n -and $Raw[$k + 1] -eq '/')) { $k++ }; if ($k -lt $n) { $k += 2 } }
+        else {
+            if ($c -eq '{') { $d++ }
+            elseif ($c -eq '}') { $d--; if ($d -eq 0) { $mcpEnd = $k; break } }
+        }
+        $k++
+    }
+    if ($mcpEnd -lt 0) { return $null }
+
+    $inner = $Raw.Substring($braceStart + 1, $mcpEnd - $braceStart - 1)
+    $entry = "`n    `"$serverName`": {`n      `"command`": [`"$BinaryPath`"],`n      `"enabled`": true`n    }`n  "
+    if ([string]::IsNullOrWhiteSpace($inner)) {
+        $newInner = $entry
+    } else {
+        $newInner = $inner.TrimEnd() + "," + $entry
+    }
+    return $Raw.Substring(0, $braceStart + 1) + $newInner + $Raw.Substring($mcpEnd)
+}
+
 # Use the existing config file (opencode.jsonc preferred over opencode.json),
 # falling back to creating opencode.json for a fresh install.
 function Resolve-OpenCodeConfig {
@@ -340,15 +483,14 @@ function Install-OpenCode {
         Write-Host "PASS: OpenCode plugin node_modules copied from checkout." -ForegroundColor Green
     } elseif (Test-Path -LiteralPath (Join-Path $openCodePluginRoot 'dist\index.js')) {
         Write-Host "NOTE: plugin dist present but dependencies not installed; sub-agent tools may not load until 'npm ci' runs in '$openCodePluginRoot'." -ForegroundColor Yellow
+    } elseif (-not $npm) {
+        Write-Host "WARN: npm was not found on PATH, so the OpenCode plugin dependencies could not be installed. The MCP server still works for the main session; sub-agents need node/npm + 'npm ci' in '$openCodePluginRoot'." -ForegroundColor Yellow
     }
 
     [Environment]::SetEnvironmentVariable('INSTANT_FS_MCP_BINARY', $stableBinary, 'User')
-    $config = Read-JsonConfig $openCodeConfig
-    $mcp = $config.PSObject.Properties['mcp'].Value
-    if (-not $mcp) { $mcp = [pscustomobject]@{}; Ensure-Property $config 'mcp' $mcp }
-    Ensure-Property $mcp $serverName ([pscustomobject]@{ command = @($stableBinary); enabled = $true })
-    Write-JsonConfig $openCodeConfig $config
-    Write-Host "PASS: OpenCode MCP server '$serverName' added to '$openCodeConfig'." -ForegroundColor Green
+    $ok = Write-McpConfigPreserving $openCodeConfig
+    if ($ok) { Write-Host "PASS: OpenCode MCP server '$serverName' configured in '$openCodeConfig'." -ForegroundColor Green }
+    else { Write-Host "WARN: could not update '$openCodeConfig'. Add the MCP entry manually - see README \"Set up a single app yourself\"." -ForegroundColor Yellow }
     Remove-OrphanOpenCodeJson $openCodeConfig
 }
 
@@ -388,14 +530,17 @@ function Install-NativeService {
         Write-Host "WARN: could not replace '$serviceIndexer' (the running service may hold a lock). The existing indexer binary will be used; restart the service after re-registering." -ForegroundColor Yellow
     }
 
-    $elevated = Test-Elevated
+    # Escape single quotes in paths so the generated helper survives usernames
+    # or install roots that contain an apostrophe.
+    $escServiceIndexer = $serviceIndexer -replace "'", "''"
+    $escServiceName = $serviceName -replace "'", "''"
 
     # Write a tiny helper that performs the admin-only registration, so we can
     # run it elevated on demand without quoting gymnastics.
     $helper = @"
 `$ErrorActionPreference = 'Stop'
-`$serviceName = '$serviceName'
-`$serviceIndexer = '$serviceIndexer'
+`$serviceName = '$escServiceName'
+`$serviceIndexer = '$escServiceIndexer'
 `$existing = Get-Service -Name `$serviceName -ErrorAction SilentlyContinue
 if (`$existing) {
   if (`$existing.Status -ne 'Stopped') { Stop-Service -Name `$serviceName -Force; Start-Sleep -Seconds 2 }
@@ -462,15 +607,20 @@ function Test-Installation {
     $outFile = Join-Path $env:TEMP "installer-verify-out-$PID.txt"
     '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"installer","version":"1.0"}}}' |
         Set-Content -LiteralPath $inFile -Encoding UTF8
-    $proc = Start-Process -FilePath $stableBinary -RedirectStandardInput $inFile -RedirectStandardOutput $outFile -PassThru -NoNewWindow
-    $alive = $proc.WaitForExit(4000)
-    if ($alive) {
-        $out = Get-Content -LiteralPath $outFile -Raw -ErrorAction SilentlyContinue
-        if ($out -match 'jsonrpc') { Write-Host 'PASS: MCP server starts and answers initialize.' -ForegroundColor Green; $ok = $true }
-        else { Write-Host 'WARN: MCP server started but produced no JSON-RPC output.' -ForegroundColor Yellow; $ok = $false }
-        if (-not $proc.HasExited) { $proc.Kill() }
-    } else {
-        Write-Host 'WARN: MCP server exited within 4s of startup. Enable EVERYTHING_MCP_LOG=debug to diagnose.' -ForegroundColor Yellow
+    try {
+        $proc = Start-Process -FilePath $stableBinary -RedirectStandardInput $inFile -RedirectStandardOutput $outFile -PassThru -NoNewWindow -ErrorAction Stop
+        $alive = $proc.WaitForExit(4000)
+        if ($alive) {
+            $out = Get-Content -LiteralPath $outFile -Raw -ErrorAction SilentlyContinue
+            if ($out -match 'jsonrpc') { Write-Host 'PASS: MCP server starts and answers initialize.' -ForegroundColor Green; $ok = $true }
+            else { Write-Host 'WARN: MCP server started but produced no JSON-RPC output.' -ForegroundColor Yellow; $ok = $false }
+            if (-not $proc.HasExited) { $proc.Kill() }
+        } else {
+            Write-Host 'WARN: MCP server exited within 4s of startup. Enable EVERYTHING_MCP_LOG=debug to diagnose.' -ForegroundColor Yellow
+            $ok = $false
+        }
+    } catch {
+        Write-Host "WARN: could not start the MCP server for verification ($($_.Exception.Message))." -ForegroundColor Yellow
         $ok = $false
     }
     Remove-Item $inFile, $outFile -Force -ErrorAction SilentlyContinue
@@ -481,6 +631,8 @@ Write-Host 'Instant File Search MCP installer' -ForegroundColor Green
 Write-Host "Install root: $InstallRoot" -ForegroundColor Gray
 if ($isCheckout) { Write-Host 'Source: local checkout' -ForegroundColor Gray }
 else { Write-Host "Source: GitHub release ($ReleaseBase)" -ForegroundColor Gray }
+
+$elevated = Test-Elevated
 
 $selected = @(Select-InstallClients)
 if ($SkipCodex) { $selected = @($selected | Where-Object { $_ -ne 'codex' }) }
@@ -531,7 +683,8 @@ elseif (Test-Path -LiteralPath (Join-Path $InstallRoot 'everything\Everything.ex
     Write-Host 'WARN: Fallback Engine is not running and no bundled engine was deployed.' -ForegroundColor Yellow
 }
 
-if (-not $DryRun) { Test-Installation | Out-Null }
+$verifyOk = $true
+if (-not $DryRun) { $verifyOk = Test-Installation }
 
 Write-Host "`nInstalled binary: $stableBinary" -ForegroundColor Green
 Write-Host "Diagnostics:      $((Join-Path $InstallRoot $doctorName))" -ForegroundColor Gray
@@ -544,3 +697,10 @@ if (-not $elevated -and (Get-Service -Name $serviceName -ErrorAction SilentlyCon
     Write-Host 'NOTE: the native indexer service is not registered yet (needs admin). Searches work now via the Fallback Engine; to enable the fast native indexer, run the printed elevated command or re-run this installer elevated.' -ForegroundColor Yellow
 }
 Write-Host 'Restart your AI app (or start a new session) so it reloads the MCP configuration.'
+
+if (-not $verifyOk) {
+    Write-Host "`nThe installer finished, but the post-install verification failed. Run the diagnostics script for details:" -ForegroundColor Red
+    Write-Host "  $((Join-Path $InstallRoot $doctorName))" -ForegroundColor Gray
+    exit 1
+}
+exit 0
