@@ -144,11 +144,15 @@ extended to cover the Everything tokens an agent would actually type.
   Native is the more correct engine; the divergence is accepted and
   documented, not fixed (matching Everything would require re-indexing
   junction targets, trading correctness for parity).
-- **`dm:today` recency.** Immediately after a fresh reindex, `dm:today` can
-  differ by ~15% (native 8,046 vs Everything 9,308 in the 2026-08-03 03:10
-  run) because Everything reads live MFT timestamps and native serves its
-  scan snapshot plus USN upserts. Re-check after the index settles; the
-  absolute-date paths (`dm:2026-07-01`) match exactly.
+- **`dm:today` recency.** The live indexer's USN watcher may lag behind
+  Everything's live MFT reads. A fresh battery (2026-08-03 ~03:15 UTC)
+  showed native=9,783 vs Everything=19,886 for `dm:today` (51% gap), while
+  all individual date probes pass (native matches Everything exactly when
+  the date range is computed in-process). The gap is a freshness issue in
+  the pipe-to-indexer path, not a code bug: absolute-date paths
+  (`dm:2026-07-01`) match exactly, and the same 0.5-2% systematic undercount
+  appears across ALL file-count probes (`file:`, `folder:`, `*.png`, etc.),
+  confirming the live index has slightly fewer entries overall.
 
 ### Query surface: native now supports (Everything 1.5 tokens)
 
