@@ -185,6 +185,12 @@ Outputs:
 
 The installer registers the indexer as a Windows service (`instant-file-search-indexer`, auto-start). Run `indexer.exe scan` for a one-shot diagnostic, or `indexer.exe serve` to run the indexer in the foreground.
 
+### oh-my-opencode-slim (OMO) auto-configuration
+
+If [oh-my-opencode-slim](https://github.com/anthropics/oh-my-opencode-slim) is installed, the installer automatically patches its config to add `instant-file-search` to every sub-agent's `mcps` array. This gives sub-agents (explorer, fixer, designer, oracle, librarian) access to the instant search tools so they can use them instead of falling back to slow shell commands.
+
+Orchestrators with `mcps: ["*"]` are left untouched. The installer creates a timestamped backup before modifying the config.
+
 ### Plugin adapter (OpenCode sub-agents)
 
 Requires Node.js 18+:
@@ -196,7 +202,6 @@ npm run build
 ```
 
 Output: `plugin/dist/index.js`
-
 ### Tests
 
 ```sh

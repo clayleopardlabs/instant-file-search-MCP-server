@@ -454,6 +454,7 @@ function Install-OpenCode {
         Write-Action "Install plugin files into '$openCodePluginRoot'"
         Write-Action "Set user INSTANT_FS_MCP_BINARY to '$stableBinary'"
         Write-Action "Add MCP server '$serverName' to '$openCodeConfig'"
+        Install-OmoMcpAccess
         return
     }
 
@@ -507,6 +508,9 @@ function Install-OpenCode {
     if ($ok) { Write-Host "PASS: OpenCode MCP server '$serverName' configured in '$openCodeConfig'." -ForegroundColor Green }
     else { Write-Host "WARN: could not update '$openCodeConfig'. Add the MCP entry manually - see README \"Set up a single app yourself\"." -ForegroundColor Yellow }
     Remove-OrphanOpenCodeJson $openCodeConfig
+
+    # Ensure oh-my-opencode-slim sub-agents can see the search tools.
+    Install-OmoMcpAccess
 }
 
 function Install-Claude {
@@ -518,6 +522,87 @@ function Install-Claude {
     Ensure-Property $servers $serverName ([pscustomobject]@{ command = $stableBinary; args = @() })
     Write-JsonConfig $claudeConfig $config
     Write-Host "PASS: Claude Desktop MCP server configured in '$claudeConfig'." -ForegroundColor Green
+}
+
+# Detect oh-my-opencode-slim (OMO) and add instant-file-search to every
+# sub-agent's mcps array so the search tools are visible to subagents.
+# Orchestrators that already have mcps: ["*"] are left untouched.
+function Install-OmoMcpAccess {
+    Write-Step 'Configuring oh-my-opencode-slim sub-agent MCP access'
+    $omoConfig = Join-Path $openCodeConfigDir 'oh-my-opencode-slim.json'
+    $omoConfigJsonc = Join-Path $openCodeConfigDir 'oh-my-opencode-slim.jsonc'
+    $omoPath = if (Test-Path -LiteralPath $omoConfigJsonc) { $omoConfigJsonc }
+              elseif (Test-Path -LiteralPath $omoConfig) { $omoConfig }
+              else { $null }
+
+    if (-not $omoPath) {
+        Write-Host '   oh-my-opencode-slim config not found; skipping.' -ForegroundColor Gray
+        return
+    }
+
+    if ($DryRun) {
+        Write-Action "Add 'instant-file-search' to sub-agent mcps in '$omoPath'"
+        return
+    }
+
+    try {
+        $config = Read-JsonConfig $omoPath
+    } catch {
+        Write-Host "WARN: could not parse '$omoPath'; skipping OMO configuration." -ForegroundColor Yellow
+        return
+    }
+
+    Backup-Config $omoPath
+    $changed = $false
+    $mcpEntry = 'instant-file-search'
+
+    # OMO config has a top-level 'presets' object, each containing agent
+    # definitions with optional 'mcps' arrays.  We iterate every preset and
+    # every agent, skipping orchestrators (they typically have ["*"]).
+    $presets = $config.PSObject.Properties['presets'].Value
+    if (-not $presets) {
+        Write-Host '   No presets found in OMO config; skipping.' -ForegroundColor Gray
+        return
+    }
+
+    foreach ($presetName in $presets.PSObject.Properties.Name) {
+        $preset = $presets.PSObject.Properties[$presetName].Value
+        if (-not $preset) { continue }
+
+        foreach ($agentName in $preset.PSObject.Properties.Name) {
+            $agent = $preset.PSObject.Properties[$agentName].Value
+            if (-not $agent -or -not ($agent.PSObject.Properties['mcps'])) { continue }
+
+            $mcps = @($agent.mcps)
+
+            # Skip agents with wildcard mcps (orchestrators like ["*"])
+            if ($mcps -contains '*') { continue }
+
+            # Already present? Nothing to do.
+            if ($mcps -contains $mcpEntry) {
+                Write-Host "   preset '$presetName' / $agentName`: already has '$mcpEntry'" -ForegroundColor Gray
+                continue
+            }
+
+            # Add the entry.
+            $newMcps = @($mcps) + @($mcpEntry)
+            $agent.mcps = $newMcps
+            $changed = $true
+            Write-Host "   preset '$presetName' / $agentName`: added '$mcpEntry' to mcps" -ForegroundColor Green
+        }
+    }
+
+    if ($changed) {
+        # Write back as JSON (ConvertTo-Json).  Use File.WriteAllText with
+        # UTF-8 no-BOM to avoid the BOM that PowerShell 5.1 Set-Content adds,
+        # which would break JSONC parsers on re-read.
+        $json = $config | ConvertTo-Json -Depth 20
+        $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+        [System.IO.File]::WriteAllText($omoPath, $json, $utf8NoBom)
+        Write-Host "PASS: OMO sub-agent MCP access configured." -ForegroundColor Green
+    } else {
+        Write-Host '   All sub-agents already have instant-file-search; no changes needed.' -ForegroundColor Gray
+    }
 }
 
 function Install-NativeService {
