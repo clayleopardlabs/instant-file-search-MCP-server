@@ -84,7 +84,7 @@ impl EverythingHandler {
         Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
 
-    #[tool(description = "List recently created, modified, renamed, or deleted files across all indexed drives. USE THIS to answer 'what files changed recently?' or 'what was modified in the last hour?'. Returns change events with timestamps, paths, and reason (created/modified/renamed/deleted). Optionally filter with 'since' (FILETIME) and 'limit'. USE limit=50 for reasonable output. To filter by time: 'since' is a Windows FILETIME (100ns intervals since 1601-01-01, NOT .NET DateTime.Ticks). To find files from the last N hours, subtract N*36000000000 from the current FILETIME. Without 'since', returns all retained events (up to 100k).")]
+    #[tool(description = "List recently created, modified, renamed, or deleted files across all indexed drives. USE THIS to answer 'what files changed recently?' or 'what was modified in the last hour?'. Returns change events with timestamps, paths, and reason (created/modified/renamed/deleted). SIMPLEST USAGE: pass hours=1 to get the last hour, hours=24 for the last day — the server computes the FILETIME for you. Also accepts 'since' (Windows FILETIME, 100ns since 1601, NOT .NET ticks) and 'limit' (0 = all, capped at 100k; use limit=50 for reasonable output).")]
     async fn recent_changes(
         &self,
         Parameters(params): Parameters<RecentChangesParams>,

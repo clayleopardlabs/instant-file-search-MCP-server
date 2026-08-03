@@ -129,6 +129,8 @@ pub struct AggregateParams {
 pub struct RecentChangesParams {
     /// Only return events with a timestamp (FILETIME, 100ns since 1601) strictly newer than this. 0 returns all retained events.
     pub since: Option<i64>,
+    /// EASIER ALTERNATIVE to 'since': return events from the last N hours. Pass a small integer like 1 or 24. The server computes the FILETIME for you. Use this instead of 'since' to avoid 18-digit FILETIME math.
+    pub hours: Option<u32>,
     /// Maximum number of events to return. 0 (default) returns all retained events (ring buffer capped at 100,000).
     pub limit: Option<usize>,
 }

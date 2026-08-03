@@ -326,7 +326,20 @@ fn options_from_recent(since: i64, limit: usize) -> serde_json::Value {
 /// no Everything equivalent; if the indexer pipe is unavailable the caller
 /// surfaces an explanatory error rather than falling back.
 pub fn recent_changes(params: &RecentChangesParams) -> Result<RecentChanges> {
-    let since = params.since.unwrap_or(0);
+    let since = match (params.since, params.hours) {
+        (Some(s), _) => s,
+        (None, Some(h)) => {
+            // FILETIME is 100ns intervals since 1601-01-01. Convert "last N hours"
+            // to a FILETIME cutoff so callers don't have to do 18-digit math.
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_err(|e| anyhow!("clock error: {e}"))?;
+            let now_filetime = (now.as_secs() as i64 + 11644473600) * 10_000_000
+                + (now.subsec_nanos() as i64 / 100);
+            now_filetime - (h as i64) * 3_600_000_000_000
+        }
+        (None, None) => 0,
+    };
     let limit = params.limit.unwrap_or(0);
     let data = exchange("recent_changes", Some(options_from_recent(since, limit)))?;
     Ok(serde_json::from_value(data).map_err(|e| anyhow!("native recent_changes: bad response: {e}"))?)
