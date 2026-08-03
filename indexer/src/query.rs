@@ -374,7 +374,7 @@ pub fn tokenize(query: &str, opts: &QueryOptions) -> Vec<Token> {
             if !exts.is_empty() {
                 Token::Ext(exts)
             } else {
-                continue;
+                Token::Never
             }
         } else if lower.starts_with("attrib:") {
             // Everything allows negation both outside (`!attrib:d`) and inside
@@ -414,32 +414,32 @@ pub fn tokenize(query: &str, opts: &QueryOptions) -> Vec<Token> {
         } else if lower.starts_with("size:") {
             match parse_size_filter(&term[5..], metric_mode) {
                 Some(f) => Token::Size(f),
-                None => continue,
+                None => Token::Never,
             }
         } else if lower.starts_with("len:") {
             match parse_size_filter(&term[4..], metric_mode) {
                 Some(f) => Token::Len(f),
-                None => continue,
+                None => Token::Never,
             }
         } else if lower.starts_with("frn:") {
             match parse_size_filter(&term[4..], false) {
                 Some(f) => Token::Frn(f),
-                None => continue,
+                None => Token::Never,
             }
         } else if lower.starts_with("dm:") {
             match parse_date_filter(&term[3..]) {
                 Some((op, v)) => Token::Date { kind: DateKind::Modified, op, value: v },
-                None => continue,
+                None => Token::Never,
             }
         } else if lower.starts_with("dc:") {
             match parse_date_filter(&term[3..]) {
                 Some((op, v)) => Token::Date { kind: DateKind::Created, op, value: v },
-                None => continue,
+                None => Token::Never,
             }
         } else if lower.starts_with("da:") {
             match parse_date_filter(&term[3..]) {
                 Some((op, v)) => Token::Date { kind: DateKind::Accessed, op, value: v },
-                None => continue,
+                None => Token::Never,
             }
         } else if term.starts_with("!<") && term.ends_with('>') {
             Token::Exclude { pattern: term[2..term.len() - 1].to_string(), whole_word: false, case_sensitive: false, anchored_start: false, anchored_end: false }
@@ -1572,6 +1572,32 @@ mod tests {
         assert_eq!(got("attrib:!d"), vec![".env", "pagefile.sys"]);
         // Unknown letters reject the token entirely (falls through to bare match).
         assert_eq!(got("attrib:q"), Vec::<String>::new());
+    }
+
+    #[test]
+    fn invalid_filter_tokens_match_nothing() {
+        // One entry so the assertions are meaningful: an empty index would
+        // pass trivially.
+        let map: HashMap<String, IndexedFile> = HashMap::from([
+            ("readme.md".to_string(), entry(r"B:\p\readme.md", false, 1_700_000_000)),
+        ]);
+        let opts = |q: &str| QueryOptions { query: q.to_string(), ..Default::default() };
+        let got = |q: &str| {
+            let r = search(&map, &opts(q));
+            let mut v: Vec<String> = r.entries.iter().map(|e| e.name.clone()).collect();
+            v.sort();
+            v
+        };
+        // Invalid filters must match nothing (Token::Never), NOT everything.
+        // (Everything returns zero results for an invalid filter; dropping the
+        // token would make the query match the whole index.)
+        assert_eq!(got("size:garbage"), Vec::<String>::new());
+        assert_eq!(got("len:garbage"), Vec::<String>::new());
+        assert_eq!(got("frn:garbage"), Vec::<String>::new());
+        assert_eq!(got("dm:garbage"), Vec::<String>::new());
+        assert_eq!(got("dc:garbage"), Vec::<String>::new());
+        assert_eq!(got("da:garbage"), Vec::<String>::new());
+        assert_eq!(got("ext:"), Vec::<String>::new());
     }
 
     #[test]
