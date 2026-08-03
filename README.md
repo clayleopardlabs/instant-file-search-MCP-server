@@ -28,67 +28,85 @@ Searches are answered in milliseconds straight from memory. Nothing gets written
 
 ## Install
 
-This tool is **Windows-only**: it reads the master file list that only Windows maintains. You need **Windows 10 or 11** — nothing else.
+This tool is Windows-only. It reads the master file list that Windows keeps. Your computer must have Windows 10 or Windows 11. This tool will not operate on other computers.
 
-### The easy way (recommended)
+### The recommended method
 
-1. Open **PowerShell**: press the Start key, type `powershell`, and press Enter.
-2. Copy this one line, paste it into the PowerShell window, and press Enter:
+Open PowerShell:
+
+1. Press the Start key.
+2. Type `powershell`.
+3. Press the Enter key.
+
+Run the installer:
+
+4. Enter the command below in the PowerShell window.
 
    ```powershell
    powershell -c "irm https://raw.githubusercontent.com/clayleopardlabs/instant-file-search-MCP-server/master/scripts/install.ps1 | iex"
    ```
 
-   The installer downloads the MCP server, the native indexer, and the `instant-file-search-fallback-engine` straight from the latest GitHub release — no Rust toolchain, no compiling. It also installs the OpenCode plugin automatically, so sub-agents can use the same search tools.
+5. Press the Enter key.
 
-3. When Windows asks for permission, click **Yes**. (This registers the background indexer as a service — the only step that needs administrator rights.) If you skip or miss the prompt, the tools still work using the Fallback Engine, just a little slower — you can register the fast native indexer later by running the installer elevated.
-4. Restart your AI app (VS Code, Cursor, Claude Desktop, or OpenCode).
+NOTE: The installer downloads the MCP server, the native indexer, and the `instant-file-search-fallback-engine` from the latest release on GitHub. The Rust toolchain is not required. The installer does not compile files. It also installs the OpenCode plug-in automatically. Then the sub-agents can use the same search tools.
 
-That's it. Your AI assistant now has five new tools — `find_files`, `count_files`, `search_status`, `recent_changes`, and `aggregate_files`.
+6. Press **Yes** when Windows shows the permission prompt.
+7. Restart your AI app. It can be VS Code, Cursor, Claude Desktop, or OpenCode.
 
-### Already have the code?
+NOTE: This step puts the background indexer into service. It is the only step that uses administrator rights.
 
-If you downloaded or cloned this repository, run the installer from inside the folder instead:
+NOTE: If you cannot see the permission prompt, the tools work with the fallback engine. They are slower. You can register the native indexer subsequently by running the installer in elevated mode.
+
+After the installation, your AI assistant has five new tools: `find_files`, `count_files`, `search_status`, `recent_changes`, and `aggregate_files`.
+
+### You have the source code
+
+If you downloaded or cloned this repository, operate the installer from the folder. You can operate it from the checkout copy of the source code.
 
 ```powershell
 .\scripts\install.ps1
 ```
 
-It detects which AI apps you have (Codex, OpenCode, and Claude Desktop) and asks which ones to set up. Press **A** for all detected apps, or type a comma-separated list. It backs up your configuration files before touching them, and it's safe to run again any time. When run from a checkout, it prefers freshly built binaries in `target/release` and downloads the rest from the release.
+NOTE: The installer finds the AI apps on your computer: Codex, OpenCode, and Claude Desktop. It selects the apps to set up. Press **A** to select all the detected apps. You can also type a comma-separated list. The installer saves a copy of the configuration files before it changes them. It is safe to operate the installer again at any time. If you operate it from a checkout, it uses the newly built files in `target/release`. It downloads the other files from the release.
 
-To make sure everything is healthy later:
+Do the health check:
 
-```powershell
-& "$env:LOCALAPPDATA\ClayLeopardLabs\instant-file-search\doctor.ps1"
-```
+1. Operate the command below to make sure that all is in good order.
 
-(If you installed from a checkout, the equivalent is `./scripts/doctor.ps1` from inside the repo.)
+   ```powershell
+   & "$env:LOCALAPPDATA\ClayLeopardLabs\instant-file-search\doctor.ps1"
+   ```
 
-### Set up a single app yourself
+2. Operate `./scripts/doctor.ps1` from the repository if you installed from a checkout.
 
-The installer puts the server here:
+### Configure one app at a time
+
+The installer puts the server in this location:
 
 ```
 %LOCALAPPDATA%\ClayLeopardLabs\instant-file-search\instant-file-search-mcp-server.exe
 ```
 
-For a plain MCP host (VS Code, Cursor, Claude Desktop), add it to your MCP client configuration:
+Add the server to the MCP client configuration:
 
-```json
-{
-  "mcpServers": {
-    "instant-file-search": {
-      "type": "local",
-      "command": ["C:/path/to/instant-file-search-mcp-server.exe"],
-      "enabled": true
-    }
-  }
-}
-```
+1. Open the configuration for the MCP host.
+2. Add the section below to the configuration.
 
-For **OpenCode**, add it under the `mcp` key in `~/.config/opencode/opencode.json` (or `opencode.jsonc`). The installer adds the plugin adapter automatically, so OpenCode sub-agents can use the same search tools.
+   ```json
+   {
+     "mcpServers": {
+       "instant-file-search": {
+         "type": "local",
+         "command": ["C:/path/to/instant-file-search-mcp-server.exe"],
+         "enabled": true
+       }
+     }
+   }
+   ```
 
-After setting it up, restart your AI app. The tools appear in its tool list.
+NOTE: For a plain MCP host, use the configuration shown above. For OpenCode, add the configuration to `opencode.json` or to `opencode.jsonc`. The installer adds the plug-in adapter automatically.
+
+3. Restart your AI app. The tool list will show the new tools.
 
 ## What Your AI Can Do With It
 
