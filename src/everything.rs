@@ -354,7 +354,7 @@ pub fn search(params: SearchParams) -> Result<SearchResults> {
     }
     let sort = params
         .sort
-        .as_deref()
+        .map(|s| s.as_str())
         .and_then(parse_sort)
         .unwrap_or(Sort::NameAscending);
 

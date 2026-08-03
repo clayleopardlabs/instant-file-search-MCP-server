@@ -218,15 +218,29 @@ const plugin: Plugin = async (_input, _options) => {
                 "offset=100 (page 2), etc. Default: 0.",
             ),
           sort: z
-            .string()
+            .enum([
+              "name",
+              "name_desc",
+              "path",
+              "path_desc",
+              "size",
+              "size_asc",
+              "date_modified",
+              "date_modified_asc",
+              "date_created",
+              "date_created_asc",
+              "date_accessed",
+              "date_accessed_asc",
+              "extension",
+              "extension_desc",
+            ])
             .optional()
             .describe(
-              "Sort order: name, name_desc, path, path_desc, size, size_asc, " +
-                "date_modified, date_modified_asc, date_created, date_created_asc, " +
-                "date_accessed, date_accessed_asc, extension, extension_desc, " +
-                "run_count, run_count_asc, date_run, date_run_asc, " +
-                "type_name, type_name_desc, date_recently_changed, " +
-                "date_recently_changed_asc. Default: name.",
+              "Sort order. Valid values: name, name_desc, path, path_desc, " +
+                "size (largest first), size_asc, date_modified (newest first), " +
+                "date_modified_asc, date_created, date_created_asc, " +
+                "date_accessed, date_accessed_asc, extension, extension_desc. " +
+                "Default: name.",
             ),
           fields: z
             .string()

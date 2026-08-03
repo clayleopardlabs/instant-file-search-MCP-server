@@ -1,5 +1,63 @@
 use schemars::JsonSchema;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+
+/// Sort order for search results. Mirrors the sort tokens accepted by both
+/// the native indexer and the Everything engine. Serializes to the wire token
+/// (e.g. `date_modified_asc`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SortOrder {
+    /// Sort by file name, ascending (default).
+    Name,
+    /// Sort by file name, descending.
+    NameDesc,
+    /// Sort by full path, ascending.
+    Path,
+    /// Sort by full path, descending.
+    PathDesc,
+    /// Sort by size, largest first.
+    Size,
+    /// Sort by size, smallest first.
+    SizeAsc,
+    /// Sort by last-modified time, newest first.
+    DateModified,
+    /// Sort by last-modified time, oldest first.
+    DateModifiedAsc,
+    /// Sort by creation time, newest first.
+    DateCreated,
+    /// Sort by creation time, oldest first.
+    DateCreatedAsc,
+    /// Sort by last-accessed time, newest first.
+    DateAccessed,
+    /// Sort by last-accessed time, oldest first.
+    DateAccessedAsc,
+    /// Sort by file extension, then name.
+    Extension,
+    /// Sort by file extension, descending, then name.
+    ExtensionDesc,
+}
+
+impl SortOrder {
+    /// The wire token for this sort order (matches the indexer's sort keys).
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            SortOrder::Name => "name",
+            SortOrder::NameDesc => "name_desc",
+            SortOrder::Path => "path",
+            SortOrder::PathDesc => "path_desc",
+            SortOrder::Size => "size",
+            SortOrder::SizeAsc => "size_asc",
+            SortOrder::DateModified => "date_modified",
+            SortOrder::DateModifiedAsc => "date_modified_asc",
+            SortOrder::DateCreated => "date_created",
+            SortOrder::DateCreatedAsc => "date_created_asc",
+            SortOrder::DateAccessed => "date_accessed",
+            SortOrder::DateAccessedAsc => "date_accessed_asc",
+            SortOrder::Extension => "extension",
+            SortOrder::ExtensionDesc => "extension_desc",
+        }
+    }
+}
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[schemars(description = "Find files matching query using Everything NTFS index. Supports wildcards (*.txt), regex, path filters, date/size sorting, and pagination. Default scope is ALL indexed drives (C:, D:, etc.). By default automatically excludes node_modules, .git, and WinSxS directories. Pass include_all=true to search everything.")]
@@ -15,7 +73,11 @@ pub struct SearchParams {
     pub match_whole_word: Option<bool>,
     /// Also search the full file path, not just the file name.
     pub match_path: Option<bool>,
-    pub sort: Option<String>,
+    /// Sort order for results. Valid values: name, name_desc, path, path_desc,
+    /// size (largest first), size_asc, date_modified (newest first),
+    /// date_modified_asc, date_created, date_created_asc, date_accessed,
+    /// date_accessed_asc, extension, extension_desc. Default: name.
+    pub sort: Option<SortOrder>,
     /// Restrict search to files under this path. Example: "C:\\Users" or "B:\\Projects".
     pub path: Option<String>,
     /// Comma-separated list of fields to return: filename, path, size, date_modified, date_created, date_accessed, attributes, extension, run_count, date_run, date_recently_changed.
