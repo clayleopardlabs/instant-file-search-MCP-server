@@ -10,6 +10,25 @@ fallback is Windows-only by construction). Companion doc: `docs/linux-support.md
   WSL2 install (admin + likely reboot) or a remote Ubuntu box. Verify target for the
   plan: **GitHub Actions CI on ubuntu-latest** (repo is on GitHub) for build/test;
   WSL2 later for live fanotify/systemd smoke tests.
+
+## Recommended sandbox target (decided 2026-08-03)
+
+**Ubuntu 24.04 LTS, ext4 root.** The user has a spare PC for a fresh OS install
+that will serve as the live Linux sandbox. Rationale:
+
+- Matches GitHub Actions `ubuntu-latest` (24.04) — sandbox and CI identical,
+  eliminating environment-divergence surprises.
+- Kernel 6.8 covers the full feature surface the port needs: `FAN_RENAME` (5.17+),
+  unprivileged fanotify with FID (5.13+), `statx` btime. The only gap is
+  `stx_subvol` (6.10+), which is btrfs-only and irrelevant on ext4.
+- ext4 root avoids the one real porting caveat: fanotify `FAN_MARK_FILESYSTEM` can
+  fail with `EXDEV` on btrfs subvolumes (forces the inotify fallback). ext4 tests
+  the **primary** fanotify path cleanly.
+- Optional: add a btrfs data partition/second disk later to exercise the fallback
+  path deliberately.
+- Runner-up: Fedora (kernel 6.11+, has `stx_subvol`) but its btrfs default puts
+  bring-up on the fallback path by default. Avoid Arch (kernel churn) and
+  anything with kernel < 5.17 (no `FAN_RENAME`).
 - Windows-only crates today: `windows`, `ntfs`, `everything-ipc`, `windows-service`.
   Everything else (`tokio`, `serde`, `serde_json`, `regex`, `anyhow`, `tracing`,
   `rmcp`, `schemars`) is cross-platform.
