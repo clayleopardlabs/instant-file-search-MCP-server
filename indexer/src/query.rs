@@ -583,6 +583,9 @@ fn parse_relative_span_at(s: &str, now: i64) -> Option<(i64, i64)> {
             "weeks" => n * 7 * 86400,
             "months" => n * 31 * 86400, // Everything: month = 31 days
             "years" => n * 365 * 86400,
+            "hours" => n * 3600,
+            "minutes" | "mins" => n * 60,
+            "seconds" | "secs" => n,
             _ => n * 86400,
         }
     };
@@ -605,6 +608,29 @@ fn parse_relative_span_at(s: &str, now: i64) -> Option<(i64, i64)> {
             }
             // No numeric body: fall through to the named spans below
             // (`lastweek`, `prevweek`, `lastmonth`, `lastyear`, ...).
+        }
+    }
+    // lastNhours / lastNminutes / lastNseconds (rolling sub-day windows).
+    // Everything: `last2hours` = [now - 2h, now]; `prev2hours` = trailing
+    // window ending at today's start. Sub-day units use a clean rolling
+    // window (no +86400 buffer, which would corrupt a 2-hour span).
+    for (prefix, roll) in [("last", true), ("past", true), ("prev", false), ("previous", false)] {
+        if let Some(body) = s.strip_prefix(prefix) {
+            for unit in ["hours", "minutes", "mins", "seconds", "secs"] {
+                if let Some(num) = body.strip_suffix(unit) {
+                    if let Ok(n) = num.trim().parse::<i64>() {
+                        if n > 0 {
+                            let span = span_for(unit, n);
+                            return if roll {
+                                Some((now - span, now))
+                            } else {
+                                Some((today - span, today))
+                            };
+                        }
+                    }
+                    return None;
+                }
+            }
         }
     }
     // bare Ndays / Nweeks (Everything accepts `dm:7days` = last 7 days)
@@ -638,6 +664,37 @@ fn parse_relative_span_at(s: &str, now: i64) -> Option<(i64, i64)> {
         "thisyear" => Some((year_start, now + 86400)),
         "lastyear" | "pastyear" => rolling(365 * 86400),
         "prevyear" | "previousyear" => Some((unix_from_ymd(y - 1, 1, 1), year_start)),
+        // mtd / ytd / qtd: start of current period to now.
+        "mtd" => Some((month_start, now)),
+        "ytd" => Some((year_start, now)),
+        "qtd" => {
+            let q_start_month = ((m - 1) / 3) * 3 + 1;
+            Some((unix_from_ymd(y, q_start_month, 1), now))
+        }
+        // Month names: current year's month only (dm:january = January of
+        // this year, NOT any January).
+        "january" | "jan" => Some((unix_from_ymd(y, 1, 1), unix_from_ymd(y, 2, 1))),
+        "february" | "feb" => Some((unix_from_ymd(y, 2, 1), unix_from_ymd(y, 3, 1))),
+        "march" | "mar" => Some((unix_from_ymd(y, 3, 1), unix_from_ymd(y, 4, 1))),
+        "april" | "apr" => Some((unix_from_ymd(y, 4, 1), unix_from_ymd(y, 5, 1))),
+        "may" => Some((unix_from_ymd(y, 5, 1), unix_from_ymd(y, 6, 1))),
+        "june" | "jun" => Some((unix_from_ymd(y, 6, 1), unix_from_ymd(y, 7, 1))),
+        "july" | "jul" => Some((unix_from_ymd(y, 7, 1), unix_from_ymd(y, 8, 1))),
+        "august" | "aug" => Some((unix_from_ymd(y, 8, 1), unix_from_ymd(y, 9, 1))),
+        "september" | "sep" => Some((unix_from_ymd(y, 9, 1), unix_from_ymd(y, 10, 1))),
+        "october" | "oct" => Some((unix_from_ymd(y, 10, 1), unix_from_ymd(y, 11, 1))),
+        "november" | "nov" => Some((unix_from_ymd(y, 11, 1), unix_from_ymd(y, 12, 1))),
+        "december" | "dec" => Some((unix_from_ymd(y, 12, 1), unix_from_ymd(y + 1, 1, 1))),
+        // Day names: current week's day (Sunday-start), inferred from the
+        // month-name pattern (docs are silent; Everything's week is Sunday
+        // start, confirmed by the prevweek probe).
+        "sunday" | "sun" => Some((week_start, week_start + 86400)),
+        "monday" | "mon" => Some((week_start + 86400, week_start + 2 * 86400)),
+        "tuesday" | "tue" => Some((week_start + 2 * 86400, week_start + 3 * 86400)),
+        "wednesday" | "wed" => Some((week_start + 3 * 86400, week_start + 4 * 86400)),
+        "thursday" | "thu" => Some((week_start + 4 * 86400, week_start + 5 * 86400)),
+        "friday" | "fri" => Some((week_start + 5 * 86400, week_start + 6 * 86400)),
+        "saturday" | "sat" => Some((week_start + 6 * 86400, week_start + 7 * 86400)),
         _ => None,
     }
 }
@@ -1710,6 +1767,50 @@ mod tests {
             let got = ts >= start && ts < end;
             assert_eq!(got, expect, "{token} @ {ts}: {why} (window {start}..{end})");
         }
+    }
+
+    #[test]
+    fn date_constants() {
+        // Everything date constants: month names (current year only), day
+        // names (current week, Sunday-start), mtd/ytd/qtd, and rolling
+        // lastNhours/lastNminutes/lastNseconds. Fixed `now` for determinism.
+        let now = 1_785_600_000 + 5 * 3600; // 2026-08-04T05:00:00Z (local)
+        let today = start_of_day(now);
+        let week_start = today - (((today / 86400) + 4) % 7) * 86400;
+        let (y, m, _) = unix_to_ymd(now);
+        let month_start = unix_from_ymd(y, m, 1);
+        let year_start = unix_from_ymd(y, 1, 1);
+        let q_start = unix_from_ymd(y, ((m - 1) / 3) * 3 + 1, 1);
+
+        // Month names: current year's month only.
+        let (s, e) = parse_relative_span_at("january", now).unwrap();
+        assert_eq!((s, e), (unix_from_ymd(y, 1, 1), unix_from_ymd(y, 2, 1)));
+        let (s, e) = parse_relative_span_at("aug", now).unwrap();
+        assert_eq!((s, e), (unix_from_ymd(y, 8, 1), unix_from_ymd(y, 9, 1)));
+        let (s, e) = parse_relative_span_at("dec", now).unwrap();
+        assert_eq!((s, e), (unix_from_ymd(y, 12, 1), unix_from_ymd(y + 1, 1, 1)));
+
+        // Day names: current week's day (Sunday-start).
+        let (s, e) = parse_relative_span_at("sunday", now).unwrap();
+        assert_eq!((s, e), (week_start, week_start + 86400));
+        let (s, e) = parse_relative_span_at("sat", now).unwrap();
+        assert_eq!((s, e), (week_start + 6 * 86400, week_start + 7 * 86400));
+
+        // mtd / ytd / qtd: start of current period to now.
+        let (s, e) = parse_relative_span_at("mtd", now).unwrap();
+        assert_eq!((s, e), (month_start, now));
+        let (s, e) = parse_relative_span_at("ytd", now).unwrap();
+        assert_eq!((s, e), (year_start, now));
+        let (s, e) = parse_relative_span_at("qtd", now).unwrap();
+        assert_eq!((s, e), (q_start, now));
+
+        // Rolling sub-day windows.
+        let (s, e) = parse_relative_span_at("last2hours", now).unwrap();
+        assert_eq!((s, e), (now - 2 * 3600, now));
+        let (s, e) = parse_relative_span_at("last30minutes", now).unwrap();
+        assert_eq!((s, e), (now - 30 * 60, now));
+        let (s, e) = parse_relative_span_at("last45secs", now).unwrap();
+        assert_eq!((s, e), (now - 45, now));
     }
 
     #[test]

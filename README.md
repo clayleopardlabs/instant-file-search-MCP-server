@@ -138,7 +138,7 @@ The AI can embed these in a search query:
 |-------|---------|--------|
 | `file:` | `file:*.ts` | Files only |
 | `folder:` | `folder:src` | Folders only |
-| `dm:` | `dm:today`, `dm:2days` | Modified in the last 2 days |
+| `dm:` | `dm:today`, `dm:last2hours` | Modified date. Relative: today, yesterday, Ndays, lastNdays, prevNdays, thisweek/lastmonth/etc., Nhours/minutes/secs (rolling). Calendar: jan–dec (current year), sun–sat (current week), mtd, ytd, qtd |
 | `dc:` | `dc:thisweek` | Created this week |
 | `da:` | `da:yesterday` | Opened yesterday |
 | `size:` | `size:>10mb` | Larger than 10 MB (constants: tiny<1kb, small<1mb, medium<1gb, large>1gb, huge>4gb, gigantic>16gb, empty=0) |
