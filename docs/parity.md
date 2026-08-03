@@ -275,8 +275,9 @@ the four are shipped; the fourth is designed but needs external embedding infra.
    USN Change Journal watcher records every applied mutation (CREATE, WRITE,
    RENAME, DELETE, HARD_LINK) into a bounded in-memory ring buffer (cap
    100,000 events), keyed by event reason, local FILETIME timestamp, path, and
-   is_dir. Query with `since` (FILETIME) and `limit`. Everything has no
-   "what changed since X" API at all.
+    is_dir. Query with `hours` (convenience time window), `since` (FILETIME),
+    `reasons` (created/modified/renamed/deleted filter), and `limit` (default
+    100, newest-first). Everything has no "what changed since X" API at all.
 3. **Content search — SHIPPED.** `content:"phrase"` query token (works through
    `find_files`/`count_files`). A bounded `ContentStore` indexes file contents
    for a text-extension allowlist (see `indexer/src/content.rs`: md, txt, rs,
