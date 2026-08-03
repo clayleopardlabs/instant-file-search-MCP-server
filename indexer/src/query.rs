@@ -284,7 +284,11 @@ fn days_in_month(y: i64, m: i64) -> i64 {
 }
 
 /// Tokenize a query string into search tokens.
-pub fn tokenize(query: &str) -> Vec<Token> {
+pub fn tokenize(query: &str, opts: &QueryOptions) -> Vec<Token> {
+    // Everything regex mode: the entire search string is one regex.
+    if opts.regex && !query.is_empty() {
+        return vec![Token::Regex { pattern: query.to_string(), negate: false }];
+    }
     let mut tokens: Vec<Token> = Vec::new();
     let mut group: Vec<Token> = Vec::new();
 
@@ -317,9 +321,18 @@ pub fn tokenize(query: &str) -> Vec<Token> {
             // `case:term` — case-sensitive term.
             let pat = term[5..].trim().to_string();
             if negate {
-                Token::Exclude { pattern: pat, whole_word: false, case_sensitive: true }
+                Token::Exclude { pattern: pat, whole_word: opts.match_whole_word, case_sensitive: true }
             } else {
-                Token::Include { pattern: pat, whole_word: false, case_sensitive: true }
+                Token::Include { pattern: pat, whole_word: opts.match_whole_word, case_sensitive: true }
+            }
+        } else if term.starts_with("ww:") || term.starts_with("wholeword:") {
+            // `ww:term` / `wholeword:term` — whole-word term (Everything
+            // modifier; also forced globally by the match_whole_word param).
+            let pat = term[term.find(':').unwrap() + 1..].trim().to_string();
+            if negate {
+                Token::Exclude { pattern: pat, whole_word: true, case_sensitive: false }
+            } else {
+                Token::Include { pattern: pat, whole_word: true, case_sensitive: false }
             }
         } else if term.starts_with("path:") {
             Token::Path(term[5..].trim().trim_matches('"').to_string())
@@ -363,9 +376,9 @@ pub fn tokenize(query: &str) -> Vec<Token> {
         } else if is_windows_path(term) {
             Token::BarePath(term.to_string())
         } else if negate {
-            Token::Exclude { pattern: term.to_string(), whole_word: false, case_sensitive: false }
+            Token::Exclude { pattern: term.to_string(), whole_word: opts.match_whole_word, case_sensitive: false }
         } else {
-            Token::Include { pattern: term.to_string(), whole_word: false, case_sensitive: false }
+            Token::Include { pattern: term.to_string(), whole_word: opts.match_whole_word, case_sensitive: false }
         };
         group.push(token);
     }
@@ -859,7 +872,7 @@ fn filter_matches<'a>(
     entries: &'a HashMap<String, IndexedFile>,
     opts: &QueryOptions,
 ) -> Vec<&'a IndexedFile> {
-    let tokens = tokenize(&opts.query);
+    let tokens = tokenize(&opts.query, opts);
     let scope = opts.path.as_deref().unwrap_or("").trim_end_matches('\\');
     let scope_lower = scope.to_ascii_lowercase();
     let exclude_parts: Vec<String> = opts

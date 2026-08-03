@@ -10,6 +10,7 @@ plugin/package-lock.json
 # OpenCode runtime state
 .omo/
 .codegraph/
+.cortexkit/
 
 # Environment
 .env
