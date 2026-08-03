@@ -108,6 +108,10 @@ pub enum Token {
     Date { kind: DateKind, op: DateOp, value: i64 },
     /// `folder:` / `file:` type filter.
     TypeFilter(TypeFilter),
+    /// `attrib:` NTFS attribute filter (mask of required FILE_ATTRIBUTE bits).
+    Attrib { mask: u32, negate: bool },
+    /// Matches nothing (unknown attribute letters).
+    Never,
     /// Plain scoping term like `C:\foo` (implicit path).
     BarePath(String),
 }
@@ -347,6 +351,19 @@ pub fn tokenize(query: &str, opts: &QueryOptions) -> Vec<Token> {
             } else {
                 continue;
             }
+        } else if lower.starts_with("attrib:") {
+            // Everything allows negation both outside (`!attrib:d`) and inside
+            // (`attrib:!d`); the two forms combine with XOR.
+            let mut rest = &term[7..];
+            let mut inner = false;
+            if rest.starts_with('!') {
+                inner = true;
+                rest = &rest[1..];
+            }
+            match parse_attrib_mask(rest) {
+                Some(mask) => Token::Attrib { mask, negate: negate ^ inner },
+                None => Token::Never,
+            }
         } else if term.starts_with("folder:") {
             Token::TypeFilter(TypeFilter::Folders)
         } else if term.starts_with("file:") {
@@ -423,6 +440,49 @@ fn split_query(query: &str) -> Vec<String> {
 
 fn is_windows_path(s: &str) -> bool {
     s.len() >= 3 && s.as_bytes()[1] == b':' && s.as_bytes()[0].is_ascii_alphabetic() && s.as_bytes()[2] == b'\\'
+}
+
+/// Map Everything `attrib:` letters to FILE_ATTRIBUTE bits. Multiple letters
+/// are AND-ed (`attrib:hs` = hidden + system). `n` (normal) is a sentinel
+/// (0x80) handled specially by the matcher: matches when no other attribute
+/// flags are set. Unknown letters reject the token (`None`).
+fn parse_attrib_mask(s: &str) -> Option<u32> {
+    const FILE_ATTRIBUTE_READONLY: u32 = 0x0001;
+    const FILE_ATTRIBUTE_HIDDEN: u32 = 0x0002;
+    const FILE_ATTRIBUTE_SYSTEM: u32 = 0x0004;
+    const FILE_ATTRIBUTE_DIRECTORY: u32 = 0x0010;
+    const FILE_ATTRIBUTE_ARCHIVE: u32 = 0x0020;
+    const FILE_ATTRIBUTE_NORMAL: u32 = 0x0080;
+    const FILE_ATTRIBUTE_TEMPORARY: u32 = 0x0100;
+    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
+    const FILE_ATTRIBUTE_COMPRESSED: u32 = 0x0800;
+    const FILE_ATTRIBUTE_OFFLINE: u32 = 0x1000;
+    const FILE_ATTRIBUTE_NOT_CONTENT_INDEXED: u32 = 0x2000;
+    const FILE_ATTRIBUTE_ENCRYPTED: u32 = 0x4000;
+
+    let mut mask = 0u32;
+    for c in s.trim().trim_matches('"').chars() {
+        let bit = match c.to_ascii_lowercase() {
+            'a' => FILE_ATTRIBUTE_ARCHIVE,
+            'r' => FILE_ATTRIBUTE_READONLY,
+            'h' => FILE_ATTRIBUTE_HIDDEN,
+            's' => FILE_ATTRIBUTE_SYSTEM,
+            'd' => FILE_ATTRIBUTE_DIRECTORY,
+            'n' => FILE_ATTRIBUTE_NORMAL,
+            't' => FILE_ATTRIBUTE_TEMPORARY,
+            'p' => FILE_ATTRIBUTE_REPARSE_POINT,
+            'c' => FILE_ATTRIBUTE_COMPRESSED,
+            'o' => FILE_ATTRIBUTE_OFFLINE,
+            'i' => FILE_ATTRIBUTE_NOT_CONTENT_INDEXED,
+            'e' => FILE_ATTRIBUTE_ENCRYPTED,
+            _ => return None,
+        };
+        mask |= bit;
+    }
+    if mask == 0 {
+        return None;
+    }
+    Some(mask)
 }
 
 fn parse_size_filter(s: &str) -> Option<SizeFilter> {
@@ -782,6 +842,17 @@ fn token_matches(
             TypeFilter::Files => !entry.is_dir,
             TypeFilter::Folders => entry.is_dir,
         },
+        Token::Attrib { mask, negate } => {
+            // `n` (NORMAL, 0x80) is a sentinel: matches only when no other
+            // attribute flags are set (Everything's `attrib:n` semantics).
+            let hit = if *mask == 0x80 {
+                entry.attributes == 0 || entry.attributes == 0x80
+            } else {
+                entry.attributes & mask == *mask
+            };
+            if *negate { !hit } else { hit }
+        }
+        Token::Never => false,
     }
 }
 
@@ -1108,6 +1179,11 @@ mod tests {
         (unix + 116_444_736_00i64) * 10_000_000
     }
 
+    /// Local noon 2026-08-01, offset-independent (safe inside the local day).
+    fn aug1_noon() -> i64 {
+        parse_date("2026-08-01").unwrap() + 12 * 3600 - local_offset_secs()
+    }
+
     fn entry(path: &str, is_dir: bool, modified: i64) -> IndexedFile {
         let m = ft(modified);
         let mut e = IndexedFile::new(path.to_string(), 0, m, m, m, is_dir, 0);
@@ -1116,18 +1192,13 @@ mod tests {
     }
 
     fn run(query: &str) -> Vec<String> {
-        // Local noon 2026-08-01, expressed as the UTC unix that maps to it.
-        // Offset-independent: local noon is safely inside the local day for
-        // any real timezone, unlike UTC midnight (which is local Jul 31 in
-        // western zones). 1700000000 = 2023-11.
-        let aug1_noon = parse_date("2026-08-01").unwrap() + 12 * 3600 - local_offset_secs();
         let map: HashMap<String, IndexedFile> = HashMap::from([
             (".gitignore".to_string(), entry(r"B:\p\.gitignore", false, 1_700_000_000)),
             (".env".to_string(), entry(r"B:\p\.env", false, 1_700_000_000)),
-            ("AGENTS.md".to_string(), entry(r"B:\p\AGENTS.md", false, aug1_noon)),
-            ("demo.gif".to_string(), entry(r"B:\p\demo.gif", false, aug1_noon)),
-            ("readme.md".to_string(), entry(r"B:\p\readme.md", false, aug1_noon)),
-            ("docs".to_string(), entry(r"B:\p\docs", true, aug1_noon)),
+            ("AGENTS.md".to_string(), entry(r"B:\p\AGENTS.md", false, aug1_noon())),
+            ("demo.gif".to_string(), entry(r"B:\p\demo.gif", false, aug1_noon())),
+            ("readme.md".to_string(), entry(r"B:\p\readme.md", false, aug1_noon())),
+            ("docs".to_string(), entry(r"B:\p\docs", true, aug1_noon())),
             ("target".to_string(), entry(r"B:\p\target\debug\x.o", false, 1_700_000_000)),
             ("roottarget".to_string(), entry(r"C:\target\root.o", false, 1_700_000_000)),
             ("rootrecycle".to_string(), entry(r"C:\$Recycle.Bin\gone.txt", false, 1_700_000_000)),
@@ -1159,6 +1230,39 @@ mod tests {
         assert!(run("dm:2026-08-01").contains(&"docs".to_string()));
         // Bare term is a substring match, dirs match too.
         assert_eq!(run("file: md"), vec!["AGENTS.md", "readme.md"]);
+    }
+
+    #[test]
+    fn attrib_filter() {
+        const HIDDEN: u32 = 0x0002;
+        const SYSTEM: u32 = 0x0004;
+        const DIRECTORY: u32 = 0x0010;
+        let mut dotenv = entry(r"B:\p\.env", false, 1_700_000_000);
+        dotenv.attributes = HIDDEN;
+        let mut sysfile = entry(r"B:\p\pagefile.sys", false, 1_700_000_000);
+        sysfile.attributes = SYSTEM;
+        let mut docs = entry(r"B:\p\docs", true, aug1_noon());
+        docs.attributes = DIRECTORY;
+        let map: HashMap<String, IndexedFile> = HashMap::from([
+            ("dotenv".to_string(), dotenv),
+            ("sysfile".to_string(), sysfile),
+            ("docs".to_string(), docs),
+        ]);
+        let opts = |q: &str| QueryOptions { query: q.to_string(), ..Default::default() };
+        let got = |q: &str| {
+            let r = search(&map, &opts(q));
+            let mut v: Vec<String> = r.entries.iter().map(|e| e.name.clone()).collect();
+            v.sort();
+            v
+        };
+        // attrib:h matches only the hidden file; combinable with file:.
+        assert_eq!(got("attrib:h"), vec![".env"]);
+        assert_eq!(got("file: attrib:s"), vec!["pagefile.sys"]);
+        // attrib:d matches the directory; attrib:!d excludes it.
+        assert_eq!(got("attrib:d"), vec!["docs"]);
+        assert_eq!(got("attrib:!d"), vec![".env", "pagefile.sys"]);
+        // Unknown letters reject the token entirely (falls through to bare match).
+        assert_eq!(got("attrib:q"), Vec::<String>::new());
     }
 
     #[test]

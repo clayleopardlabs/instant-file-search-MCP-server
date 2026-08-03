@@ -37,6 +37,8 @@ pub struct IndexedFile {
     pub accessed: i64,
     /// `true` for directories.
     pub is_dir: bool,
+    /// NTFS FILE_ATTRIBUTE_* flags from $STANDARD_INFORMATION (query/attrib).
+    pub attributes: u32,
     /// NTFS file record number (used as the USN file reference).
     pub file_ref: u64,
     /// Parent record number for THIS link (hard links: one per directory
@@ -72,6 +74,7 @@ impl IndexedFile {
             modified,
             accessed,
             is_dir,
+            attributes: 0,
             file_ref,
             parent_ref: 0,
             own_name: String::new(),
@@ -406,6 +409,7 @@ fn parse_file_record_inner(
     let mut accessed = 0i64;
     let mut size = 0u64;
     let mut data_seen = false;
+    let mut attributes = 0u32;
 
     while off + 8 <= buf.len() {
         let atype =
@@ -433,6 +437,10 @@ fn parse_file_record_inner(
                 created = i64::from_le_bytes(v[0..8].try_into().ok()?);
                 modified = i64::from_le_bytes(v[8..16].try_into().ok()?);
                 accessed = i64::from_le_bytes(v[24..32].try_into().ok()?);
+            }
+            // FILE_STANDARD_INFORMATION: FileAttributes at offset 32.
+            if v.len() >= 36 {
+                attributes = u32::from_le_bytes(v[32..36].try_into().ok()?);
             }
         } else if atype == ATTR_FILE_NAME && !non_resident {
             let value_len = u32::from_le_bytes([
@@ -501,18 +509,17 @@ fn parse_file_record_inner(
         .into_iter()
         .map(|(p, n, _)| (p, n))
         .collect();
-    Some((
-        IndexedFile::new(
-            String::new(),
-            size,
-            created,
-            modified,
-            accessed,
-            is_dir,
-            record_number,
-        ),
-        pairs,
-    ))
+    let mut entry = IndexedFile::new(
+        String::new(),
+        size,
+        created,
+        modified,
+        accessed,
+        is_dir,
+        record_number,
+    );
+    entry.attributes = attributes;
+    Some((entry, pairs))
 }
 
 /// Build the full path for every entry by walking parent references.

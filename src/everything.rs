@@ -734,7 +734,12 @@ pub(crate) fn format_attributes(attrs: u32) -> String {
     const FILE_ATTRIBUTE_SYSTEM: u32 = 0x0004;
     const FILE_ATTRIBUTE_DIRECTORY: u32 = 0x0010;
     const FILE_ATTRIBUTE_ARCHIVE: u32 = 0x0020;
+    const FILE_ATTRIBUTE_TEMPORARY: u32 = 0x0100;
+    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
     const FILE_ATTRIBUTE_COMPRESSED: u32 = 0x0800;
+    const FILE_ATTRIBUTE_OFFLINE: u32 = 0x1000;
+    const FILE_ATTRIBUTE_NOT_CONTENT_INDEXED: u32 = 0x2000;
+    const FILE_ATTRIBUTE_ENCRYPTED: u32 = 0x4000;
 
     if attrs & FILE_ATTRIBUTE_ARCHIVE != 0 {
         s.push('A');
@@ -751,8 +756,23 @@ pub(crate) fn format_attributes(attrs: u32) -> String {
     if attrs & FILE_ATTRIBUTE_DIRECTORY != 0 {
         s.push('D');
     }
+    if attrs & FILE_ATTRIBUTE_TEMPORARY != 0 {
+        s.push('T');
+    }
+    if attrs & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+        s.push('P');
+    }
     if attrs & FILE_ATTRIBUTE_COMPRESSED != 0 {
         s.push('C');
+    }
+    if attrs & FILE_ATTRIBUTE_OFFLINE != 0 {
+        s.push('O');
+    }
+    if attrs & FILE_ATTRIBUTE_NOT_CONTENT_INDEXED != 0 {
+        s.push('I');
+    }
+    if attrs & FILE_ATTRIBUTE_ENCRYPTED != 0 {
+        s.push('E');
     }
 
     if s.is_empty() {

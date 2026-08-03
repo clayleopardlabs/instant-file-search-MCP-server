@@ -191,10 +191,16 @@ pub fn search(params: &SearchParams) -> Result<SearchResults> {
                     .and_then(|v| v.as_i64())
                     .and_then(|v| ns100_to_iso_string(v as u64))
             };
-            let attributes = match e.get("is_dir").and_then(|v| v.as_bool()) {
-                Some(true) => Some(crate::everything::format_attributes(0x10)),
-                _ => None,
-            };
+            let attributes = e
+                .get("attributes")
+                .and_then(|v| v.as_u64())
+                .map(|a| crate::everything::format_attributes(a as u32))
+                .or_else(|| {
+                    match e.get("is_dir").and_then(|v| v.as_bool()) {
+                        Some(true) => Some(crate::everything::format_attributes(0x10)),
+                        _ => None,
+                    }
+                });
             results.push(SearchResult {
                 filename,
                 path,

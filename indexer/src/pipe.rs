@@ -248,6 +248,7 @@ fn read_request(pipe: HANDLE) -> Result<Request, &'static str> {
                                 "modified": e.modified,
                                 "accessed": e.accessed,
                                 "is_dir": e.is_dir,
+                                "attributes": e.attributes,
                                 "extension": e.extension,
                             })
                         })

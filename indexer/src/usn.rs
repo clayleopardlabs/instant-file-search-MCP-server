@@ -290,6 +290,7 @@ fn upsert_or_remove(index: &Arc<FileIndex>, content: &Arc<crate::content::Conten
         rec.FileAttributes & FILE_ATTRIBUTE_DIRECTORY != 0,
         rec.FileReferenceNumber & 0x0000_FFFF_FFFF_FFFF,
     );
+    entry.attributes = rec.FileAttributes;
     if let Ok(md) = std::fs::metadata(path) {
         if md.is_dir() != entry.is_dir {
             entry.is_dir = md.is_dir();
