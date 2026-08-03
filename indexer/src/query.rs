@@ -106,6 +106,8 @@ pub enum Token {
     Size(SizeFilter),
     /// `len:` filename-length filter (same operators as size:).
     Len(SizeFilter),
+    /// `frn:` file-reference-number filter (same operators as size:).
+    Frn(SizeFilter),
     /// `dm:`, `dc:`, `da:` date filter (unix seconds).
     Date { kind: DateKind, op: DateOp, value: i64 },
     /// `folder:` / `file:` type filter.
@@ -378,6 +380,11 @@ pub fn tokenize(query: &str, opts: &QueryOptions) -> Vec<Token> {
         } else if lower.starts_with("len:") {
             match parse_size_filter(&term[4..]) {
                 Some(f) => Token::Len(f),
+                None => continue,
+            }
+        } else if lower.starts_with("frn:") {
+            match parse_size_filter(&term[4..]) {
+                Some(f) => Token::Frn(f),
                 None => continue,
             }
         } else if lower.starts_with("dm:") {
@@ -1061,6 +1068,7 @@ fn token_matches(
         }
         Token::Size(f) => size_match(f, entry.size),
         Token::Len(f) => size_match(f, entry.name.len() as u64),
+        Token::Frn(f) => size_match(f, entry.file_ref),
         Token::Date { kind, op, value } => {
             let ts = match kind {
                 DateKind::Modified => entry.modified,
