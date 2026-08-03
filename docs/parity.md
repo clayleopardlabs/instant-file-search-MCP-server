@@ -171,17 +171,37 @@ In addition to the surface below (wildcards `*`/`?`, `regex:`, `case:`, `!`,
   `mtd` / `ytd` / `qtd`, `lastNhours` / `lastNminutes` / `lastNseconds`.
 - Anchors: `^` (start) and `$` (end), plus `start-with:` / `end-with:` /
   `prefix:` / `suffix:`.
-- `parent:` / `child:` / `sibling:` relationship scoping.
-- `rc:` / `recentchange:` filter (native's USN change journal supplies the
-  per-file last-change timestamp).
-- `is:` predicates (`is:folder`, `is:file`, `is:hidden`, `is:system`, ...).
+- `is:` predicates (`is:folder`, `is:file`, `is:hidden`, `is:system`, `is:readonly`, `is:archive`, `is:temporary`, `is:compressed`, `is:encrypted`, `is:offline`, `is:reparse`, `is:not-content-indexed`, `is:normal`).
 - Extended wildcards: `**` (crosses `\`), `[set]`, `[!set]`, `#` (digit),
   and `\` escape.
-- `sort:` as a query token (`sort:size-descending` etc.), in addition to the
-  `sort` param.
 
-### Accepted gaps (Everything data native cannot produce)
+### Accepted gaps (Everything tokens the native engine does not support)
 
+The following Everything tokens are NOT implemented in the native engine.
+Each is documented with rationale for why the gap is accepted.
+
+- **`parent:` / `child:` / `sibling:` relationship scoping.** These require a
+  per-entry parent pointer and sibling chain in the index, plus path-tree
+  traversal at query time. High implementation cost for niche agent usage;
+  agents almost never query by sibling/child relationship. Left as accepted gap.
+- **`rc:` / `recentchange:` filter (query token).** The native engine exposes
+  USN-derived timestamps in `date_recently_changed` and has a `recent_changes`
+  tool for bulk recent-change queries, but the `rc:` query token needs per-file
+  USN reason stored in `IndexedFile`. This requires: (a) a post-scan USN journal
+  read to populate initial reasons, (b) a new field in IndexedFile, (c) USN
+  watcher updates, (d) pipe serialization, (e) query engine filtering. Moderate
+  effort for low agent usage; left as accepted gap.
+- **`sort:` as a query token.** Sort works via the `sort` param on
+  `find_files`/`count_files`. Everything also supports `sort:` as an inline
+  query token (e.g. `foo sort:size-descending`); native does not parse this.
+  The param-based sort covers all agent use cases; left as accepted gap.
+- **`empty:` empty-folder filter.** Requires counting children per directory in
+  the index. Currently the index stores per-entry metadata but not child
+  counts. Moderate effort; left as accepted gap.
+- **`size-on-disk:` / `alloc:` filters.** These use NTFS `$DATA` allocated-
+  length (clusters * cluster size) rather than valid-data-length. Requires
+  adding a new field to `IndexedFile` and parsing an additional MFT attribute
+  during scan. Niche use case; left as accepted gap.
 - **`runcount:` / `date-run:` and the `run_count` / `date_run` fields.**
   Everything tracks file execution history in its own database. Native has
   no execution tracker; approximating it (e.g. via USN reads) is not
@@ -192,8 +212,9 @@ In addition to the surface below (wildcards `*`/`?`, `regex:`, `case:`, `!`,
   a hash pass. Left documented.
 - **Unicode case folding / diacritics folding** (`é` ≡ `e`, `ß` ≡ `ss`).
   Everything folds Unicode case and diacritics; native matches ASCII
-  case-insensitively only. Adding full folding costs a pass over every entry
-  name per query; out of scope for now.
+  case-insensitively only. Adding full folding costs a dependency on a
+  unicode-normalization crate and a pass over every entry name per query;
+  out of scope for now.
 
 ### Result-surface parity
 
