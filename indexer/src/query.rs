@@ -310,13 +310,28 @@ pub fn tokenize(query: &str, opts: &QueryOptions) -> Vec<Token> {
     };
 
     let parts = split_query(query);
+    let mut raw_owned: String = String::new();
     for raw in parts {
         if raw == "|" {
             flush_group(&mut tokens, &mut group);
             continue;
         }
-        let negate = raw.starts_with('!') && !raw.starts_with("!<");
-        let term = if negate { &raw[1..] } else { raw.as_str() };
+        // Operator aliases: or: flushes group (same as |),
+        // and: strips to plain term, not: is alias for !.
+        let mut work = raw.as_str();
+        if work.to_ascii_lowercase().starts_with("or:") {
+            flush_group(&mut tokens, &mut group);
+            work = &work[3..];
+        }
+        if work.to_ascii_lowercase().starts_with("and:") {
+            work = &work[4..];
+        }
+        if work.to_ascii_lowercase().starts_with("not:") {
+            raw_owned = format!("!{}", &work[4..]);
+            work = &raw_owned;
+        }
+        let negate = work.starts_with('!') && !work.starts_with("!<");
+        let term = if negate { &work[1..] } else { work };
         let term = term.trim();
         if term.is_empty() {
             continue;
@@ -1594,6 +1609,22 @@ mod tests {
         assert!(!token_matches(&entry, &tok, &compiled, &opts)); // ends with .rs -> excluded
         let tok = Token::Exclude { pattern: "main".into(), whole_word: false, case_sensitive: false, anchored_start: true, anchored_end: false };
         assert!(!token_matches(&entry, &tok, &compiled, &opts)); // starts with main -> excluded
+    }
+
+    #[test]
+    fn operator_aliases() {
+        // and: is a no-op prefix (AND is default).
+        let results = run("and:readme");
+        assert!(results.contains(&"readme.md".to_string()));
+
+        // not: is alias for !
+        let results = run("not:readme.md");
+        assert!(!results.contains(&"readme.md".to_string()));
+
+        // or: flushes group (same as |).
+        let results = run("readme or:demo");
+        assert!(results.contains(&"readme.md".to_string()));
+        assert!(results.contains(&"demo.gif".to_string()));
     }
 
     #[test]
