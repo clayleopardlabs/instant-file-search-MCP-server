@@ -167,14 +167,14 @@ pub const DEFAULT_EXCLUDES: &[&str] = &[
 /// Returns the byte value and the unit multiplier (>1 when a unit suffix was
 /// present). Everything treats a bare unit value as a range up to the next
 /// unit (`size:1kb` = 1024..2048), so the caller needs to know the multiplier.
-fn parse_size_parts(s: &str) -> Option<(u64, u64)> {
+fn parse_size_parts(s: &str, metric: bool) -> Option<(u64, u64)> {
     let s = s.trim().to_ascii_lowercase();
     let (num, mult) = if let Some(n) = s.strip_suffix("kb") {
-        (n, 1024u64)
+        (n, if metric { 1000u64 } else { 1024 })
     } else if let Some(n) = s.strip_suffix("mb") {
-        (n, 1024 * 1024)
+        (n, if metric { 1000 * 1000 } else { 1024 * 1024 })
     } else if let Some(n) = s.strip_suffix("gb") {
-        (n, 1024 * 1024 * 1024)
+        (n, if metric { 1000 * 1000 * 1000 } else { 1024 * 1024 * 1024 })
     } else if let Some(n) = s.strip_suffix("kib") {
         (n, 1024)
     } else if let Some(n) = s.strip_suffix("mib") {
@@ -191,7 +191,7 @@ fn parse_size_parts(s: &str) -> Option<(u64, u64)> {
 }
 
 fn parse_size(s: &str) -> Option<u64> {
-    parse_size_parts(s).map(|(v, _)| v)
+    parse_size_parts(s, false).map(|(v, _)| v)
 }
 
 /// Parse a date token: `today`, `yesterday`, `Ndays`, or an ISO date.
@@ -299,6 +299,7 @@ pub fn tokenize(query: &str, opts: &QueryOptions) -> Vec<Token> {
     }
     let mut tokens: Vec<Token> = Vec::new();
     let mut group: Vec<Token> = Vec::new();
+    let mut metric_mode = false;
 
     let flush_group = |tokens: &mut Vec<Token>, group: &mut Vec<Token>| {
         if group.len() == 1 {
@@ -314,6 +315,11 @@ pub fn tokenize(query: &str, opts: &QueryOptions) -> Vec<Token> {
     for raw in parts {
         if raw == "|" {
             flush_group(&mut tokens, &mut group);
+            continue;
+        }
+        // `metric:` modifier — switches size interpretation to decimal 1000-based.
+        if raw.to_ascii_lowercase() == "metric:" {
+            metric_mode = true;
             continue;
         }
         // Operator aliases: or: flushes group (same as |),
@@ -388,17 +394,17 @@ pub fn tokenize(query: &str, opts: &QueryOptions) -> Vec<Token> {
         } else if term.starts_with("file:") {
             Token::TypeFilter(TypeFilter::Files)
         } else if lower.starts_with("size:") {
-            match parse_size_filter(&term[5..]) {
+            match parse_size_filter(&term[5..], metric_mode) {
                 Some(f) => Token::Size(f),
                 None => continue,
             }
         } else if lower.starts_with("len:") {
-            match parse_size_filter(&term[4..]) {
+            match parse_size_filter(&term[4..], metric_mode) {
                 Some(f) => Token::Len(f),
                 None => continue,
             }
         } else if lower.starts_with("frn:") {
-            match parse_size_filter(&term[4..]) {
+            match parse_size_filter(&term[4..], false) {
                 Some(f) => Token::Frn(f),
                 None => continue,
             }
@@ -530,16 +536,16 @@ fn parse_attrib_mask(s: &str) -> Option<u32> {
     Some(mask)
 }
 
-fn parse_size_filter(s: &str) -> Option<SizeFilter> {
+fn parse_size_filter(s: &str, metric: bool) -> Option<SizeFilter> {
     let s = s.trim();
-    // Everything size constants (JEDEC units).
+    // Everything size constants (JEDEC units by default; metric: switches to decimal).
     match s.to_ascii_lowercase().as_str() {
-        "tiny" => return Some(SizeFilter::Less(1024)),
-        "small" => return Some(SizeFilter::Less(1024 * 1024)),
-        "medium" => return Some(SizeFilter::Less(1024 * 1024 * 1024)),
-        "large" => return Some(SizeFilter::Greater(1024 * 1024 * 1024)),
-        "huge" => return Some(SizeFilter::Greater(4 * 1024 * 1024 * 1024)),
-        "gigantic" => return Some(SizeFilter::Greater(16 * 1024 * 1024 * 1024)),
+        "tiny" => return Some(SizeFilter::Less(if metric { 1000 } else { 1024 })),
+        "small" => return Some(SizeFilter::Less(if metric { 1_000_000 } else { 1024 * 1024 })),
+        "medium" => return Some(SizeFilter::Less(if metric { 1_000_000_000 } else { 1024 * 1024 * 1024 })),
+        "large" => return Some(SizeFilter::Greater(if metric { 1_000_000_000 } else { 1024 * 1024 * 1024 })),
+        "huge" => return Some(SizeFilter::Greater(if metric { 4_000_000_000 } else { 4 * 1024 * 1024 * 1024 })),
+        "gigantic" => return Some(SizeFilter::Greater(if metric { 16_000_000_000 } else { 16 * 1024 * 1024 * 1024 })),
         "empty" => return Some(SizeFilter::Equal(0)),
         _ => {}
     }
@@ -569,7 +575,7 @@ fn parse_size_filter(s: &str) -> Option<SizeFilter> {
     // Bare size with a unit suffix is a granularity range to the next unit
     // (`size:1kb` = 1024..2048 per Everything). A bare unitless number is an
     // exact match (`size:100` = exactly 100 bytes).
-    if let Some((v, mult)) = parse_size_parts(s) {
+    if let Some((v, mult)) = parse_size_parts(s, metric) {
         if mult > 1 {
             return Some(SizeFilter::Range { min: v, max: v + mult - 1 });
         }
