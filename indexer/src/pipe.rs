@@ -370,7 +370,20 @@ fn extract_content_terms(query: &str) -> (String, Vec<String>) {
             }
             let token = &query[token_start..i];
             if let Some(value) = token.strip_prefix("content:") {
-                if !value.is_empty() {
+                if value.starts_with('"') {
+                    // content:"..." with spaces inside quotes: scan ahead to
+                    // the closing quote so the whole phrase stays one needle.
+                    let mut q = i;
+                    while q < bytes.len() && bytes[q] != b'"' {
+                        q += 1;
+                    }
+                    let inner = &query[token_start + "content:".len() + 1..q];
+                    if !inner.is_empty() {
+                        needles.push(inner.to_string());
+                        consumed = true;
+                        i = if q < bytes.len() { q + 1 } else { q };
+                    }
+                } else if !value.is_empty() {
                     needles.push(value.to_string());
                     consumed = true;
                 }
@@ -385,4 +398,66 @@ fn extract_content_terms(query: &str) -> (String, Vec<String>) {
         }
     }
     (rest.trim().to_string(), needles)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn extract(q: &str) -> (String, Vec<String>) {
+        extract_content_terms(q)
+    }
+
+    fn rest_words(rest: &str) -> Vec<&str> {
+        rest.split_whitespace().collect()
+    }
+
+    #[test]
+    fn plain_query_passthrough() {
+        let (rest, needles) = extract("foo bar");
+        assert_eq!(rest_words(&rest), vec!["foo", "bar"]);
+        assert!(needles.is_empty());
+    }
+
+    #[test]
+    fn bare_content_token() {
+        let (rest, needles) = extract("foo content:needle bar");
+        assert_eq!(rest_words(&rest), vec!["foo", "bar"]);
+        assert_eq!(needles, vec!["needle"]);
+    }
+
+    #[test]
+    fn quoted_content_token() {
+        let (rest, needles) = extract(r#"content:"fn main""#);
+        assert_eq!(rest, "");
+        assert_eq!(needles, vec!["fn main"]);
+    }
+
+    #[test]
+    fn quoted_content_mixed_with_query() {
+        let (rest, needles) = extract(r#"src content:"pub struct Foo" baz"#);
+        assert_eq!(rest_words(&rest), vec!["src", "baz"]);
+        assert_eq!(needles, vec!["pub struct Foo"]);
+    }
+
+    #[test]
+    fn fully_quoted_content_token() {
+        let (rest, needles) = extract(r#""content:fn main""#);
+        assert_eq!(rest, "");
+        assert_eq!(needles, vec!["fn main"]);
+    }
+
+    #[test]
+    fn multiple_content_tokens() {
+        let (rest, needles) = extract(r#"content:"a b" content:c"#);
+        assert_eq!(rest, "");
+        assert_eq!(needles, vec!["a b", "c"]);
+    }
+
+    #[test]
+    fn unquoted_content_with_following_words() {
+        let (rest, needles) = extract("content:needle rest here");
+        assert_eq!(rest_words(&rest), vec!["rest", "here"]);
+        assert_eq!(needles, vec!["needle"]);
+    }
 }
