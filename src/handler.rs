@@ -41,7 +41,7 @@ impl EverythingHandler {
         Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
 
-    #[tool(description = "Count files matching a query instantly across ALL indexed drives. USE THIS instead of Get-ChildItem -Recurse | Measure-Object or shell wc/find commands. Examples: '*.json path:C:\\Users', '*.log'. Returns just the count, no file data. For broad patterns, always use this before find_files.")]
+    #[tool(description = "Count files matching a query instantly across ALL indexed drives. USE THIS instead of Get-ChildItem -Recurse | Measure-Object or shell wc/find commands. Examples: '*.json path:C:/Users', '*.log'. Returns just the count, no file data. For broad patterns, always use this before find_files. NOTE: use forward slashes in paths (C:/Users) to avoid JSON escaping issues.")]
     async fn count_files(
         &self,
         Parameters(params): Parameters<CountParams>,
@@ -84,7 +84,7 @@ impl EverythingHandler {
         Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
 
-    #[tool(description = "List recently created, modified, renamed, or deleted files across all indexed drives. USE THIS to answer 'what files changed recently?' or 'what was modified in the last hour?'. Returns change events with timestamps, paths, and reason (created/modified/renamed/deleted). Optionally filter with 'since' (FILETIME) and 'limit'. USE limit=50 for reasonable output. To filter by time: 'since' is a Windows FILETIME (100ns intervals since 1601-01-01). To find files from the last N hours, subtract N*36000000000 from the current FILETIME. Without 'since', returns all retained events (up to 100k).")]
+    #[tool(description = "List recently created, modified, renamed, or deleted files across all indexed drives. USE THIS to answer 'what files changed recently?' or 'what was modified in the last hour?'. Returns change events with timestamps, paths, and reason (created/modified/renamed/deleted). Optionally filter with 'since' (FILETIME) and 'limit'. USE limit=50 for reasonable output. To filter by time: 'since' is a Windows FILETIME (100ns intervals since 1601-01-01, NOT .NET DateTime.Ticks). To find files from the last N hours, subtract N*36000000000 from the current FILETIME. Without 'since', returns all retained events (up to 100k).")]
     async fn recent_changes(
         &self,
         Parameters(params): Parameters<RecentChangesParams>,

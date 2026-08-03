@@ -78,7 +78,7 @@ pub struct SearchParams {
     /// date_modified_asc, date_created, date_created_asc, date_accessed,
     /// date_accessed_asc, extension, extension_desc. Default: name.
     pub sort: Option<SortOrder>,
-    /// Restrict search to files under this path. Example: "C:\\Users" or "B:\\Projects".
+    /// Restrict search to files under this path. USE FORWARD SLASHES to avoid JSON escaping: "C:/Users" or "B:/Projects". Backslashes also work but must be escaped in JSON.
     pub path: Option<String>,
     /// Comma-separated list of fields to return: filename, path, size, date_modified, date_created, date_accessed, attributes, extension, run_count, date_run, date_recently_changed.
     pub fields: Option<String>,
@@ -92,7 +92,7 @@ pub struct SearchParams {
 #[schemars(description = "Count files matching a query instantly. Returns count without transferring file data. USE THIS before find_files for broad patterns.")]
 pub struct CountParams {
     pub query: String,
-    /// Narrow search to a specific directory. Everything automatically normalises path separators.
+    /// Narrow search to a specific directory. USE FORWARD SLASHES to avoid JSON escaping: "C:/Users". Everything normalises path separators automatically.
     pub path: Option<String>,
     pub regex: Option<bool>,
     /// Enable case-sensitive matching (default: case-insensitive).
@@ -109,7 +109,7 @@ pub struct CountParams {
 #[schemars(description = "Disk usage stats for files matching a query: total count, total size, per-extension breakdown, and largest files. Native-only.")]
 pub struct AggregateParams {
     pub query: String,
-    /// Narrow aggregation to files under this path (a directory scope). Example: "C:\\Users" or "B:\\Projects".
+    /// Narrow aggregation to files under this path (a directory scope). USE FORWARD SLASHES to avoid JSON escaping: "C:/Users" or "B:/Projects".
     pub path: Option<String>,
     pub regex: Option<bool>,
     /// Enable case-sensitive matching (default: case-insensitive).
