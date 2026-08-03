@@ -271,7 +271,7 @@ function Write-JsonConfig([string]$Path, $Config) {
 # Returns $true if the file was written or was already up to date.
 function Write-McpConfigPreserving([string]$Path) {
     if (-not (Test-Path -LiteralPath $Path)) {
-        $cfg = [pscustomobject]@{ mcp = [pscustomobject]@{ $serverName = [pscustomobject]@{ command = @($stableBinary); enabled = $true } } }
+        $cfg = [pscustomobject]@{ mcp = [pscustomobject]@{ $serverName = [pscustomobject]@{ type = 'local'; command = @($stableBinary); enabled = $true } } }
         Write-JsonConfig $Path $cfg
         return $true
     }
@@ -285,18 +285,20 @@ function Write-McpConfigPreserving([string]$Path) {
     if ($mcp) { $existing = $mcp.PSObject.Properties[$serverName].Value }
     if ($existing) {
         $cmd = @($existing.command)
-        if ($cmd -contains $stableBinary) {
+        $entryType = $existing.PSObject.Properties['type'].Value
+        if ($cmd -contains $stableBinary -and $entryType -eq 'local') {
             Write-Host "   MCP entry '$serverName' already present and current; leaving config untouched." -ForegroundColor Gray
             return $true
         }
     }
 
-    # The entry is stale (points at an old binary path) - replace it cleanly
-    # via the object model rather than appending a duplicate.
+    # The entry is stale (points at an old binary path, or is missing the
+    # required "type": "local") - replace it cleanly via the object model
+    # rather than appending a duplicate.
     if ($existing) {
         Write-Host "   MCP entry '$serverName' points at an old path; updating it." -ForegroundColor Gray
         $cfg2 = $config
-        Ensure-Property $mcp $serverName ([pscustomobject]@{ command = @($stableBinary); enabled = $true })
+        Ensure-Property $mcp $serverName ([pscustomobject]@{ type = 'local'; command = @($stableBinary); enabled = $true })
         Write-JsonConfig $Path $cfg2
         return $true
     }
@@ -316,7 +318,7 @@ function Write-McpConfigPreserving([string]$Path) {
     Write-Host "   Config has comments we cannot preserve automatically; backing up and rewriting as plain JSON." -ForegroundColor DarkGray
     $cfg2 = $config
     if (-not $mcp) { $mcp = [pscustomobject]@{}; Ensure-Property $cfg2 'mcp' $mcp }
-    Ensure-Property $mcp $serverName ([pscustomobject]@{ command = @($stableBinary); enabled = $true })
+    Ensure-Property $mcp $serverName ([pscustomobject]@{ type = 'local'; command = @($stableBinary); enabled = $true })
     Write-JsonConfig $Path $cfg2
     return $true
 }
@@ -379,7 +381,7 @@ function Insert-McpEntryText([string]$Raw, [string]$BinaryPath) {
     if ($mcpEnd -lt 0) { return $null }
 
     $inner = $Raw.Substring($braceStart + 1, $mcpEnd - $braceStart - 1)
-    $entry = "`n    `"$serverName`": {`n      `"command`": [`"$BinaryPath`"],`n      `"enabled`": true`n    }`n  "
+    $entry = "`n    `"$serverName`": {`n      `"type`": `"local`",`n      `"command`": [`"$BinaryPath`"],`n      `"enabled`": true`n    }`n  "
     if ([string]::IsNullOrWhiteSpace($inner)) {
         $newInner = $entry
     } else {
