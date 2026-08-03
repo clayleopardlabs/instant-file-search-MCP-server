@@ -143,6 +143,7 @@ The AI can embed these in a search query:
 | `da:` | `da:yesterday` | Opened yesterday |
 | `size:` | `size:>10mb` | Larger than 10 MB |
 | `attrib:` | `attrib:h`, `attrib:!d` | Match by NTFS attribute (h hidden, s system, r readonly, d directory, a archive, t temp, c compressed, e encrypted, o offline, p reparse, i not-indexed, n normal) |
+| wildcards | `*.ts`, `file[0-9].txt`, `img#.png`, `**.rs` | `*` any run (not `\\`), `**` any run incl. `\\`, `?` one char, `[set]`/`[!set]` classes, `#` one digit, `\\x` escape |
 | `dupe:` | `dupe:filename` | Find duplicate filenames |
 | `!` | `!*.tmp` | Exclude a pattern |
 | `|` | `*.ts | *.tsx` | Match either pattern |

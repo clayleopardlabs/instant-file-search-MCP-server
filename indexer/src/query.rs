@@ -689,71 +689,227 @@ fn starts_with_ci(s: &str, prefix: &str) -> bool {
     s.len() >= p.len() && s[..p.len()].iter().zip(p).all(|(a, b)| eq_ci(*a, *b))
 }
 
-/// Everything-style wildcard match: `*` = any run, `?` = one char.
-/// Case-insensitive by default (byte-wise, no allocation).
+/// Everything-style wildcard match.
+///
+/// Supported wildcards (matching Everything 1.5):
+///   `*`  any number of chars, does not cross `\`
+///   `**` any number of chars, including `\`
+///   `?`  exactly one char (not `\`)
+///   `[set]` / `[!set]` one char in / not in the set, with `a-z` ranges
+///   `#`  exactly one ASCII digit
+///   `\x` escapes the next char (only meaningful before a wildcard char)
+///
+/// Case-insensitive by default. Patterns without wildcard chars fall back to
+/// a plain substring search (no `\` escape handling, preserving literal
+/// path-like patterns such as `C:\foo`).
+#[inline]
 pub fn wildcard_match(pattern: &str, text: &str, match_case: bool) -> bool {
-    if !pattern.contains(['*', '?']) {
+    if !pattern.contains(['*', '?', '[', '#']) {
         return if match_case {
             text.contains(pattern)
         } else {
             contains_ci(text, pattern)
         };
     }
+    let wcs = parse_wildcard_pattern(pattern);
     if match_case {
-        wildcard_rec(pattern.as_bytes(), text.as_bytes())
+        wc_rec(&wcs, text.as_bytes(), 0, 0, &mut HashMap::new())
     } else {
-        wildcard_rec_ci(pattern.as_bytes(), text.as_bytes())
+        wc_rec_ci(&wcs, text.as_bytes(), 0, 0, &mut HashMap::new())
     }
 }
 
-fn wildcard_rec(p: &[u8], t: &[u8]) -> bool {
-    let (mut pi, mut ti) = (0usize, 0usize);
-    let (mut star_p, mut star_t) = (usize::MAX, 0usize);
-    while ti < t.len() {
-        if pi < p.len() && (p[pi] == b'?' || p[pi] == t[ti]) {
-            pi += 1;
-            ti += 1;
-        } else if pi < p.len() && p[pi] == b'*' {
-            star_p = pi;
-            star_t = ti;
-            pi += 1;
-        } else if star_p != usize::MAX {
-            pi = star_p + 1;
-            star_t += 1;
-            ti = star_t;
-        } else {
-            return false;
-        }
-    }
-    while pi < p.len() && p[pi] == b'*' {
-        pi += 1;
-    }
-    pi == p.len()
+#[derive(Clone, Debug)]
+enum Wc {
+    Star { cross_path: bool },
+    Q,
+    Digit,
+    OneOf { set: Vec<(u8, u8)>, negate: bool },
+    Lit(u8),
 }
 
-fn wildcard_rec_ci(p: &[u8], t: &[u8]) -> bool {
-    let (mut pi, mut ti) = (0usize, 0usize);
-    let (mut star_p, mut star_t) = (usize::MAX, 0usize);
-    while ti < t.len() {
-        if pi < p.len() && (p[pi] == b'?' || eq_ci(p[pi], t[ti])) {
-            pi += 1;
-            ti += 1;
-        } else if pi < p.len() && p[pi] == b'*' {
-            star_p = pi;
-            star_t = ti;
-            pi += 1;
-        } else if star_p != usize::MAX {
-            pi = star_p + 1;
-            star_t += 1;
-            ti = star_t;
-        } else {
-            return false;
+/// Parse a wildcard pattern into tokens. `\` escapes only when it precedes a
+/// wildcard character; otherwise it is kept as a literal `\` so path-like
+/// patterns keep working.
+fn parse_wildcard_pattern(pattern: &str) -> Vec<Wc> {
+    let b = pattern.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        let c = b[i];
+        match c {
+            b'*' => {
+                let cross_path = i + 1 < b.len() && b[i + 1] == b'*';
+                let mut j = i;
+                while j < b.len() && b[j] == b'*' {
+                    j += 1;
+                }
+                out.push(Wc::Star { cross_path });
+                i = j;
+            }
+            b'?' => {
+                out.push(Wc::Q);
+                i += 1;
+            }
+            b'#' => {
+                out.push(Wc::Digit);
+                i += 1;
+            }
+            b'[' => match parse_char_class(b, i) {
+                Some((set, negate, next)) => {
+                    out.push(Wc::OneOf { set, negate });
+                    i = next;
+                }
+                None => {
+                    // Unclosed `[` is a literal.
+                    out.push(Wc::Lit(b'['));
+                    i += 1;
+                }
+            },
+            b'\\' if i + 1 < b.len() && matches!(b[i + 1], b'*' | b'?' | b'[' | b'#' | b'\\') => {
+                out.push(Wc::Lit(b[i + 1]));
+                i += 2;
+            }
+            _ => {
+                out.push(Wc::Lit(c));
+                i += 1;
+            }
         }
     }
-    while pi < p.len() && p[pi] == b'*' {
-        pi += 1;
+    out
+}
+
+/// Parse `[set]` / `[!set]` starting at `i` (which points at `[`). Returns the
+/// set as a range list, the negate flag, and the index just past the closing
+/// `]`. `]` as the first member (after optional `!`) is treated as a literal.
+/// Parse `[set]` / `[!set]` starting at `i` (which points at `[`). Returns the
+/// set as a range list, the negate flag, and the index just past the closing
+/// `]`. `]` as the first member (after optional `!`) is treated as a literal.
+fn parse_char_class(b: &[u8], i: usize) -> Option<(Vec<(u8, u8)>, bool, usize)> {
+    let mut j = i + 1;
+    let negate = j < b.len() && b[j] == b'!';
+    if negate {
+        j += 1;
     }
-    pi == p.len()
+    let mut ranges: Vec<(u8, u8)> = Vec::new();
+    let mut first = true;
+    while j < b.len() {
+        if b[j] == b']' && !first {
+            j += 1;
+            return Some((ranges, negate, j));
+        }
+        first = false;
+        if j + 2 < b.len() && b[j + 1] == b'-' && b[j + 2] != b']' {
+            let (lo, hi) = (b[j], b[j + 2]);
+            ranges.push((lo.min(hi), lo.max(hi)));
+            j += 3;
+        } else {
+            ranges.push((b[j], b[j]));
+            j += 1;
+        }
+    }
+    None
+}
+
+fn class_hit(ranges: &[(u8, u8)], c: u8) -> bool {
+    ranges.iter().any(|&(lo, hi)| c >= lo && c <= hi)
+}
+
+fn class_hit_ci(ranges: &[(u8, u8)], c: u8) -> bool {
+    class_hit(ranges, c) || (c.is_ascii_alphabetic() && class_hit(ranges, c.to_ascii_lowercase()))
+        || (c.is_ascii_alphabetic() && class_hit(ranges, c.to_ascii_uppercase()))
+}
+
+/// Recursive wildcard matcher with memoization on (wc-index, text-index).
+/// `Star { cross_path: true }` (i.e. `**`) may consume `\`; single `*` may
+/// not. `?` matches any single char except `\`.
+fn wc_rec(
+    wcs: &[Wc],
+    t: &[u8],
+    wi: usize,
+    ti: usize,
+    memo: &mut HashMap<(usize, usize), bool>,
+) -> bool {
+    if let Some(&r) = memo.get(&(wi, ti)) {
+        return r;
+    }
+    let r = if wi == wcs.len() {
+        ti == t.len()
+    } else {
+        match &wcs[wi] {
+            Wc::Star { cross_path } => {
+                // Consume zero or more chars; single `*` stops at `\`.
+                let mut ok = wc_rec(wcs, t, wi + 1, ti, memo);
+                let mut k = ti;
+                while !ok && k < t.len() {
+                    if t[k] == b'\\' && !*cross_path {
+                        break;
+                    }
+                    k += 1;
+                    ok = wc_rec(wcs, t, wi + 1, k, memo);
+                }
+                ok
+            }
+            Wc::Q => ti < t.len() && t[ti] != b'\\' && wc_rec(wcs, t, wi + 1, ti + 1, memo),
+            Wc::Digit => ti < t.len() && t[ti].is_ascii_digit() && wc_rec(wcs, t, wi + 1, ti + 1, memo),
+            Wc::OneOf { set, negate } => {
+                let hit = ti < t.len() && class_hit(set, t[ti]);
+                if hit != *negate && ti < t.len() {
+                    wc_rec(wcs, t, wi + 1, ti + 1, memo)
+                } else {
+                    false
+                }
+            }
+            Wc::Lit(c) => ti < t.len() && t[ti] == *c && wc_rec(wcs, t, wi + 1, ti + 1, memo),
+        }
+    };
+    memo.insert((wi, ti), r);
+    r
+}
+
+fn wc_rec_ci(
+    wcs: &[Wc],
+    t: &[u8],
+    wi: usize,
+    ti: usize,
+    memo: &mut HashMap<(usize, usize), bool>,
+) -> bool {
+    if let Some(&r) = memo.get(&(wi, ti)) {
+        return r;
+    }
+    let r = if wi == wcs.len() {
+        ti == t.len()
+    } else {
+        match &wcs[wi] {
+            Wc::Star { cross_path } => {
+                let mut ok = wc_rec_ci(wcs, t, wi + 1, ti, memo);
+                let mut k = ti;
+                while !ok && k < t.len() {
+                    if t[k] == b'\\' && !*cross_path {
+                        break;
+                    }
+                    k += 1;
+                    ok = wc_rec_ci(wcs, t, wi + 1, k, memo);
+                }
+                ok
+            }
+            Wc::Q => ti < t.len() && t[ti] != b'\\' && wc_rec_ci(wcs, t, wi + 1, ti + 1, memo),
+            Wc::Digit => ti < t.len() && t[ti].is_ascii_digit() && wc_rec_ci(wcs, t, wi + 1, ti + 1, memo),
+            Wc::OneOf { set, negate } => {
+                let hit = ti < t.len() && class_hit_ci(set, t[ti]);
+                if hit != *negate && ti < t.len() {
+                    wc_rec_ci(wcs, t, wi + 1, ti + 1, memo)
+                } else {
+                    false
+                }
+            }
+            Wc::Lit(c) => {
+                ti < t.len() && eq_ci(*c, t[ti]) && wc_rec_ci(wcs, t, wi + 1, ti + 1, memo)
+            }
+        }
+    };
+    memo.insert((wi, ti), r);
+    r
 }
 
 fn whole_word_match(text: &str, needle: &str, match_case: bool) -> bool {
@@ -1263,6 +1419,31 @@ mod tests {
         assert_eq!(got("attrib:!d"), vec![".env", "pagefile.sys"]);
         // Unknown letters reject the token entirely (falls through to bare match).
         assert_eq!(got("attrib:q"), Vec::<String>::new());
+    }
+
+    #[test]
+    fn wildcard_extensions() {
+        // `**` crosses `\\`, single `*` does not.
+        assert!(wildcard_match("**.rs", r"src\main.rs", false));
+        assert!(!wildcard_match("*.rs", r"src\main.rs", false));
+        assert!(wildcard_match("*.rs", "main.rs", false));
+        // `?` matches one char (not `\\`).
+        assert!(wildcard_match("a?c", "abc", false));
+        assert!(!wildcard_match("a?c", "ac", false));
+        // `[set]` and `[!set]` with ranges.
+        assert!(wildcard_match("file[0-9].txt", "file5.txt", false));
+        assert!(!wildcard_match("file[0-9].txt", "filex.txt", false));
+        assert!(wildcard_match("file[!0-9].txt", "filex.txt", false));
+        assert!(!wildcard_match("file[!0-9].txt", "file5.txt", false));
+        // `#` matches a single digit.
+        assert!(wildcard_match("img#.png", "img7.png", false));
+        assert!(!wildcard_match("img#.png", "imgx.png", false));
+        // `\\` escapes a wildcard char.
+        assert!(wildcard_match(r"a\*b", "a*b", false));
+        assert!(!wildcard_match(r"a\*b", "axb", false));
+        // Case-insensitive by default; case-sensitive when requested.
+        assert!(wildcard_match("*.TXT", "readme.txt", false));
+        assert!(!wildcard_match("*.TXT", "readme.txt", true));
     }
 
     #[test]
