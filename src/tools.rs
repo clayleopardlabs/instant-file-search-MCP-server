@@ -60,7 +60,7 @@ impl SortOrder {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
-#[schemars(description = "Find files matching query using Everything NTFS index. Supports wildcards (*.txt), regex, path filters, date/size sorting, and pagination. Default scope is ALL indexed drives (C:, D:, etc.). By default automatically excludes node_modules, .git, and WinSxS directories. Pass include_all=true to search everything.")]
+#[schemars(description = "Find files instantly across ALL indexed drives. Supports wildcards (*.txt, *.rs), content search (content:text), date filters (dm:lastweek), size filters (size:>1mb), regex, path scoping, sorting, and pagination. Default excludes node_modules, .git, WinSxS. Pass include_all=true to search everything.")]
 pub struct SearchParams {
     pub query: String,
     pub max_results: Option<u32>,
@@ -89,7 +89,7 @@ pub struct SearchParams {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
-#[schemars(description = "Fast count of files matching query using Everything NTFS index. Default scope is ALL indexed drives. By default automatically excludes node_modules, .git, and WinSxS directories. Pass include_all=true to count everything.")]
+#[schemars(description = "Count files matching a query instantly. Returns count without transferring file data. USE THIS before find_files for broad patterns.")]
 pub struct CountParams {
     pub query: String,
     /// Narrow search to a specific directory. Everything automatically normalises path separators.
@@ -106,7 +106,7 @@ pub struct CountParams {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
-#[schemars(description = "Aggregate stats over files matching a query using the native indexer: total/file/folder counts, total size, per-extension count+size breakdown, and the largest matching entries. This is an exceed capability the Everything API cannot express. Native-only; if the indexer is down this returns an explanatory error.")]
+#[schemars(description = "Disk usage stats for files matching a query: total count, total size, per-extension breakdown, and largest files. Native-only.")]
 pub struct AggregateParams {
     pub query: String,
     /// Narrow aggregation to files under this path (a directory scope). Example: "C:\\Users" or "B:\\Projects".
@@ -125,7 +125,7 @@ pub struct AggregateParams {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
-#[schemars(description = "Recent file-system change events captured from the NTFS USN Change Journal by the native indexer: created/modified/renamed/deleted files with the event reason, a local timestamp, and the path. This is an exceed capability with no Everything equivalent. Native-only; if the indexer is down this returns an explanatory error.")]
+#[schemars(description = "Recently changed files from the NTFS change journal: created/modified/renamed/deleted with timestamps and paths. Native-only.")]
 pub struct RecentChangesParams {
     /// Only return events with a timestamp (FILETIME, 100ns since 1601) strictly newer than this. 0 returns all retained events.
     pub since: Option<i64>,

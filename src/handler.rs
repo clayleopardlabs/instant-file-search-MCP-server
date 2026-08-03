@@ -14,7 +14,7 @@ pub struct EverythingHandler;
 
 #[tool_router]
 impl EverythingHandler {
-    #[tool(description = "INSTANT file/directory search using the local NTFS index (native engine; falls back to the Everything engine when the native indexer is not running). Fastest way to find files on this PC. Default scope: ALL indexed drives (C:, D:, etc.). Supports regex, sort, path filter, exclude_path, selective fields, match_case/match_whole_word/match_path, and pagination via offset. EXCEEDS Everything: the query supports a `content:\"text\"` token to search file contents (native bounded content index, no Windows Search dependency; Everything's content: needs the Windows Search indexer). Response includes: results, total (total matches), returned (count in this page), offset (pagination position), and note (exclusion info). Use this INSTEAD of glob/Get-ChildItem for any filesystem search. IMPORTANT: for broad patterns, call count_files FIRST to gauge result size. Use exclude_path to skip node_modules, WinSxS, etc. Pass include_all=true to search without auto-exclusions.")]
+    #[tool(description = "Find files instantly across ALL indexed drives. USE THIS instead of glob, grep, or Get-ChildItem. Query examples: '*.rs', 'content:handler', 'dm:lastweek size:>1mb', 'attrib:h'. Supports wildcards, regex, content search, date/size filters, path scoping, and sorting. For broad patterns, call count_files first to gauge size.")]
     async fn find_files(
         &self,
         Parameters(params): Parameters<SearchParams>,
@@ -41,7 +41,7 @@ impl EverythingHandler {
         Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
 
-    #[tool(description = "INSTANT count of matching files using the local NTFS index (native engine; falls back to the Everything engine when the native indexer is not running). Returns total count without transferring file data. Default scope: ALL indexed drives — pass path to narrow. Supports regex, match_case, match_whole_word, exclude_path, and include_all. Use this FIRST for broad patterns (e.g. *.tmp, *.json) to gauge total before calling find_files. Always prefer this over recursive shell commands to count files.")]
+    #[tool(description = "Count files matching a query instantly across ALL indexed drives. USE THIS instead of Get-ChildItem -Recurse | Measure-Object or shell wc/find commands. Examples: '*.json path:C:\\Users', '*.log'. Returns just the count, no file data. For broad patterns, always use this before find_files.")]
     async fn count_files(
         &self,
         Parameters(params): Parameters<CountParams>,
@@ -66,7 +66,7 @@ impl EverythingHandler {
         Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
 
-    #[tool(description = "AGGREGATE stats over files matching a query using the native indexer (exceed capability, native-only). Returns: total (matched entries), files, folders, total_size (sum over matches), largest (the top-N biggest entries by size), and by_extension (per-extension count + size breakdown). Pass query to filter (same syntax as find_files), path to scope to a directory, exclude_path/include_all to control exclusions, top to set how many largest entries to return. This capability has no Everything equivalent; if the native indexer is down it returns an explanatory error instead of falling back.")]
+    #[tool(description = "Get disk usage stats for files matching a query: total count, total size, per-extension breakdown, and largest files. USE THIS instead of manually summing file sizes. Examples: '*.log', '*.tmp path:C:\\Windows'. Returns aggregate stats, not individual files.")]
     async fn aggregate_files(
         &self,
         Parameters(params): Parameters<AggregateParams>,
@@ -84,7 +84,7 @@ impl EverythingHandler {
         Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
 
-    #[tool(description = "RECENT file-system changes from the NTFS USN Change Journal via the native indexer (exceed capability, native-only). Returns the most recent change events: created/modified/renamed/deleted files with reason, a local timestamp, and path. Pass since (FILETIME, 100ns since 1601) to only return events newer than that, and limit to cap how many events come back. The ring buffer retains the most recent 100,000 events since the indexer started. This capability has no Everything equivalent; if the native indexer is down it returns an explanatory error instead of falling back.")]
+    #[tool(description = "List recently created, modified, renamed, or deleted files across all indexed drives. USE THIS to answer 'what files changed recently?' or 'what was modified in the last hour?'. Returns change events with timestamps, paths, and reason (created/modified/renamed/deleted). Optionally filter with 'since' (FILETIME) and 'limit'.")]
     async fn recent_changes(
         &self,
         Parameters(params): Parameters<RecentChangesParams>,
@@ -102,7 +102,7 @@ impl EverythingHandler {
         Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
 
-    #[tool(description = "Check search engine status. Returns diagnostics for both engines: the native indexer (indexed file count, volumes, pipe availability) and the Everything engine (window/IPC/db state, engine source, bundled/installed availability). Call this BEFORE using find_files or count_files to verify an engine is available.")]
+    #[tool(description = "Check if the file search service is running. Returns engine status, indexed file count, and volumes. Call this before find_files/count_files if you suspect the service is down.")]
     async fn search_status(&self) -> Result<CallToolResult, ErrorData> {
         let (native_result, everything_result) = tokio::task::spawn_blocking(|| {
             (native::status(), everything::status())
