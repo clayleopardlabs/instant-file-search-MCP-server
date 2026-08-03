@@ -26,9 +26,18 @@ $repoRoot = if ($PSScriptRoot) { Split-Path -Parent $PSScriptRoot } else { $null
 $isCheckout = $repoRoot -and (Test-Path -LiteralPath (Join-Path $repoRoot 'Cargo.toml'))
 $stableBinary = Join-Path $InstallRoot $binaryName
 $stableIndexer = Join-Path $InstallRoot $indexerName
-$openCodeConfigDir = Join-Path $env:USERPROFILE '.config\opencode'
+
+# Simulation mode: redirect all user-config writes into a sandbox and skip the
+# global env-var write, so parallel/simulated installs never touch the real
+# opencode config or the user's environment.
+$simulateRoot = $env:INSTANT_FS_SIMULATE
+if ($simulateRoot) {
+    $openCodeConfigDir = Join-Path $simulateRoot '.config\opencode'
+} else {
+    $openCodeConfigDir = Join-Path $env:USERPROFILE '.config\opencode'
+}
 $openCodePluginRoot = Join-Path $openCodeConfigDir 'plugins\instant-file-search-mcp-plugin'
-$claudeConfig = Join-Path $env:APPDATA 'Claude\claude_desktop_config.json'
+$claudeConfig = if ($simulateRoot) { Join-Path $simulateRoot 'claude-desktop-config.json' } else { Join-Path $env:APPDATA 'Claude\claude_desktop_config.json' }
 
 function Write-Step([string]$Message) { Write-Host "`n==> $Message" -ForegroundColor Cyan }
 function Write-Action([string]$Message) { if ($DryRun) { Write-Host "DRY RUN: $Message" -ForegroundColor Yellow } }
@@ -487,7 +496,11 @@ function Install-OpenCode {
         Write-Host "WARN: npm was not found on PATH, so the OpenCode plugin dependencies could not be installed. The MCP server still works for the main session; sub-agents need node/npm + 'npm ci' in '$openCodePluginRoot'." -ForegroundColor Yellow
     }
 
-    [Environment]::SetEnvironmentVariable('INSTANT_FS_MCP_BINARY', $stableBinary, 'User')
+    if ($simulateRoot) {
+        Write-Host "   (simulation) skipping global INSTANT_FS_MCP_BINARY env write." -ForegroundColor Gray
+    } else {
+        [Environment]::SetEnvironmentVariable('INSTANT_FS_MCP_BINARY', $stableBinary, 'User')
+    }
     $ok = Write-McpConfigPreserving $openCodeConfig
     if ($ok) { Write-Host "PASS: OpenCode MCP server '$serverName' configured in '$openCodeConfig'." -ForegroundColor Green }
     else { Write-Host "WARN: could not update '$openCodeConfig'. Add the MCP entry manually - see README \"Set up a single app yourself\"." -ForegroundColor Yellow }
