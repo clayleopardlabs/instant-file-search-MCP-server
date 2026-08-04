@@ -181,10 +181,34 @@ cargo build --release
 
 Outputs:
 
-- `target/release/instant-file-search-mcp-server.exe` — the MCP server
-- `target/release/instant-file-search-indexer.exe` — the native indexer
+- `target/release/instant-file-search-mcp-server.exe` — the MCP server (Windows)
+- `target/release/instant-file-search-indexer.exe` — the native indexer (Windows)
+- `target/x86_64-unknown-linux-gnu/release/instant-file-search-mcp-server` — Linux build
+- `target/x86_64-unknown-linux-gnu/release/instant-file-search-indexer` — Linux build
 
 The installer registers the indexer as a Windows service (`instant-file-search-indexer`, auto-start). Run `indexer.exe scan` for a one-shot diagnostic, or `indexer.exe serve` to run the indexer in the foreground.
+
+## Linux (experimental)
+
+The native indexer also builds and runs on Linux (Ubuntu 24.04 LTS recommended; kernel 5.17+ for full change-tracking support). The Linux backend swaps the Windows pillars for their Linux equivalents:
+
+| Windows | Linux |
+|---|---|
+| $MFT raw scan | `getdents64` walk + `statx` (inode = `file_ref`, btime = created) |
+| USN Change Journal | fanotify FID-mode marks (needs root/CAP_SYS_ADMIN; inotify is a documented fallback) |
+| Named pipe | Unix socket at `/tmp/instant-file-search-indexer.sock` (mode 0666) |
+| Everything fallback engine | Not used — native is the only engine on Linux |
+| Windows service (SCM) | systemd unit with `Type=notify` + sd_notify readiness |
+
+Install from source on a Linux box:
+
+```sh
+sudo bash scripts/install-linux.sh
+```
+
+The script builds both binaries, installs them under `/usr/local/lib/instant-file-search/`, installs the systemd unit, starts the service, and registers the MCP client with OpenCode (including the OMO sub-agent `mcps` patch).
+
+See `docs/build-linux.md` and `docs/linux-port-plan.md` for details and known gaps.
 
 ### oh-my-opencode-slim (OMO) auto-configuration
 
@@ -211,7 +235,7 @@ cargo test
 
 Unit tests cover sorting, field parsing, timestamp formatting, and attribute formatting.
 
-More detail lives in `docs/`: `architecture.md`, `build.md`, `development.md`, `tools.md`, and `parity.md`.
+More detail lives in `docs/`: `architecture.md`, `build.md`, `development.md`, `tools.md`, `parity.md`, `build-linux.md`, `linux-support.md`, and `linux-port-plan.md`.
 
 ## How It Fits Together
 
@@ -222,7 +246,7 @@ MCP Host (VS Code / Cursor / Claude Desktop / OpenCode)
                             └─ NTFS master file list + change journal
 ```
 
-If the indexer service is unreachable, the server answers from the `instant-file-search-fallback-engine` instead, with the same tools and results and no setup.
+If the indexer service is unreachable, the server answers from the `instant-file-search-fallback-engine` instead, with the same tools and results and no setup. On Linux there is no fallback engine — the native indexer is the only search path, so the tools report the native engine's status only.
 
 ## License
 
