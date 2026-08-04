@@ -19,7 +19,7 @@ use serde_json::json;
 pub const PIPE_NAME: &str = r"\\.\pipe\instant-file-search-indexer";
 /// Unix socket path for the native indexer (Linux). Mirrors the indexer's
 /// `pipe_unix.rs::SOCKET_PATH`.
-#[cfg(target_os = "linux")]
+#[cfg(not(windows))]
 pub const SOCKET_PATH: &str = "/tmp/instant-file-search-indexer.sock";
 const CONNECT_TIMEOUT_MS: u32 = 2_000;
 
@@ -93,7 +93,7 @@ fn connect_inner(timeout_ms: u32) -> std::io::Result<std::fs::File> {
 
 /// Connect, waiting up to `timeout_ms` for the server (cold start).
 /// Linux: Unix stream socket at `/tmp/instant-file-search-indexer.sock`.
-#[cfg(target_os = "linux")]
+#[cfg(not(windows))]
 fn connect_inner(timeout_ms: u32) -> std::io::Result<std::os::unix::net::UnixStream> {
     use std::os::unix::net::UnixStream;
     use std::time::{Duration, Instant};

@@ -66,6 +66,8 @@ impl PipeServer {
 
         // Tell systemd the service is ready to serve queries (Type=notify).
         // No-op when NOTIFY_SOCKET is unset (running in a terminal).
+        // launchd has no notify protocol, so this is Linux-only.
+        #[cfg(target_os = "linux")]
         let _ = sd_notify::notify(false, &[sd_notify::NotifyState::Ready]);
 
         while !self.stop.load(Ordering::SeqCst) {

@@ -15,15 +15,20 @@ pub use crate::walk::{discover_volumes, scan_volume, volume_of};
 #[cfg(target_os = "linux")]
 pub use crate::fanotify::{journal_tails, watch_all};
 
+#[cfg(target_os = "macos")]
+pub use crate::walk_macos::{discover_volumes, scan_volume, volume_of};
+#[cfg(target_os = "macos")]
+pub use crate::fsevents::{journal_tails, watch_all};
+
 #[cfg(windows)]
 pub use crate::pipe::PipeServer;
-#[cfg(target_os = "linux")]
+#[cfg(not(windows))]
 pub use crate::pipe_unix::PipeServer;
 
 /// Native path separator for this platform, as a string usable in `replace`.
 #[cfg(windows)]
 pub const SEP: char = '\\';
-#[cfg(target_os = "linux")]
+#[cfg(not(windows))]
 pub const SEP: char = '/';
 
 /// Normalize a user-supplied path into the native separator form used by
@@ -34,7 +39,7 @@ pub const SEP: char = '/';
 pub fn normalize_path(p: &str) -> String {
     p.replace('/', "\\")
 }
-#[cfg(target_os = "linux")]
+#[cfg(not(windows))]
 pub fn normalize_path(p: &str) -> String {
     p.replace('\\', "/")
 }
@@ -57,7 +62,7 @@ pub fn is_absolute_path(p: &str) -> bool {
     let b = p.as_bytes();
     b.len() >= 3 && b[1] == b':' && (b[2] == b'\\' || b[2] == b'/')
 }
-#[cfg(target_os = "linux")]
+#[cfg(not(windows))]
 pub fn is_absolute_path(p: &str) -> bool {
     p.starts_with('/')
 }
@@ -88,7 +93,7 @@ pub fn parent_of(path: &str) -> Option<String> {
         Some(parent.to_string())
     }
 }
-#[cfg(target_os = "linux")]
+#[cfg(not(windows))]
 pub fn parent_of(path: &str) -> Option<String> {
     let idx = path.rfind('/')?;
     let parent = &path[..idx];

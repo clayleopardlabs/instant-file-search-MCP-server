@@ -35,3 +35,6 @@ libc = "0.2"
 rustix = { version = "1", features = ["fs", "time", "process"] }
 nix = { version = "0.29", features = ["fanotify", "fs", "signal", "time"] }
 sd-notify = "0.4"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = "0.2"

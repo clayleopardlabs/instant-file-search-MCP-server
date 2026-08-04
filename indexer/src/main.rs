@@ -28,10 +28,14 @@ mod usn;
 
 #[cfg(target_os = "linux")]
 mod fanotify;
-#[cfg(target_os = "linux")]
+#[cfg(not(windows))]
 mod pipe_unix;
 #[cfg(target_os = "linux")]
 mod walk;
+#[cfg(target_os = "macos")]
+mod fsevents;
+#[cfg(target_os = "macos")]
+mod walk_macos;
 
 use std::sync::Arc;
 

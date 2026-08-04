@@ -269,10 +269,10 @@ fn local_offset_secs() -> i64 {
     })
 }
 
-/// Portable (Linux) local-timezone offset in seconds east of UTC, resolved
+/// Portable (Linux/macOS) local-timezone offset in seconds east of UTC, resolved
 /// once per process. Computed as `mktime(localtime_r(now)) - now` so it works
-/// on any libc (glibc/musl) without tm_gmtoff.
-#[cfg(target_os = "linux")]
+/// on any libc (glibc/musl/BSD) without tm_gmtoff.
+#[cfg(not(windows))]
 fn local_offset_secs() -> i64 {
     use std::sync::OnceLock;
     static CACHE: OnceLock<i64> = OnceLock::new();
