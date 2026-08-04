@@ -223,5 +223,12 @@ fn serve_with_stop(stop: Arc<std::sync::atomic::AtomicBool>) -> Result<()> {
     });
 
     let server = platform::PipeServer::with_stop(state, stop)?;
-    server.run()
+    let result = server.run();
+
+    // Tell systemd the service is shutting down (Type=notify). No-op when
+    // NOTIFY_SOCKET is unset.
+    #[cfg(target_os = "linux")]
+    let _ = sd_notify::notify(false, &[sd_notify::NotifyState::Stopping]);
+
+    result
 }

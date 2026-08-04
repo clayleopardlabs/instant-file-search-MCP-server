@@ -64,6 +64,10 @@ impl PipeServer {
 
         tracing::info!("listening on {SOCKET_PATH}");
 
+        // Tell systemd the service is ready to serve queries (Type=notify).
+        // No-op when NOTIFY_SOCKET is unset (running in a terminal).
+        let _ = sd_notify::notify(false, &[sd_notify::NotifyState::Ready]);
+
         while !self.stop.load(Ordering::SeqCst) {
             match listener.accept() {
                 Ok((stream, _)) => {
