@@ -36,6 +36,8 @@ pub fn handle(state: &IndexerState, req: Request) -> Response<'static> {
             Response {
                 ok: true,
                 data: Some(serde_json::json!({
+                    "version": crate::APP_VERSION,
+                    "commit": crate::BUILD_COMMIT,
                     "indexed": state.index.len(),
                     "volumes": state.volumes.iter().map(|v| v.clone()).collect::<Vec<_>>(),
                 })),

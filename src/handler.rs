@@ -1,6 +1,6 @@
 use rmcp::{
     handler::server::wrapper::Parameters,
-    model::{CallToolResult, ContentBlock, ErrorData},
+    model::{CallToolResult, ContentBlock, ErrorData, Implementation, ServerInfo},
     ServerHandler, tool, tool_handler, tool_router,
 };
 use tracing::error;
@@ -153,6 +153,7 @@ impl EverythingHandler {
         };
 
         let json = serde_json::json!({
+            "server": { "version": crate::APP_VERSION, "commit": crate::BUILD_COMMIT },
             "native": native_status,
             "everything": everything_status,
         });
@@ -163,4 +164,11 @@ impl EverythingHandler {
 }
 
 #[tool_handler]
-impl ServerHandler for EverythingHandler {}
+impl ServerHandler for EverythingHandler {
+    fn get_info(&self) -> ServerInfo {
+        ServerInfo::default().with_server_info(
+            Implementation::new("instant-file-search", crate::APP_VERSION)
+                .with_title("Instant File Search"),
+        )
+    }
+}

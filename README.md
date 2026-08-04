@@ -55,6 +55,8 @@ NOTE: The installer downloads the MCP server, the native indexer, and the `insta
 
 NOTE: This step puts the background indexer into service. It is the only step that uses administrator rights.
 
+Updates are staged in a new versioned folder before the installer switches the MCP client and Windows service to it. Running sessions keep their old executable until you restart the AI app; the installer never overwrites an executable that is in use. The active version and paths are recorded in `%LOCALAPPDATA%\ClayLeopardLabs\instant-file-search\current.json`.
+
 NOTE: If you cannot see the permission prompt, the tools work with the fallback engine. They are slower. You can register the native indexer subsequently by running the installer in elevated mode.
 
 NOTE: if you use chatPGT codex and after you ask it to install this MCP server your agent just decides not to install it correctly and says something stupid like, "I used the user-level fallback engine. The optional native indexer service was not installed because it requires an administrator-level auto-start service with broad filesystem access." politely remind it that yes, it needs broad filesystem access because it literally monitors the entire damn filesystem. Or you can tell it less politely, like I did to mine.
@@ -83,10 +85,10 @@ Do the health check:
 
 ### Configure one app at a time
 
-The installer puts the server in this location:
+The installer puts each server version in this location and records the active one in `current.json`:
 
 ```
-%LOCALAPPDATA%\ClayLeopardLabs\instant-file-search\instant-file-search-mcp-server.exe
+%LOCALAPPDATA%\ClayLeopardLabs\instant-file-search\versions\<version>\instant-file-search-mcp-server.exe
 ```
 
 Add the server to the MCP client configuration:
@@ -106,7 +108,7 @@ Add the server to the MCP client configuration:
    }
    ```
 
-NOTE: For a plain MCP host, use the configuration shown above. For OpenCode, add the configuration to `opencode.json` or to `opencode.jsonc`. The installer adds the plug-in adapter automatically.
+NOTE: For a plain MCP host, use the active server path from `current.json`. For OpenCode, add the configuration to `opencode.json` or to `opencode.jsonc`. The installer adds the plug-in adapter automatically. `doctor.ps1` reports a partial upgrade if the configured client or service still points to an older version.
 
 3. Restart your AI app. The tool list will show the new tools.
 

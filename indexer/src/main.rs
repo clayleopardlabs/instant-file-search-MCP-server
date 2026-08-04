@@ -55,10 +55,19 @@ pub struct IndexerState {
 }
 
 const SERVICE_NAME: &str = "instant-file-search-indexer";
+pub const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
+pub const BUILD_COMMIT: &str = match option_env!("GIT_COMMIT") {
+    Some(value) => value,
+    None => "dev",
+};
 
 fn main() -> Result<()> {
     let mode = std::env::args().nth(1).unwrap_or_else(|| "serve".to_string());
     match mode.as_str() {
+        "--version" | "-V" => {
+            println!("instant-file-search-indexer {APP_VERSION} {BUILD_COMMIT}");
+            Ok(())
+        }
         "scan" => {
             let out = scan::scan_all_volumes()?;
             print!("{out}");

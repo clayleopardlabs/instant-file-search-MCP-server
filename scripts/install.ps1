@@ -8,6 +8,7 @@ param(
     [string]$IndexerBinary,
     [string]$VendorDir,
     [string]$ExpectedSha256,
+    [string]$Version,
     [switch]$SkipDownload,
     [switch]$SkipElevation,
     [switch]$SkipCodex,
@@ -24,8 +25,11 @@ $serviceName = 'instant-file-search-indexer'
 $doctorName = 'doctor.ps1'
 $repoRoot = if ($PSScriptRoot) { Split-Path -Parent $PSScriptRoot } else { $null }
 $isCheckout = $repoRoot -and (Test-Path -LiteralPath (Join-Path $repoRoot 'Cargo.toml'))
-$stableBinary = Join-Path $InstallRoot $binaryName
-$stableIndexer = Join-Path $InstallRoot $indexerName
+$versionRoot = $null
+$stableBinary = $null
+$stableIndexer = $null
+$installVersion = $null
+$downloadRoot = Join-Path $InstallRoot ("downloads\\$PID")
 
 # Simulation mode: redirect all user-config writes into a sandbox and skip the
 # global env-var write, so parallel/simulated installs never touch the real
@@ -125,17 +129,18 @@ function Resolve-ServerBinary {
         if (Test-Path -LiteralPath $local) { return $local }
     }
     if ($SkipDownload) { throw "Server binary not found and -SkipDownload was set. Pass -ServerBinary or remove -SkipDownload." }
-    New-Item -ItemType Directory -Path $InstallRoot -Force | Out-Null
-    Get-ReleaseAsset $binaryName $stableBinary
+    New-Item -ItemType Directory -Path $downloadRoot -Force | Out-Null
+    $downloaded = Join-Path $downloadRoot $binaryName
+    Get-ReleaseAsset $binaryName $downloaded
     if ($ExpectedSha256) {
-        $actual = (Get-FileHash -LiteralPath $stableBinary -Algorithm SHA256).Hash
+        $actual = (Get-FileHash -LiteralPath $downloaded -Algorithm SHA256).Hash
         if ($actual -ne $ExpectedSha256.ToUpperInvariant()) {
-            Remove-Item -LiteralPath $stableBinary -Force
+            Remove-Item -LiteralPath $downloaded -Force
             throw "SHA-256 verification failed for '$binaryName'. Expected '$ExpectedSha256', got '$actual'."
         }
         Write-Host "   SHA-256 verified." -ForegroundColor Green
     }
-    return $stableBinary
+    return $downloaded
 }
 
 function Resolve-IndexerBinary {
@@ -148,13 +153,50 @@ function Resolve-IndexerBinary {
         if (Test-Path -LiteralPath $local) { return $local }
     }
     if ($SkipDownload) { return $null }
-    New-Item -ItemType Directory -Path $InstallRoot -Force | Out-Null
-    Get-ReleaseAsset $indexerName $stableIndexer
-    return $stableIndexer
+    New-Item -ItemType Directory -Path $downloadRoot -Force | Out-Null
+    $downloaded = Join-Path $downloadRoot $indexerName
+    Get-ReleaseAsset $indexerName $downloaded
+    return $downloaded
+}
+
+function Get-InstallVersion([string]$ServerPath) {
+    if ($Version) { return $Version }
+    try {
+        $out = (& $ServerPath --version 2>$null | Select-Object -First 1).Trim()
+        if ($out -match '^instant-file-search-mcp-server\s+([0-9]+\.[0-9]+\.[0-9]+)') { return $Matches[1] }
+    } catch {}
+    if ($isCheckout) {
+        $cargo = Join-Path $repoRoot 'Cargo.toml'
+        $match = Select-String -LiteralPath $cargo -Pattern '^version\s*=\s*"([^"]+)"' | Select-Object -First 1
+        if ($match) { return $match.Matches[0].Groups[1].Value }
+    }
+    return "legacy-$((Get-FileHash -LiteralPath $ServerPath -Algorithm SHA256).Hash.Substring(0, 12).ToLowerInvariant())"
+}
+
+function Initialize-VersionedInstall([string]$ServerPath) {
+    $script:installVersion = Get-InstallVersion $ServerPath
+    $script:versionRoot = Join-Path $InstallRoot (Join-Path 'versions' $script:installVersion)
+    $script:stableBinary = Join-Path $script:versionRoot $binaryName
+    $script:stableIndexer = Join-Path $script:versionRoot $indexerName
+    if ($DryRun) { return }
+    New-Item -ItemType Directory -Path $script:versionRoot -Force | Out-Null
+}
+
+function Write-InstallState([string]$ServiceBinary) {
+    if ($DryRun) { return }
+    $state = [ordered]@{
+        version = $installVersion
+        server_binary = $stableBinary
+        indexer_binary = $ServiceBinary
+        installed_at = (Get-Date).ToUniversalTime().ToString('o')
+    } | ConvertTo-Json
+    $temp = Join-Path $InstallRoot 'current.json.tmp'
+    $state | Set-Content -LiteralPath $temp -Encoding UTF8
+    Move-Item -LiteralPath $temp -Destination (Join-Path $InstallRoot 'current.json') -Force
 }
 
 function Deploy-BundledEngine {
-    $bundleDir = Join-Path $InstallRoot 'everything'
+    $bundleDir = Join-Path $versionRoot 'everything'
     $zipName = 'instant-file-search-fallback-engine-1.5.0.1418b.zip'
     $iniName = 'instant-file-search-fallback-engine-1.5.0.1418b.ini'
     $licenseName = 'LICENSE-instant-file-search-fallback-engine-1.5.0.1418b.txt'
@@ -169,7 +211,7 @@ function Deploy-BundledEngine {
         New-Item -ItemType Directory -Path $bundleDir -Force | Out-Null
         Expand-Archive -LiteralPath (Join-Path $vendorSource $zipName) -DestinationPath $bundleDir -Force
         Copy-Item -LiteralPath (Join-Path $vendorSource $iniName) -Destination $bundleDir -Force
-        Copy-Item -LiteralPath (Join-Path $vendorSource $licenseName) -Destination $InstallRoot -Force
+        Copy-Item -LiteralPath (Join-Path $vendorSource $licenseName) -Destination $versionRoot -Force
         Write-Host "PASS: Bundled Fallback Engine deployed to '$bundleDir'." -ForegroundColor Green
         return
     }
@@ -186,7 +228,7 @@ function Deploy-BundledEngine {
         Expand-Archive -LiteralPath $tmpZip -DestinationPath $bundleDir -Force
         Remove-Item -LiteralPath $tmpZip -Force -ErrorAction SilentlyContinue
         Get-ReleaseAsset $iniName (Join-Path $bundleDir $iniName)
-        Get-ReleaseAsset $licenseName (Join-Path $InstallRoot $licenseName)
+        Get-ReleaseAsset $licenseName (Join-Path $versionRoot $licenseName)
         Write-Host "PASS: Fallback Engine downloaded to '$bundleDir'." -ForegroundColor Green
     } catch {
         Remove-Item -LiteralPath $tmpZip -Force -ErrorAction SilentlyContinue
@@ -418,25 +460,43 @@ function Remove-OrphanOpenCodeJson([string]$ActiveConfig) {
     } catch { /* leave it alone */ }
 }
 
+function Find-CodexCli {
+    $candidates = @()
+    if ($env:CODEX_CLI_PATH) { $candidates += $env:CODEX_CLI_PATH }
+    $onPath = Get-Command codex -ErrorAction SilentlyContinue
+    if ($onPath -and $onPath.Source) { $candidates += $onPath.Source }
+    $bundledRoot = Join-Path $env:LOCALAPPDATA 'OpenAI\Codex\bin'
+    if (Test-Path -LiteralPath $bundledRoot) {
+        $candidates += @(Get-ChildItem -Path (Join-Path $bundledRoot '*\codex.exe') -File -ErrorAction SilentlyContinue |
+            Sort-Object LastWriteTime -Descending | Select-Object -ExpandProperty FullName)
+    }
+    foreach ($candidate in ($candidates | Select-Object -Unique)) {
+        if (-not (Test-Path -LiteralPath $candidate)) { continue }
+        if ($candidate -match '\\WindowsApps\\') { continue }
+        return (Get-Item -LiteralPath $candidate)
+    }
+    return $null
+}
+
 function Install-Codex {
     Write-Step 'Configuring Codex'
-    $codex = Get-Command codex -ErrorAction SilentlyContinue
+    $codex = Find-CodexCli
     if (-not $codex) { Write-Host 'WARN: codex.exe was not found on PATH; skipping Codex registration.' -ForegroundColor Yellow; return }
     if ($DryRun) { Write-Action "codex mcp add $serverName -- '$stableBinary'"; return }
 
-    $listOutput = (& $codex.Source mcp list 2>&1 | Out-String)
+    $listOutput = (& $codex.FullName mcp list 2>&1 | Out-String)
     if ($listOutput -match '(?im)\beverything\b' -or $listOutput -match '(?im)\binstant-file-search\b') {
-        $helpOutput = (& $codex.Source mcp --help 2>&1 | Out-String)
+        $helpOutput = (& $codex.FullName mcp --help 2>&1 | Out-String)
         if ($helpOutput -match '(?im)\bremove\b') {
-            & $codex.Source mcp remove $serverName
+            & $codex.FullName mcp remove $serverName
             if ($LASTEXITCODE -ne 0) { throw "Could not replace existing Codex MCP server '$serverName'." }
-            & $codex.Source mcp add $serverName -- $stableBinary
+            & $codex.FullName mcp add $serverName -- $stableBinary
         } else {
             Write-Host "Codex server '$serverName' already exists; leaving it unchanged because this Codex version lacks 'mcp remove'." -ForegroundColor Yellow
             return
         }
     } else {
-        & $codex.Source mcp add $serverName -- $stableBinary
+        & $codex.FullName mcp add $serverName -- $stableBinary
     }
     if ($LASTEXITCODE -ne 0) { throw 'Codex MCP registration failed.' }
     Write-Host 'PASS: Codex MCP server registered.' -ForegroundColor Green
@@ -607,7 +667,7 @@ function Install-OmoMcpAccess {
 
 function Install-NativeService {
     Write-Step 'Installing the native indexer service'
-    $indexerDir = Join-Path $InstallRoot 'indexer'
+    $indexerDir = Join-Path $versionRoot 'indexer'
     $serviceIndexer = Join-Path $indexerDir $indexerName
     $registerHelper = Join-Path $indexerDir 'register-indexer-service.ps1'
 
@@ -624,31 +684,33 @@ function Install-NativeService {
     }
 
     New-Item -ItemType Directory -Path $indexerDir -Force | Out-Null
-    try {
-        Copy-Item -LiteralPath $resolved -Destination $serviceIndexer -Force
-    } catch {
-        Write-Host "WARN: could not replace '$serviceIndexer' (the running service may hold a lock). The existing indexer binary will be used; restart the service after re-registering." -ForegroundColor Yellow
-    }
+    Copy-Item -LiteralPath $resolved -Destination $serviceIndexer -Force
 
     # Escape single quotes in paths so the generated helper survives usernames
     # or install roots that contain an apostrophe.
     $escServiceIndexer = $serviceIndexer -replace "'", "''"
     $escServiceName = $serviceName -replace "'", "''"
 
-    # Write a tiny helper that performs the admin-only registration, so we can
-    # run it elevated on demand without quoting gymnastics.
-    $helper = @"
+# Write a tiny helper that performs the admin-only switch. The binary was
+# already copied into a new versioned directory, so no running executable is
+# overwritten during an update.
+$helper = @"
 `$ErrorActionPreference = 'Stop'
 `$serviceName = '$escServiceName'
 `$serviceIndexer = '$escServiceIndexer'
+`$serviceCommand = '"' + `$serviceIndexer + '" service'
 `$existing = Get-Service -Name `$serviceName -ErrorAction SilentlyContinue
 if (`$existing) {
-  if (`$existing.Status -ne 'Stopped') { Stop-Service -Name `$serviceName -Force; Start-Sleep -Seconds 2 }
-  & sc.exe delete `$serviceName | Out-Null
-  Start-Sleep -Seconds 1
+  if (`$existing.Status -ne 'Stopped') {
+    Stop-Service -Name `$serviceName -Force
+    `$existing.WaitForStatus([System.ServiceProcess.ServiceControllerStatus]::Stopped, [TimeSpan]::FromSeconds(30))
+  }
+  & sc.exe config `$serviceName "binPath= `$serviceCommand" start= auto | Out-Null
+  if (`$LASTEXITCODE -ne 0) { throw "sc.exe config failed for service `$serviceName." }
+} else {
+  & sc.exe create `$serviceName "binPath= `$serviceCommand" start= auto | Out-Null
+  if (`$LASTEXITCODE -ne 0) { throw "sc.exe create failed for service `$serviceName." }
 }
-& sc.exe create `$serviceName binPath= "`$serviceIndexer service" start= auto | Out-Null
-if (`$LASTEXITCODE -ne 0) { throw "sc.exe create failed for service `$serviceName." }
 Start-Service -Name `$serviceName
 "@
     Set-Content -LiteralPath $registerHelper -Value $helper -Encoding UTF8
@@ -750,18 +812,14 @@ if (-not $selected) {
 
 Write-Step 'Obtaining the MCP server binary'
 $serverSource = Resolve-ServerBinary
+Initialize-VersionedInstall $serverSource
 if (-not $DryRun -and $serverSource -ne $stableBinary) {
-    New-Item -ItemType Directory -Path $InstallRoot -Force | Out-Null
-    try {
-        Copy-Item -LiteralPath $serverSource -Destination $stableBinary -Force
-        Write-Host "PASS: MCP server installed at '$stableBinary'." -ForegroundColor Green
-    } catch {
-        Write-Host "WARN: could not replace '$stableBinary' (an MCP host may currently have it loaded). The existing binary will be used; restart your AI app and re-run this installer to update it." -ForegroundColor Yellow
-    }
+    Copy-Item -LiteralPath $serverSource -Destination $stableBinary -Force
+    Write-Host "PASS: MCP server $installVersion installed at '$stableBinary'." -ForegroundColor Green
 }
 
 Write-Step 'Deploying the Fallback Engine'
-if ($DryRun) { Write-Action "Deploy Fallback Engine into '$(Join-Path $InstallRoot 'everything')'" }
+if ($DryRun) { Write-Action "Deploy Fallback Engine into '$(Join-Path $versionRoot 'everything')'" }
 else { Deploy-BundledEngine }
 
 foreach ($client in $selected) {
@@ -773,11 +831,12 @@ foreach ($client in $selected) {
 }
 
 Install-NativeService
+Write-InstallState (Join-Path (Join-Path $versionRoot 'indexer') $indexerName)
 Install-Doctor
 
 $everything = Get-Process -Name Everything -ErrorAction SilentlyContinue
 if ($everything) { Write-Host 'PASS: Fallback Engine is running.' -ForegroundColor Green }
-elseif (Test-Path -LiteralPath (Join-Path $InstallRoot 'everything\Everything.exe')) {
+elseif (Test-Path -LiteralPath (Join-Path $versionRoot 'everything\Everything.exe')) {
     Write-Host 'PASS: Fallback Engine is not running, but the bundled engine will start automatically on first search.' -ForegroundColor Green
 } else {
     Write-Host 'WARN: Fallback Engine is not running and no bundled engine was deployed.' -ForegroundColor Yellow
@@ -786,7 +845,8 @@ elseif (Test-Path -LiteralPath (Join-Path $InstallRoot 'everything\Everything.ex
 $verifyOk = $true
 if (-not $DryRun) { $verifyOk = Test-Installation }
 
-Write-Host "`nInstalled binary: $stableBinary" -ForegroundColor Green
+Write-Host "`nInstalled version: $installVersion" -ForegroundColor Green
+Write-Host "Installed binary:  $stableBinary" -ForegroundColor Green
 Write-Host "Diagnostics:      $((Join-Path $InstallRoot $doctorName))" -ForegroundColor Gray
 if (-not $selected) {
     Write-Host '' -ForegroundColor Gray

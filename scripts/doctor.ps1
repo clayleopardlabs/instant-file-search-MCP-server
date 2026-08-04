@@ -6,7 +6,13 @@ param(
 $ErrorActionPreference = 'Continue'
 $serverName = 'instant-file-search'
 $binaryName = 'instant-file-search-mcp-server.exe'
-$stableBinary = Join-Path $InstallRoot $binaryName
+$statePath = Join-Path $InstallRoot 'current.json'
+$installState = $null
+if (Test-Path -LiteralPath $statePath) {
+    try { $installState = Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json } catch {}
+}
+$stableBinary = if ($installState -and $installState.server_binary) { $installState.server_binary } else { Join-Path $InstallRoot $binaryName }
+$versionRoot = if ($installState -and $installState.version) { Join-Path $InstallRoot (Join-Path 'versions' $installState.version) } else { $InstallRoot }
 $openCodePluginRoot = Join-Path $env:USERPROFILE '.config\opencode\plugins\instant-file-search-mcp-plugin'
 $openCodeJson = Join-Path $env:USERPROFILE '.config\opencode\opencode.json'
 $openCodeJsonc = Join-Path $env:USERPROFILE '.config\opencode\opencode.jsonc'
@@ -17,6 +23,24 @@ $warnings = 0
 function Pass([string]$Message) { Write-Host "PASS: $Message" -ForegroundColor Green }
 function Warn([string]$Message) { $script:warnings++; Write-Host "WARN: $Message" -ForegroundColor Yellow }
 function Fail([string]$Message) { $script:failures++; Write-Host "FAIL: $Message" -ForegroundColor Red }
+
+function Find-CodexCli {
+    $candidates = @()
+    if ($env:CODEX_CLI_PATH) { $candidates += $env:CODEX_CLI_PATH }
+    $onPath = Get-Command codex -ErrorAction SilentlyContinue
+    if ($onPath -and $onPath.Source) { $candidates += $onPath.Source }
+    $bundledRoot = Join-Path $env:LOCALAPPDATA 'OpenAI\Codex\bin'
+    if (Test-Path -LiteralPath $bundledRoot) {
+        $candidates += @(Get-ChildItem -Path (Join-Path $bundledRoot '*\codex.exe') -File -ErrorAction SilentlyContinue |
+            Sort-Object LastWriteTime -Descending | Select-Object -ExpandProperty FullName)
+    }
+    foreach ($candidate in ($candidates | Select-Object -Unique)) {
+        if (-not (Test-Path -LiteralPath $candidate)) { continue }
+        if ($candidate -match '\\WindowsApps\\') { continue }
+        return (Get-Item -LiteralPath $candidate)
+    }
+    return $null
+}
 
 # JSONC-aware parse: strips // and /* */ comments and trailing commas
 # while staying string-aware (so URLs and `"rm -rf /*`"` survive).
@@ -86,12 +110,18 @@ if (Test-Path -LiteralPath $stableBinary) {
     Fail "Installed binary not found at '$stableBinary'. Run .\scripts\install.ps1."
 }
 
-$codex = Get-Command codex -ErrorAction SilentlyContinue
+if ($installState) {
+    Pass "Active installed version is '$($installState.version)'."
+} else {
+    Warn 'No current.json deployment state found; treating this as a legacy in-place install.'
+}
+
+$codex = Find-CodexCli
 if (-not $codex) {
     Fail 'codex.exe is not on PATH.'
 } else {
-    Pass "Codex found at '$($codex.Source)'."
-    $listOutput = (& $codex.Source mcp list 2>&1 | Out-String)
+    Pass "Codex found at '$($codex.FullName)'."
+    $listOutput = (& $codex.FullName mcp list 2>&1 | Out-String)
     if ($LASTEXITCODE -ne 0) {
         Fail 'Codex could not list MCP servers.'
     } elseif ($listOutput -match '(?im)\binstant-file-search\b' -or $listOutput -match '(?im)\beverything\b') {
@@ -108,7 +138,7 @@ if ($everything) {
     Warn 'Fallback Engine is not running. It will auto-start on first search (if a bundled or installed engine is available).'
 }
 
-$bundleDir = Join-Path $InstallRoot 'everything'
+$bundleDir = Join-Path $versionRoot 'everything'
 $bundledEngine = Join-Path $bundleDir 'Everything.exe'
 if (Test-Path -LiteralPath $bundledEngine) {
     Pass "Bundled Fallback Engine present ('$bundledEngine')."
@@ -120,14 +150,15 @@ if (Test-Path -LiteralPath (Join-Path $bundleDir 'instant-file-search-fallback-e
 } else {
     Warn 'Bundled Fallback Engine ini is missing; the engine will use default settings.'
 }
-if (Test-Path -LiteralPath (Join-Path $InstallRoot 'LICENSE-instant-file-search-fallback-engine-1.5.0.1418b.txt')) {
+if (Test-Path -LiteralPath (Join-Path $versionRoot 'LICENSE-instant-file-search-fallback-engine-1.5.0.1418b.txt')) {
     Pass 'Fallback Engine license notice present (required for redistribution).'
 } else {
     Warn 'Fallback Engine license notice is missing.'
 }
 
-$indexerExe = Join-Path $InstallRoot 'indexer\instant-file-search-indexer.exe'
+$indexerExe = if ($installState -and $installState.indexer_binary) { $installState.indexer_binary } else { Join-Path $InstallRoot 'indexer\instant-file-search-indexer.exe' }
 $indexerSvc = Get-Service -Name 'instant-file-search-indexer' -ErrorAction SilentlyContinue
+$indexerServiceConfig = Get-CimInstance -ClassName Win32_Service -Filter "Name='instant-file-search-indexer'" -ErrorAction SilentlyContinue
 if (Test-Path -LiteralPath $indexerExe) {
     Pass "Native indexer binary present ('$indexerExe')."
 } else {
@@ -138,6 +169,10 @@ if ($indexerSvc) {
     else { Warn "Native indexer service exists but is '$($indexerSvc.Status)'. Start it with: sc.exe start instant-file-search-indexer" }
 } else {
     Warn "Native indexer service is not installed. Run the installer elevated (or: sc.exe create instant-file-search-indexer binPath= `"$indexerExe service`" start= auto)."
+}
+
+if ($indexerServiceConfig -and $indexerServiceConfig.PathName -notmatch [regex]::Escape($indexerExe)) {
+    Warn "Partial upgrade: service command does not point to the active indexer binary '$indexerExe'. Re-run the installer to switch it."
 }
 
 if (Test-Path -LiteralPath $stableBinary) {
@@ -158,6 +193,11 @@ if (Test-Path -LiteralPath $stableBinary) {
         Warn 'MCP binary exited within 3s of startup; enable EVERYTHING_MCP_LOG=debug to diagnose.'
     }
     Remove-Item $inFile, $outFile -Force -ErrorAction SilentlyContinue
+    try {
+        $versionOut = (& $stableBinary --version 2>$null | Select-Object -First 1).Trim()
+        if ($installState -and $versionOut -notmatch [regex]::Escape($installState.version)) { Warn "Partial upgrade: server reports '$versionOut', expected version '$($installState.version)'." }
+        elseif ($versionOut) { Pass "MCP server version: $versionOut" }
+    } catch { Warn 'Could not read MCP server version.' }
 }
 
 $openCodeEntry = Join-Path $openCodePluginRoot 'dist\index.js'
