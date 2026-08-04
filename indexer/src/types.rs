@@ -38,6 +38,9 @@ pub struct IndexedFile {
     pub own_name: String,
     /// Precomputed lowercase name (query hot path).
     pub name: String,
+    /// Precomputed canonical name (NFC + Unicode-lower on macOS; ASCII-lower
+    /// elsewhere). The ci matching target for name queries.
+    pub lower_name: String,
     /// Precomputed lowercase path (query hot path).
     pub lower_path: String,
     /// Precomputed lowercase extension without the dot (query hot path).
@@ -68,6 +71,7 @@ impl IndexedFile {
             parent_ref: 0,
             own_name: String::new(),
             name: String::new(),
+            lower_name: String::new(),
             lower_path: String::new(),
             extension: None,
             excluded: false,
@@ -83,7 +87,8 @@ impl IndexedFile {
             .next()
             .unwrap_or_default()
             .to_string();
-        self.lower_path = self.path.to_ascii_lowercase();
+        self.lower_name = crate::platform::canonical_key(&self.name);
+        self.lower_path = crate::platform::canonical_key(&self.path);
         self.extension = if self.is_dir {
             None
         } else {

@@ -105,6 +105,8 @@ impl ContentStore {
     }
 
     /// Store content for a path (path + data already validated eligible).
+    /// Keys are canonical (NFC + Unicode-lower on macOS) so they match
+    /// `IndexedFile::lower_path` exactly.
     pub fn insert(&self, path: &str, data: &[u8]) {
         if data.is_empty() {
             return;
@@ -116,12 +118,13 @@ impl ContentStore {
             return;
         }
         let take = data.len().min(budget_left);
-        let old = guard.remove(&path.to_ascii_lowercase());
+        let key = crate::platform::canonical_key(path);
+        let old = guard.remove(&key);
         if let Some(o) = old {
             self.total.fetch_sub(o.len(), Ordering::Relaxed);
             self.indexed.fetch_sub(1, Ordering::Relaxed);
         }
-        guard.insert(path.to_ascii_lowercase(), data[..take].to_vec());
+        guard.insert(key, data[..take].to_vec());
         self.total.fetch_add(take, Ordering::Relaxed);
         self.indexed.fetch_add(1, Ordering::Relaxed);
     }
@@ -129,7 +132,7 @@ impl ContentStore {
     /// Drop a path from the store (delete / old-name rename).
     pub fn remove(&self, path: &str) {
         let mut guard = self.inner.write().unwrap();
-        if let Some(o) = guard.remove(&path.to_ascii_lowercase()) {
+        if let Some(o) = guard.remove(&crate::platform::canonical_key(path)) {
             self.total.fetch_sub(o.len(), Ordering::Relaxed);
             self.indexed.fetch_sub(1, Ordering::Relaxed);
         }
@@ -161,7 +164,7 @@ impl ContentStore {
             return false;
         }
         let guard = self.inner.read().unwrap();
-        match guard.get(&path.to_ascii_lowercase()) {
+        match guard.get(&crate::platform::canonical_key(path)) {
             Some(data) => find_ci(data, needle.as_bytes()).is_some(),
             None => false,
         }
@@ -185,15 +188,18 @@ fn find_ci(hay: &[u8], needle: &[u8]) -> Option<usize> {
 }
 
 /// True if the path sits under one of the default-excluded trees.
+/// Separator-agnostic (both `\\` and `/`), mirroring types.rs.
 fn default_excluded(lower_path: &str) -> bool {
     let bytes = lower_path.as_bytes();
     DEFAULT_EXCLUDES.iter().any(|d| {
         let d = d.as_bytes();
         let mut i = 0;
         while i + d.len() + 1 <= bytes.len() {
-            if bytes[i] == b'\\' && bytes[i + 1..i + 1 + d.len()].eq_ignore_ascii_case(d) {
+            if (bytes[i] == b'\\' || bytes[i] == b'/')
+                && bytes[i + 1..i + 1 + d.len()].eq_ignore_ascii_case(d)
+            {
                 let after = i + 1 + d.len();
-                if after == bytes.len() || bytes[after] == b'\\' {
+                if after == bytes.len() || bytes[after] == b'\\' || bytes[after] == b'/' {
                     return true;
                 }
             }

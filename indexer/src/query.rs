@@ -372,10 +372,13 @@ pub fn tokenize(query: &str, opts: &QueryOptions) -> Vec<Token> {
         let lower = term.to_ascii_lowercase();
 
         let token = if term.starts_with("regex:") {
-            Token::Regex { pattern: term[6..].trim().to_string(), negate }
+            // NFC-normalize (form only, case preserved) so the compiled pattern
+            // matches canonical target bytes on macOS; case is the engine flag.
+            Token::Regex { pattern: crate::platform::nfc_normalize(term[6..].trim()), negate }
         } else if term.starts_with("case:") {
-            // `case:term` — case-sensitive term.
-            let pat = term[5..].trim().to_string();
+            // `case:term` — case-sensitive term. NFC-normalize the form so
+            // byte-exact comparison against an NFC-normalized name works.
+            let pat = crate::platform::nfc_normalize(term[5..].trim());
             if negate {
                 Token::Exclude { pattern: pat, whole_word: opts.match_whole_word, case_sensitive: true, anchored_start: false, anchored_end: false }
             } else {
@@ -384,14 +387,16 @@ pub fn tokenize(query: &str, opts: &QueryOptions) -> Vec<Token> {
         } else if term.starts_with("ww:") || term.starts_with("wholeword:") {
             // `ww:term` / `wholeword:term` — whole-word term (Everything
             // modifier; also forced globally by the match_whole_word param).
-            let pat = term[term.find(':').unwrap() + 1..].trim().to_string();
+            let pat = crate::platform::pattern_key(term[term.find(':').unwrap() + 1..].trim(), opts.match_case);
             if negate {
                 Token::Exclude { pattern: pat, whole_word: true, case_sensitive: false, anchored_start: false, anchored_end: false }
             } else {
                 Token::Include { pattern: pat, whole_word: true, case_sensitive: false, anchored_start: false, anchored_end: false }
             }
         } else if term.starts_with("path:") {
-            Token::Path(term[5..].trim().trim_matches('"').to_string())
+            let p = term[5..].trim().trim_matches('"');
+            let norm = crate::platform::canonical_key(&crate::platform::normalize_path(p));
+            Token::Path(crate::platform::trim_trailing_sep(&norm).to_string())
         } else if term.starts_with("ext:") {
             let exts: Vec<String> = term[4..]
                 .split(',')
@@ -469,29 +474,30 @@ pub fn tokenize(query: &str, opts: &QueryOptions) -> Vec<Token> {
                 None => Token::Never,
             }
         } else if term.starts_with("!<") && term.ends_with('>') {
-            Token::Exclude { pattern: term[2..term.len() - 1].to_string(), whole_word: false, case_sensitive: false, anchored_start: false, anchored_end: false }
-        } else if is_windows_path(term) {
-            Token::BarePath(term.to_string())
+            Token::Exclude { pattern: crate::platform::pattern_key(&term[2..term.len() - 1], opts.match_case), whole_word: false, case_sensitive: false, anchored_start: false, anchored_end: false }
+        } else if crate::platform::is_absolute_path(term) {
+            let norm = crate::platform::canonical_key(&crate::platform::normalize_path(term));
+            Token::BarePath(crate::platform::trim_trailing_sep(&norm).to_string())
         } else if lower.starts_with("start-with:") || lower.starts_with("prefix:") {
             let pat = if lower.starts_with("start-with:") { &term[10..] } else { &term[7..] };
-            Token::Include { pattern: pat.to_string(), whole_word: false, case_sensitive: false, anchored_start: true, anchored_end: false }
+            Token::Include { pattern: crate::platform::pattern_key(pat.trim(), opts.match_case), whole_word: false, case_sensitive: false, anchored_start: true, anchored_end: false }
         } else if lower.starts_with("end-with:") || lower.starts_with("suffix:") {
             let pat = if lower.starts_with("end-with:") { &term[9..] } else { &term[7..] };
-            Token::Include { pattern: pat.to_string(), whole_word: false, case_sensitive: false, anchored_start: false, anchored_end: true }
+            Token::Include { pattern: crate::platform::pattern_key(pat.trim(), opts.match_case), whole_word: false, case_sensitive: false, anchored_start: false, anchored_end: true }
         } else if negate {
             let mut pat = term;
             let mut anchored_start = false;
             let mut anchored_end = false;
             if pat.starts_with('^') { anchored_start = true; pat = &pat[1..]; }
             if pat.ends_with('$') && !pat.is_empty() { anchored_end = true; pat = &pat[..pat.len()-1]; }
-            Token::Exclude { pattern: pat.to_string(), whole_word: opts.match_whole_word, case_sensitive: false, anchored_start, anchored_end }
+            Token::Exclude { pattern: crate::platform::pattern_key(pat.trim(), opts.match_case), whole_word: opts.match_whole_word, case_sensitive: false, anchored_start, anchored_end }
         } else {
             let mut pat = term;
             let mut anchored_start = false;
             let mut anchored_end = false;
             if pat.starts_with('^') { anchored_start = true; pat = &pat[1..]; }
             if pat.ends_with('$') && !pat.is_empty() { anchored_end = true; pat = &pat[..pat.len()-1]; }
-            Token::Include { pattern: pat.to_string(), whole_word: opts.match_whole_word, case_sensitive: false, anchored_start, anchored_end }
+            Token::Include { pattern: crate::platform::pattern_key(pat.trim(), opts.match_case), whole_word: opts.match_whole_word, case_sensitive: false, anchored_start, anchored_end }
         };
         group.push(token);
     }
@@ -532,10 +538,6 @@ fn split_query(query: &str) -> Vec<String> {
         parts.push(cur.trim().to_string());
     }
     parts
-}
-
-fn is_windows_path(s: &str) -> bool {
-    s.len() >= 3 && s.as_bytes()[1] == b':' && s.as_bytes()[0].is_ascii_alphabetic() && s.as_bytes()[2] == b'\\'
 }
 
 /// Map Everything `attrib:` letters to FILE_ATTRIBUTE bits. Multiple letters
@@ -1096,11 +1098,30 @@ fn token_matches(
 ) -> bool {
     let name = entry.name.as_str();
     let lower_path = entry.lower_path.as_str();
-    let target = if opts.match_path { lower_path } else { name };
+    let lower_name = entry.lower_name.as_str();
+
+    // Matching target: canonical bytes (NFC + Unicode-lower on macOS) for
+    // case-insensitive matching, NFC-normalized original case for
+    // case-sensitive matching. `lower_path`/`lower_name` are pre-canonicalized
+    // at index build; the cs variant is built on demand (rare, opt-in).
+    let tgt = |cs: bool| -> std::borrow::Cow<'_, str> {
+        if cs {
+            std::borrow::Cow::Owned(crate::platform::nfc_normalize(if opts.match_path {
+                &entry.path
+            } else {
+                name
+            }))
+        } else if opts.match_path {
+            std::borrow::Cow::Borrowed(lower_path)
+        } else {
+            std::borrow::Cow::Borrowed(lower_name)
+        }
+    };
 
     match token {
         Token::Include { pattern, whole_word, case_sensitive, anchored_start, anchored_end } => {
             let cs = opts.match_case || *case_sensitive;
+            let target = tgt(cs);
             if *anchored_start && *anchored_end {
                 // Exact match.
                 if cs { target == pattern.as_str() } else { target.eq_ignore_ascii_case(pattern) }
@@ -1109,9 +1130,9 @@ fn token_matches(
             } else if *anchored_end {
                 if cs { target.ends_with(pattern.as_str()) } else { target.to_ascii_lowercase().ends_with(&pattern.to_ascii_lowercase()) }
             } else if *whole_word {
-                whole_word_match(target, pattern, cs)
+                whole_word_match(&target, pattern, cs)
             } else {
-                wildcard_match(pattern, target, cs)
+                wildcard_match(pattern, &target, cs)
             }
         }
         Token::Exclude { pattern, whole_word, case_sensitive, anchored_start, anchored_end } => {
@@ -1120,27 +1141,34 @@ fn token_matches(
             let cs = opts.match_case || *case_sensitive;
             let hit = if pattern.contains('\\') || pattern.contains('/') {
                 if cs {
-                    entry.path.contains(pattern.as_str())
+                    crate::platform::nfc_normalize(&entry.path).contains(pattern.as_str())
                 } else {
-                    contains_ci(&entry.path, pattern)
+                    contains_ci(&entry.lower_path, pattern)
                 }
             } else if *anchored_start && *anchored_end {
+                let target = tgt(cs);
                 if cs { target == pattern.as_str() } else { target.eq_ignore_ascii_case(pattern) }
             } else if *anchored_start {
+                let target = tgt(cs);
                 if cs { target.starts_with(pattern.as_str()) } else { target.to_ascii_lowercase().starts_with(&pattern.to_ascii_lowercase()) }
             } else if *anchored_end {
+                let target = tgt(cs);
                 if cs { target.ends_with(pattern.as_str()) } else { target.to_ascii_lowercase().ends_with(&pattern.to_ascii_lowercase()) }
             } else if *whole_word {
-                whole_word_match(target, pattern, cs)
+                let target = tgt(cs);
+                whole_word_match(&target, pattern, cs)
             } else {
-                wildcard_match(pattern, target, cs)
+                let target = tgt(cs);
+                wildcard_match(pattern, &target, cs)
             };
             !hit
         }
         Token::Regex { pattern, negate } => {
+            // Regex targets the canonical path when scoped; otherwise the
+            // display name. The pattern itself is NFC-normalized at tokenize.
             let hit = compiled
                 .get(pattern)
-                .map(|(re, _)| re.is_match(target))
+                .map(|(re, _)| re.is_match(if opts.match_path { lower_path } else { name }))
                 .unwrap_or(false);
             if *negate {
                 !hit
@@ -1150,11 +1178,12 @@ fn token_matches(
         }
         Token::Or(group) => group.iter().all(|t| token_matches(entry, t, compiled, opts)),
         Token::Path(p) | Token::BarePath(p) => {
-            let p = p.replace('/', "\\");
-            let p = p.trim_end_matches('\\');
-            let mut ok = starts_with_ci(lower_path, p);
+            // `p` is already canonical + native-separator at tokenize; the
+            // stored lower_path is canonical too, so byte-wise compare works.
+            // Boundary must accept both separators (macOS uses `/`).
+            let mut ok = lower_path.starts_with(p);
             if ok && lower_path.len() > p.len() {
-                ok = lower_path.as_bytes()[p.len()] == b'\\' || lower_path.as_bytes()[p.len()] == b':';
+                ok = matches!(lower_path.as_bytes()[p.len()], b'\\' | b'/' | b':');
             }
             ok
         }
@@ -1233,10 +1262,13 @@ fn date_match(op: &DateOp, value: i64, ts: i64) -> bool {
 ///   (e.g. `C:\Windows\WinSxS` excludes that subtree)
 /// - a bare token matches any path component of that name
 ///   (e.g. `node_modules` or `target` excludes every folder of that name)
-/// `lp` and `p` must both be lowercase.
+/// `lp` and `p` must both be canonical (NFC + lower on macOS, ASCII-lower
+/// elsewhere). Separator detection accepts both `\\` and `/` so the same
+/// helpers serve macOS paths.
 fn path_excluded(lp: &[u8], p: &[u8]) -> bool {
-    if p.contains(&b'\\') {
-        starts_with_ci_bytes(lp, p) && (lp.len() == p.len() || lp[p.len()] == b'\\')
+    if p.contains(&b'\\') || p.contains(&b'/') {
+        starts_with_ci_bytes(lp, p)
+            && (lp.len() == p.len() || matches!(lp.get(p.len()), Some(b'\\') | Some(b'/')))
     } else {
         dir_name_match(lp, p)
     }
@@ -1247,10 +1279,10 @@ fn dir_name_match(lp: &[u8], p: &[u8]) -> bool {
     while i + p.len() <= lp.len() {
         // Segment start: path start, after a separator, or after the drive
         // letter colon (drive-root children like `C:\target`).
-        let seg_start = i == 0 || lp[i - 1] == b'\\' || lp[i - 1] == b':';
+        let seg_start = i == 0 || matches!(lp[i - 1], b'\\' | b'/' | b':');
         if seg_start && lp[i..i + p.len()] == *p {
             let after = i + p.len();
-            if after == lp.len() || lp[after] == b'\\' {
+            if after == lp.len() || matches!(lp[after], b'\\' | b'/') {
                 return true;
             }
         }
@@ -1280,14 +1312,18 @@ fn filter_matches<'a>(
     opts: &QueryOptions,
 ) -> Vec<&'a IndexedFile> {
     let tokens = tokenize(&opts.query, opts);
-    let scope = opts.path.as_deref().unwrap_or("").replace('/', "\\").trim_end_matches('\\').to_string();
-    let scope_lower = scope.to_ascii_lowercase();
+    let scope_raw = opts.path.as_deref().unwrap_or("");
+    let scope = crate::platform::normalize_path(scope_raw);
+    let scope_lower = crate::platform::trim_trailing_sep(&crate::platform::canonical_key(&scope)).to_string();
     let exclude_parts: Vec<String> = opts
         .exclude_path
         .as_deref()
         .unwrap_or("")
         .split(';')
-        .map(|p| p.trim().replace('/', "\\").trim_end_matches('\\').to_ascii_lowercase())
+        .map(|p| {
+            let norm = crate::platform::normalize_path(p.trim());
+            crate::platform::trim_trailing_sep(&crate::platform::canonical_key(&norm)).to_string()
+        })
         .filter(|p| !p.is_empty())
         .collect();
     let mut compiled: HashMap<String, (regex::Regex, bool)> = HashMap::new();
@@ -1311,7 +1347,7 @@ fn filter_matches<'a>(
             let lp = entry.lower_path.as_str();
             if starts_with_ci(lp, &scope_lower) {
                 let ok = lp.len() == scope_lower.len()
-                    || matches!(lp.as_bytes().get(scope_lower.len()), Some(b'\\') | Some(b':'));
+                    || matches!(lp.as_bytes().get(scope_lower.len()), Some(b'\\') | Some(b'/') | Some(b':'));
                 if !ok {
                     continue;
                 }
