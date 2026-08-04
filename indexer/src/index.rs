@@ -467,6 +467,7 @@ const MAX_CHANGES: usize = 100_000;
         });
     }
 
+    #[cfg(windows)]
     #[test]
     fn path_by_ref_is_volume_scoped() {
         // Record numbers are only unique per-volume. Two volumes can both
@@ -488,6 +489,22 @@ const MAX_CHANGES: usize = 100_000;
         // resolve them to the same entries as the bare "C:" form.
         assert_eq!(ix.path_by_ref(r"C:\", 0x1001), Some(r"C:\Users\sophi".to_string()));
         assert_eq!(ix.path_by_ref(r"D:\", 0x1001), Some(r"D:\Windows\servicing\x.cat".to_string()));
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn path_by_ref_resolves_on_unix() {
+        // On Unix the volume is the mount point (volume_of returns the longest
+        // matching mount prefix). Verify the refs map resolves a record number
+        // under the path's own volume and rejects a different record number.
+        let ix = FileIndex::new();
+        let mut d = edir("/Users/test", 0);
+        d.file_ref = 0x1001;
+        ix.replace(vec![d]);
+        let vol = volume_of("/Users/test");
+        assert_eq!(ix.path_by_ref(&vol, 0x1001), Some("/Users/test".to_string()));
+        // A different record number on the same volume must not resolve.
+        assert_eq!(ix.path_by_ref(&vol, 0x2002), None);
     }
 
     #[test]

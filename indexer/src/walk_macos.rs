@@ -577,8 +577,15 @@ mod tests {
 
     #[test]
     fn to_filetime_epoch_matches() {
-        // 1970-01-01T00:00:00Z -> 116444736000000000 FILETIME.
+        // sec == 0 is the "timestamp unavailable" sentinel.
         assert_eq!(to_filetime(0, 0), 0);
-        assert_eq!(to_filetime(116_444_73600, 0), 116_444_73600 * 10_000_000);
+        // Unix epoch seconds are offset to the 1601 FILETIME epoch.
+        // 2020-01-01T00:00:00Z = 1577836800 -> 132223104000000000.
+        assert_eq!(to_filetime(1_577_836_800, 0), 132_223_104_000_000_000);
+        // Nanoseconds are truncated to 100ns units.
+        assert_eq!(
+            to_filetime(1_577_836_800, 500_000_000),
+            132_223_104_005_000_000
+        );
     }
 }

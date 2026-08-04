@@ -2056,21 +2056,24 @@ mod tests {
     #[test]
     fn absolute_date_uses_local_midnight() {
         // Regression: `dm:2026-08-01` must match local-midnight boundaries,
-        // not UTC. A file modified at 2026-08-01T00:30:00Z (local Jul 31
-        // 20:30 in western zones) belongs to dm:2026-07-31, and a file at
-        // local 00:30 on Aug 1 belongs to dm:2026-08-01.
-        let aug1 = parse_date("2026-08-01").unwrap(); // wall-clock-unix of local midnight Aug 1
-        // Stored `modified` is interpreted as UTC unix; wall-clock = modified + offset.
-        let utc_side = aug1 + 30 * 60; // UTC Aug 1 00:30 -> wall-clock Jul 31 20:30 (offset -4h)
-        let local_side = aug1 + 30 * 60 - local_offset_secs(); // wall-clock Aug 1 00:30
+        // not UTC. `aug1` is the wall-clock-unix of local midnight Aug 1; a
+        // file one minute before it belongs to dm:2026-07-31, one minute after
+        // belongs to dm:2026-08-01 — regardless of the host timezone.
+        let aug1 = parse_date("2026-08-01").unwrap();
+        // entry() stores `modified` as UTC unix; wall-clock = modified + offset.
+        // A file whose wall-clock is local midnight Aug 1 has modified =
+        // aug1 - local_offset_secs(). One minute either side of that boundary
+        // belongs to dm:2026-07-31 / dm:2026-08-01 regardless of timezone.
+        let before = aug1 - local_offset_secs() - 60;
+        let after = aug1 - local_offset_secs() + 60;
         let map: HashMap<String, IndexedFile> = HashMap::from([
-            ("utc-side".to_string(), entry(r"B:\p\utc-side.txt", false, utc_side)),
-            ("local-side".to_string(), entry(r"B:\p\local-side.txt", false, local_side)),
+            ("before".to_string(), entry(r"B:\p\before.txt", false, before)),
+            ("after".to_string(), entry(r"B:\p\after.txt", false, after)),
         ]);
         let opts = QueryOptions { query: "dm:2026-08-01".to_string(), ..Default::default() };
         let r = search(&map, &opts);
         let paths: Vec<&str> = r.entries.iter().map(|e| e.path.as_str()).collect();
-        assert_eq!(paths, vec![r"B:\p\local-side.txt"]);
+        assert_eq!(paths, vec![r"B:\p\after.txt"]);
     }
 
     #[test]
