@@ -2,7 +2,7 @@
 
 ![](demo.gif)
 
-An MCP server that gives AI agents instant filesystem search on Windows. Agents can find files by name, extension, size, or date, scope searches to a directory, exclude noise folders, and count matches across millions of files in milliseconds, without walking folders one by one.
+An MCP server that gives AI agents instant filesystem search on Windows (Linux and macOS in the next few days). Agents can find files by name, extension, size, or date, scope searches to a directory, exclude noise folders, and count matches across millions of files in milliseconds, without walking folders one by one.
 
 ## How It Works
 
