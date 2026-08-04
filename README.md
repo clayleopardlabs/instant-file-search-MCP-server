@@ -28,7 +28,7 @@ Searches are answered in milliseconds straight from memory. Nothing gets written
 
 ## Install
 
-This tool is Windows-only.
+This tool is currently Windows-only but Linux and MacOS support should be ready in the next few days.
 
 ### The recommended method
 
@@ -56,6 +56,8 @@ NOTE: The installer downloads the MCP server, the native indexer, and the `insta
 NOTE: This step puts the background indexer into service. It is the only step that uses administrator rights.
 
 NOTE: If you cannot see the permission prompt, the tools work with the fallback engine. They are slower. You can register the native indexer subsequently by running the installer in elevated mode.
+
+NOTE: if you use chatPGT codex and after you ask it to install this MCP server your agent just decides not to install it correctly and says something stupid like, "I used the user-level fallback engine. The optional native indexer service was not installed because it requires an administrator-level auto-start service with broad filesystem access." politely remind it that yes, it needs broad filesystem access because it literally monitors the entire damn filesystem. Or you can tell it less politely, like I did to mine.
 
 After the installation, your AI assistant has five new tools: `find_files`, `count_files`, `search_status`, `recent_changes`, and `aggregate_files`.
 
@@ -107,7 +109,6 @@ Add the server to the MCP client configuration:
 NOTE: For a plain MCP host, use the configuration shown above. For OpenCode, add the configuration to `opencode.json` or to `opencode.jsonc`. The installer adds the plug-in adapter automatically.
 
 3. Restart your AI app. The tool list will show the new tools.
-4. NOTE if you use chatPGT codex and after you ask it to install this MCP server your agents says something stupid like, "I used the user-level fallback engine. The optional native indexer service was not installed because it requires an administrator-level auto-start service with broad filesystem access." politely remind it that yes, it needs broad filesystem access because it literally monitors the entire damn filesystem. Or you can tell it less politely, like I did to mine.
 
 ## What Your AI Can Do With It
 
