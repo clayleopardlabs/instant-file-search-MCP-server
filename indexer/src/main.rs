@@ -11,16 +11,32 @@
 
 mod content;
 mod index;
-mod mft;
-mod pipe;
+mod platform;
+mod protocol;
 mod query;
 mod scan;
+mod types;
+
+#[cfg(windows)]
+mod mft;
+#[cfg(windows)]
+mod pipe;
+#[cfg(windows)]
 mod sector_reader;
+#[cfg(windows)]
 mod usn;
+
+#[cfg(target_os = "linux")]
+mod fanotify;
+#[cfg(target_os = "linux")]
+mod pipe_unix;
+#[cfg(target_os = "linux")]
+mod walk;
 
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
+#[cfg(windows)]
 use windows_service::service_dispatcher;
 
 use content::ContentStore;
@@ -44,6 +60,7 @@ fn main() -> Result<()> {
             print!("{out}");
             Ok(())
         }
+        #[cfg(windows)]
         "service" => {
             service_dispatcher::start(SERVICE_NAME, service_main)
                 .context("failed to start service dispatcher")
@@ -68,6 +85,7 @@ fn init_tracing() {
 
 /// SCM entry point for `service` mode. Runs serve() on a worker thread so
 /// the service thread can process SCM control requests.
+#[cfg(windows)]
 extern "system" fn service_main(_argc: u32, _argv: *mut *mut u16) {
     use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -130,7 +148,7 @@ fn serve() -> Result<()> {
 fn serve_with_stop(stop: Arc<std::sync::atomic::AtomicBool>) -> Result<()> {
     init_tracing();
 
-    let volumes = mft::discover_ntfs_volumes();
+    let volumes = platform::discover_volumes();
     if volumes.is_empty() {
         anyhow::bail!("no NTFS fixed volumes found");
     }
@@ -141,7 +159,7 @@ fn serve_with_stop(stop: Arc<std::sync::atomic::AtomicBool>) -> Result<()> {
     // Capture journal tails BEFORE the scan: the watcher starts from here,
     // covering changes made during the scan window without replaying the
     // entire journal history (the scan already snapshots current state).
-    let tails = usn::journal_tails(&volumes);
+    let tails = platform::journal_tails(&volumes);
     for (v, id, usn) in &tails {
         tracing::info!("USN tail on {}: id={id} next={usn}", v);
     }
@@ -199,11 +217,11 @@ fn serve_with_stop(stop: Arc<std::sync::atomic::AtomicBool>) -> Result<()> {
     let watch_content = content.clone();
     let watch_volumes = volumes.clone();
     std::thread::spawn(move || {
-        if let Err(e) = usn::watch_all(&watch_volumes, &watch_index, &watch_content, &tails) {
+        if let Err(e) = platform::watch_all(&watch_volumes, &watch_index, &watch_content, &tails) {
             tracing::error!("USN watcher exited: {e:#}");
         }
     });
 
-    let server = pipe::PipeServer::with_stop(state, stop)?;
+    let server = platform::PipeServer::with_stop(state, stop)?;
     server.run()
 }

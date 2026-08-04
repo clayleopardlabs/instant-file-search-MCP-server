@@ -21,127 +21,16 @@ use anyhow::{Context, Result};
 use ntfs::{KnownNtfsFileRecordNumber, Ntfs, NtfsReadSeek};
 
 use crate::sector_reader::SectorReader;
-
-/// A single indexed file with full path.
-#[derive(Debug, Clone)]
-pub struct IndexedFile {
-    /// Absolute path like `C:\Windows\System32\notepad.exe`.
-    pub path: String,
-    /// File size in bytes (0 for directories).
-    pub size: u64,
-    /// Creation time, 100 ns since 1601 (FILETIME).
-    pub created: i64,
-    /// Last modification time, 100 ns since 1601 (FILETIME).
-    pub modified: i64,
-    /// Last access time, 100 ns since 1601 (FILETIME).
-    pub accessed: i64,
-    /// `true` for directories.
-    pub is_dir: bool,
-    /// NTFS FILE_ATTRIBUTE_* flags from $STANDARD_INFORMATION (query/attrib).
-    pub attributes: u32,
-    /// NTFS file record number (used as the USN file reference).
-    pub file_ref: u64,
-    /// Parent record number for THIS link (hard links: one per directory
-    /// entry; only used during scan-time path resolution).
-    pub parent_ref: u64,
-    /// File name for THIS link (hard links: one per directory entry; only
-    /// used during scan-time path resolution).
-    pub own_name: String,
-    /// Precomputed lowercase name (query hot path).
-    pub name: String,
-    /// Precomputed lowercase path (query hot path).
-    pub lower_path: String,
-    /// Precomputed lowercase extension without the dot (query hot path).
-    pub extension: Option<String>,
-    /// Precomputed "under a default-excluded dir" (query hot path).
-    pub excluded: bool,
-}
-
-impl IndexedFile {
-    pub fn new(
-        path: String,
-        size: u64,
-        created: i64,
-        modified: i64,
-        accessed: i64,
-        is_dir: bool,
-        file_ref: u64,
-    ) -> Self {
-        let mut f = IndexedFile {
-            path,
-            size,
-            created,
-            modified,
-            accessed,
-            is_dir,
-            attributes: 0,
-            file_ref,
-            parent_ref: 0,
-            own_name: String::new(),
-            name: String::new(),
-            lower_path: String::new(),
-            extension: None,
-            excluded: false,
-        };
-        f.refresh();
-        f
-    }
-
-    fn refresh(&mut self) {
-        self.name = self
-            .path
-            .rsplit('\\')
-            .next()
-            .unwrap_or_default()
-            .to_string();
-        self.lower_path = self.path.to_ascii_lowercase();
-        self.extension = if self.is_dir {
-            None
-        } else {
-            self.path.rsplit_once('.').and_then(|(head, ext)| {
-                if head.is_empty() || ext.is_empty() || ext.contains('\\') {
-                    None
-                } else {
-                    Some(ext.to_ascii_lowercase())
-                }
-            })
-        };
-        self.excluded = is_default_excluded(&self.lower_path);
-    }
-
-    pub fn set_path(&mut self, path: String) {
-        self.path = path;
-        self.refresh();
-    }
-}
+use crate::types::IndexedFile;
 
 const ATTR_STD_INFO: u32 = 0x10;
 const ATTR_FILE_NAME: u32 = 0x30;
 const ATTR_DATA: u32 = 0x80;
 const ATTR_END: u32 = 0xFFFF_FFFF;
 
-use crate::query::DEFAULT_EXCLUDES;
-
-fn is_default_excluded(lower_path: &str) -> bool {
-    let bytes = lower_path.as_bytes();
-    DEFAULT_EXCLUDES.iter().any(|d| {
-        let d = d.as_bytes();
-        let mut i = 0;
-        while i + d.len() + 1 <= bytes.len() {
-            if bytes[i] == b'\\' && bytes[i + 1..i + 1 + d.len()].eq_ignore_ascii_case(d) {
-                let after = i + 1 + d.len();
-                if after == bytes.len() || bytes[after] == b'\\' {
-                    return true;
-                }
-            }
-            i += 1;
-        }
-        false
-    })
-}
 
 /// Discover NTFS volumes (drive letters) on this machine.
-pub fn discover_ntfs_volumes() -> Vec<String> {
+pub fn discover_volumes() -> Vec<String> {
     use windows::core::PCWSTR;
     use windows::Win32::Storage::FileSystem::GetDriveTypeW;
     use windows::Win32::Storage::FileSystem::{GetLogicalDrives, GetVolumeInformationW};

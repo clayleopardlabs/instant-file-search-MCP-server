@@ -4,9 +4,17 @@ version = "0.1.0"
 edition = "2021"
 license = "MIT"
 authors = ["Clay Leopard Labs"]
-description = "Native NTFS indexer service for instant file search (Phase 2: no Everything dependency)"
+description = "Native file indexer service for instant file search (Phase 2: no Everything dependency)"
 
 [dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+regex = "1"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[target.'cfg(windows)'.dependencies]
 ntfs = "0.4"
 windows = { version = "0.62", features = [
     "Win32_Foundation",
@@ -20,10 +28,10 @@ windows = { version = "0.62", features = [
     "Win32_System_Memory",
     "Win32_System_SystemInformation",
 ] }
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-regex = "1"
-anyhow = "1"
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 windows-service = "0.8"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"
+rustix = { version = "1", features = ["fs", "time", "process"] }
+nix = { version = "0.29", features = ["fanotify", "fs", "signal", "time"] }
+sd-notify = "0.4"

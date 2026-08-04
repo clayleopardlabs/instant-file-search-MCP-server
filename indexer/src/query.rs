@@ -8,7 +8,7 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::mft::IndexedFile;
+use crate::types::IndexedFile;
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -240,8 +240,9 @@ fn chrono_now() -> i64 {
 
 /// Seconds east of UTC for the local timezone, resolved once per process.
 /// Everything evaluates relative dates (today/yesterday/last7days/...) in
-/// local time, so our boundaries must too. Cached because GetLocalTime is
-/// not cheap enough for per-query use.
+/// local time, so our boundaries must too. Cached because the syscall is not
+/// cheap enough for per-query use.
+#[cfg(windows)]
 fn local_offset_secs() -> i64 {
     use std::sync::OnceLock;
     use windows::Win32::System::SystemInformation::{
@@ -265,6 +266,30 @@ fn local_offset_secs() -> i64 {
             + (lt.wMinute as i64) * 60
             + (lt.wSecond as i64) as i64;
         local_unix - utc_unix
+    })
+}
+
+/// Portable (Linux) local-timezone offset in seconds east of UTC, resolved
+/// once per process. Computed as `mktime(localtime_r(now)) - now` so it works
+/// on any libc (glibc/musl) without tm_gmtoff.
+#[cfg(target_os = "linux")]
+fn local_offset_secs() -> i64 {
+    use std::sync::OnceLock;
+    static CACHE: OnceLock<i64> = OnceLock::new();
+    *CACHE.get_or_init(|| {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        unsafe {
+            let mut tm: libc::tm = std::mem::zeroed();
+            let t = now as libc::time_t;
+            libc::localtime_r(&t, &mut tm);
+            // mktime interprets the broken-down local time, so the difference
+            // from the UTC epoch is the current UTC offset (DST included).
+            let local = libc::mktime(&mut tm);
+            local - t
+        }
     })
 }
 
@@ -311,7 +336,9 @@ pub fn tokenize(query: &str, opts: &QueryOptions) -> Vec<Token> {
     };
 
     let parts = split_query(query);
-    let mut raw_owned: String = String::new();
+    // Only the `not:` alias needs a scratch buffer; declared uninitialized and
+    // filled on first use so the compiler sees no dead initial assignment.
+    let mut raw_owned: String;
     for raw in parts {
         if raw == "|" {
             flush_group(&mut tokens, &mut group);

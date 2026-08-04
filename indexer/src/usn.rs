@@ -23,7 +23,7 @@ use windows::Win32::System::Ioctl::{
 use windows::core::PCWSTR;
 
 use crate::index::FileIndex;
-use crate::mft::IndexedFile;
+use crate::types::IndexedFile;
 
 const USN_REASON_RENAME_OLD: u32 = 0x0000_1000;
 const USN_REASON_RENAME_NEW: u32 = 0x0000_2000;

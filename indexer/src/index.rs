@@ -6,7 +6,7 @@ use std::sync::{Arc, RwLock};
 
 use serde::Serialize;
 
-use crate::mft::IndexedFile;
+use crate::types::IndexedFile;
 
 /// One recorded change event (populated from the USN journal).
 #[derive(Clone, Serialize, Debug)]
@@ -285,10 +285,7 @@ impl FileIndex {
 /// Extract the volume root (`C:`) from a full path like `C:\Users\x`. Paths
 /// without a drive letter (bare names) are returned unchanged.
 fn volume_of(path: &str) -> String {
-    path.split('\\')
-        .next()
-        .map(|s| s.to_string())
-        .unwrap_or_default()
+    crate::platform::volume_of(path)
 }
 
 /// Propagate a size delta up every ancestor directory of `path`, keeping the
@@ -327,7 +324,7 @@ pub type SharedIndex = Arc<FileIndex>;
 #[cfg(test)]
 mod tests {
     use super::*;
-use crate::mft::IndexedFile;
+use crate::types::IndexedFile;
 
 /// Maximum number of recent change events retained in the ring buffer.
 const MAX_CHANGES: usize = 100_000;

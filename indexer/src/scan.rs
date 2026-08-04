@@ -1,13 +1,13 @@
-//! Scan orchestration: build the initial index from all NTFS volumes.
+//! Scan orchestration: build the initial index from all discovered volumes.
 
 use anyhow::Result;
 
 use crate::index::SharedIndex;
-use crate::mft::{discover_ntfs_volumes, scan_volume};
+use crate::platform::{discover_volumes, scan_volume};
 
 /// One-shot scan of all volumes, printing stats (used by `scan` mode).
 pub fn scan_all_volumes() -> Result<String> {
-    let volumes = discover_ntfs_volumes();
+    let volumes = discover_volumes();
     let mut out = String::new();
     for v in &volumes {
         match scan_volume(v) {
