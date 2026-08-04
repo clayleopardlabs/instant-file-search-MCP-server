@@ -225,6 +225,16 @@ same one the Linux port established; macOS adds a third backend to it:
 | Windows service (SCM) | systemd unit (`Type=notify`) | launchd LaunchDaemon (readiness via connect+ping) |
 | Everything fallback engine | Not used | Not used (native-only) |
 
+**Case + Unicode normalization:** APFS is case-insensitive and
+normalization-insensitive but byte-preserving, so `readdir` returns a mix of
+NFC and NFD names. The engine canonicalizes both index keys (`lower_path`,
+`lower_name`) and query patterns to NFC + Unicode-lowercase on macOS (ASCII
+lowercase elsewhere), so a query for `café` matches a file stored as `cafe\u{301}`
+regardless of which form the filesystem returned. Case-sensitive (`case:`,
+`match_case`) matching uses NFC-only normalization so true-case patterns still
+match exactly. Path scoping (`path:`, `exclude_path`) is separator-agnostic on
+macOS/Linux, accepting both `/` and `\`.
+
 Install from source on a Mac:
 
 ```sh
