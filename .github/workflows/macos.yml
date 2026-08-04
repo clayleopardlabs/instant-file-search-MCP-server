@@ -1,0 +1,60 @@
+name: macOS CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+
+jobs:
+  build-test:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      - name: Check (macOS target)
+        run: cargo check --workspace --target aarch64-apple-darwin
+
+      - name: Test (macOS target)
+        run: cargo test --workspace --target aarch64-apple-darwin
+
+      - name: Build release binaries
+        run: cargo build --release --workspace --target aarch64-apple-darwin
+
+      - name: Verify macOS artifacts
+        run: |
+          test -x target/aarch64-apple-darwin/release/instant-file-search-indexer
+          test -x target/aarch64-apple-darwin/release/instant-file-search-mcp-server
+          echo "macOS binaries built OK"
+
+      - name: Shellcheck install-macos.sh
+        run: |
+          if command -v shellcheck >/dev/null 2>&1; then
+            shellcheck scripts/install-macos.sh
+          else
+            echo "shellcheck not installed; skipping"
+          fi
+
+      - name: Python syntax check (register-linux-client.py)
+        run: python3 -m py_compile scripts/register-linux-client.py
+
+      - name: plist syntax check
+        run: |
+          if command -v plutil >/dev/null 2>&1; then
+            plutil -lint scripts/com.clayleopardlabs.instant-file-search.plist
+          else
+            echo "plutil not installed; skipping"
+          fi

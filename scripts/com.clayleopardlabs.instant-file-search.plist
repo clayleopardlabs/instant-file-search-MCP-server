@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  com.clayleopardlabs.instant-file-search.plist — launchd LaunchDaemon for the
+  Instant File Search native indexer (macOS backend).
+
+  Unlike systemd (Type=notify), launchd has no readiness notification
+  protocol; the MCP server determines readiness by connect+ping on the Unix
+  socket. KeepAlive with SuccessfulExit=false restarts the daemon on crash.
+
+  Full Disk Access (TCC): root does NOT imply FDA. After install, grant Full
+  Disk Access to the deployed binary (or a signed app bundle around it) in
+  System Settings > Privacy & Security > Full Disk Access. Grants are
+  silently revocable by OS upgrades — see docs/macos-support.md.
+
+  Install:
+    sudo cp com.clayleopardlabs.instant-file-search.plist /Library/LaunchDaemons/
+    sudo launchctl bootstrap system /Library/LaunchDaemons/com.clayleopardlabs.instant-file-search.plist
+    sudo launchctl kickstart -k system/com.clayleopardlabs.instant-file-search   # restart
+
+  Uninstall:
+    sudo launchctl bootout system/com.clayleopardlabs.instant-file-search
+    sudo rm /Library/LaunchDaemons/com.clayleopardlabs.instant-file-search.plist
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.clayleopardlabs.instant-file-search</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/lib/instant-file-search/instant-file-search-indexer</string>
+        <string>serve</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!-- Restart on crash, not on clean exit. -->
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+
+    <!-- The indexer must read every file on the system. -->
+    <key>AbandonProcessGroup</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>/var/log/instant-file-search-indexer.log</string>
+    <key>StandardErrorPath</key>
+    <string>/var/log/instant-file-search-indexer.log</string>
+</dict>
+</plist>

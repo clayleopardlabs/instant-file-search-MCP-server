@@ -210,6 +210,41 @@ The script builds both binaries, installs them under `/usr/local/lib/instant-fil
 
 See `docs/build-linux.md` and `docs/linux-port-plan.md` for details and known gaps.
 
+## macOS (experimental)
+
+The native indexer also builds and runs on macOS (Apple Silicon / arm64; any
+recent macOS version). The macOS backend is native-only — the Everything
+fallback engine is Windows-only by construction. The platform seam is the
+same one the Linux port established; macOS adds a third backend to it:
+
+| Windows | Linux | macOS |
+|---|---|---|
+| $MFT raw scan | `getdents64` walk + `statx` | `getattrlistbulk` walk (batched metadata; `fileid` = `file_ref`, `crtime` = created) |
+| USN Change Journal | fanotify FID-mode marks | FSEvents (persistent per-device journal, `since=` replay, `UseExtendedData` for renames) |
+| Named pipe | Unix socket `/tmp/instant-file-search-indexer.sock` | Same Unix socket |
+| Windows service (SCM) | systemd unit (`Type=notify`) | launchd LaunchDaemon (readiness via connect+ping) |
+| Everything fallback engine | Not used | Not used (native-only) |
+
+Install from source on a Mac:
+
+```sh
+sudo bash scripts/install-macos.sh
+```
+
+The script builds both binaries, installs them under
+`/usr/local/lib/instant-file-search/`, installs the launchd daemon
+(`com.clayleopardlabs.instant-file-search`), starts it, and registers the MCP
+client with OpenCode (including the OMO sub-agent `mcps` patch).
+
+**Required manual step — Full Disk Access (TCC):** after install, grant Full
+Disk Access to `/usr/local/lib/instant-file-search/instant-file-search-indexer`
+in System Settings > Privacy & Security > Full Disk Access, then restart the
+daemon (`sudo launchctl kickstart -k system/com.clayleopardlabs.instant-file-search`).
+Root does not imply FDA; grants are silently revocable by OS upgrades.
+
+See `docs/build-macos.md` and `docs/macos-support.md` for details, known gaps,
+and the TCC/app-bundle discussion.
+
 ### oh-my-opencode-slim (OMO) auto-configuration
 
 If [oh-my-opencode-slim](https://github.com/anthropics/oh-my-opencode-slim) is installed, the installer automatically patches its config to add `instant-file-search` to every sub-agent's `mcps` array. This gives sub-agents (explorer, fixer, designer, oracle, librarian) access to the instant search tools so they can use them instead of falling back to slow shell commands.
@@ -235,7 +270,7 @@ cargo test
 
 Unit tests cover sorting, field parsing, timestamp formatting, and attribute formatting.
 
-More detail lives in `docs/`: `architecture.md`, `build.md`, `development.md`, `tools.md`, `parity.md`, `build-linux.md`, `linux-support.md`, and `linux-port-plan.md`.
+More detail lives in `docs/`: `architecture.md`, `build.md`, `development.md`, `tools.md`, `parity.md`, `build-linux.md`, `linux-support.md`, `linux-port-plan.md`, `build-macos.md`, and `macos-support.md`.
 
 ## How It Fits Together
 
