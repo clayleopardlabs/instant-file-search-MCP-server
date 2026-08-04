@@ -1,8 +1,10 @@
+#[cfg(windows)]
 mod everything;
 mod handler;
 mod native;
-#[cfg(test)]
+#[cfg(all(test, windows))]
 mod parity;
+mod results;
 mod tools;
 
 use rmcp::ServiceExt;

@@ -8,13 +8,19 @@
 //! the MCP server answers searches from the in-memory index (fast, private,
 //! no Everything dependency). When it is not, everything.rs takes over.
 
-use crate::everything::{ns100_to_iso_string, SearchResult, SearchResults};
+use crate::results::{ns100_to_iso_string, SearchResult, SearchResults};
 use crate::tools::{AggregateParams, CountParams, RecentChangesParams, SearchParams};
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
+/// Named pipe name for the native indexer (Windows).
+#[cfg(windows)]
 pub const PIPE_NAME: &str = r"\\.\pipe\instant-file-search-indexer";
+/// Unix socket path for the native indexer (Linux). Mirrors the indexer's
+/// `pipe_unix.rs::SOCKET_PATH`.
+#[cfg(target_os = "linux")]
+pub const SOCKET_PATH: &str = "/tmp/instant-file-search-indexer.sock";
 const CONNECT_TIMEOUT_MS: u32 = 2_000;
 
 #[derive(Debug, Serialize)]
@@ -40,6 +46,8 @@ pub fn available() -> bool {
 }
 
 /// Connect, waiting up to `timeout_ms` for the server (cold start).
+/// Windows: named pipe via CreateFileW/WaitNamedPipeW.
+#[cfg(windows)]
 fn connect_inner(timeout_ms: u32) -> std::io::Result<std::fs::File> {
     use std::os::windows::io::FromRawHandle;
     use windows::Win32::Foundation::{ERROR_PIPE_BUSY, GENERIC_READ, GENERIC_WRITE};
@@ -78,6 +86,28 @@ fn connect_inner(timeout_ms: u32) -> std::io::Result<std::fs::File> {
                     std::io::ErrorKind::NotFound,
                     "no indexer server",
                 ));
+            }
+        }
+    }
+}
+
+/// Connect, waiting up to `timeout_ms` for the server (cold start).
+/// Linux: Unix stream socket at `/tmp/instant-file-search-indexer.sock`.
+#[cfg(target_os = "linux")]
+fn connect_inner(timeout_ms: u32) -> std::io::Result<std::os::unix::net::UnixStream> {
+    use std::os::unix::net::UnixStream;
+    use std::time::{Duration, Instant};
+
+    let deadline = Instant::now() + Duration::from_millis(timeout_ms as u64);
+    loop {
+        match UnixStream::connect(SOCKET_PATH) {
+            Ok(s) => return Ok(s),
+            Err(e) => {
+                if Instant::now() > deadline {
+                    return Err(e);
+                }
+                // Server may be cold-starting (indexer startup race); retry.
+                std::thread::sleep(Duration::from_millis(200));
             }
         }
     }
@@ -194,10 +224,10 @@ pub fn search(params: &SearchParams) -> Result<SearchResults> {
             let attributes = e
                 .get("attributes")
                 .and_then(|v| v.as_u64())
-                .map(|a| crate::everything::format_attributes(a as u32))
+                .map(|a| crate::results::format_attributes(a as u32))
                 .or_else(|| {
                     match e.get("is_dir").and_then(|v| v.as_bool()) {
-                        Some(true) => Some(crate::everything::format_attributes(0x10)),
+                        Some(true) => Some(crate::results::format_attributes(0x10)),
                         _ => None,
                     }
                 });
@@ -245,9 +275,10 @@ pub fn count(params: &CountParams) -> Result<(u64, String)> {
     Ok((total, note))
 }
 
-/// Split a full path into (filename, parent_dir).
+/// Split a full path into (filename, parent_dir). Separator-agnostic:
+/// `\` on Windows, `/` on Linux.
 fn split_path(full: &str) -> (String, Option<String>) {
-    match full.rfind('\\') {
+    match full.rfind(['\\', '/']) {
         Some(i) => (full[i + 1..].to_string(), Some(full[..i].to_string())),
         None => (full.to_string(), None),
     }

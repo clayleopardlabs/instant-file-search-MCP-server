@@ -5,9 +5,25 @@ use rmcp::{
 };
 use tracing::error;
 
+#[cfg(windows)]
 use crate::everything;
 use crate::native;
 use crate::tools::{AggregateParams, CountParams, RecentChangesParams, SearchParams};
+
+/// Probe the Everything fallback engine for `search_status`. Windows-only;
+/// on Linux the native indexer is the only engine.
+#[cfg(windows)]
+fn everything_status_probe() -> anyhow::Result<serde_json::Value> {
+    everything::status()
+        .map(|s| serde_json::to_value(&s).unwrap_or(serde_json::Value::Null))
+}
+
+#[cfg(not(windows))]
+fn everything_status_probe() -> anyhow::Result<serde_json::Value> {
+    Err(anyhow::anyhow!(
+        "Everything engine is Windows-only; native indexer is the only engine"
+    ))
+}
 
 #[derive(Clone, Default)]
 pub struct EverythingHandler;
@@ -24,7 +40,14 @@ impl EverythingHandler {
                 Ok(r) => Ok(r),
                 Err(e) => {
                     error!("native search failed, falling back to Everything: {e}");
-                    everything::search(params)
+                    #[cfg(windows)]
+                    {
+                        everything::search(params)
+                    }
+                    #[cfg(not(windows))]
+                    {
+                        Err(e)
+                    }
                 }
             }
         })
@@ -51,7 +74,14 @@ impl EverythingHandler {
                 Ok(r) => Ok(r),
                 Err(e) => {
                     error!("native count failed, falling back to Everything: {e}");
-                    everything::count(params)
+                    #[cfg(windows)]
+                    {
+                        everything::count(params)
+                    }
+                    #[cfg(not(windows))]
+                    {
+                        Err(e)
+                    }
                 }
             }
         })
@@ -105,7 +135,7 @@ impl EverythingHandler {
     #[tool(description = "Check if the file search service is running. Returns engine status, indexed file count, and volumes. Call this before find_files/count_files if you suspect the service is down.")]
     async fn search_status(&self) -> Result<CallToolResult, ErrorData> {
         let (native_result, everything_result) = tokio::task::spawn_blocking(|| {
-            (native::status(), everything::status())
+            (native::status(), everything_status_probe())
         })
         .await
         .map_err(|e| {
