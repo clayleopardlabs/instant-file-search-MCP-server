@@ -38,3 +38,5 @@ sd-notify = "0.4"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 libc = "0.2"
+objc2-core-services = { version = "0.3", features = ["std", "libc", "FSEvents"] }
+objc2-core-foundation = { version = "0.3", features = ["CFArray", "CFString", "CFRunLoop", "CFDictionary", "CFNumber"] }
