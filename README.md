@@ -59,9 +59,28 @@ Updates are staged in a new versioned folder before the installer switches the M
 
 NOTE: If you cannot see the permission prompt, the tools work with the fallback engine. They are slower. You can register the native indexer subsequently by running the installer in elevated mode.
 
-NOTE: if you use chatPGT codex and after you ask it to install this MCP server your agent just decides not to install it correctly and says something stupid like, "I used the user-level fallback engine. The optional native indexer service was not installed because it requires an administrator-level auto-start service with broad filesystem access." politely remind it that yes, it needs broad filesystem access because it literally monitors the entire damn filesystem. Or you can tell it less politely, like I did to mine.
+NOTE: If an AI agent reports that it installed only the fallback engine, the
+installation is incomplete. Ask it to run the repository installer with the
+required UAC approval and verify with `doctor.ps1 -RequireNative`.
 
 After the installation, your AI assistant has five new tools: `find_files`, `count_files`, `search_status`, `recent_changes`, and `aggregate_files`.
+
+### Agent installation contract
+
+Agents should treat the native indexer as a required part of the normal Windows
+installation. The Everything engine is a resilience fallback, not a substitute
+for the service. A fallback-only install must never be reported as complete
+unless the user explicitly requested fallback mode.
+
+For an agent-run install, use the repository installer and then run:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\doctor.ps1 -RequireNative
+```
+
+The installation is complete only when that command exits with code 0. If UAC,
+policy, or permissions block service registration, report the installation as
+incomplete and ask the user to approve or perform the elevated step.
 
 ### You have the source code
 

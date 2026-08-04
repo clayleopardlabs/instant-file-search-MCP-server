@@ -1,5 +1,24 @@
 # Instant File Search MCP Server — Repository Map
 
+## Installation acceptance criteria
+
+When asked to install this MCP server, use `scripts/install.ps1` and complete the
+full Windows installation. Do not silently substitute the Everything fallback for
+the native indexer service.
+
+An installation is complete only when all of these are true:
+
+1. The MCP server is registered with the requested host.
+2. The `instant-file-search-indexer` Windows service is installed, set to
+   auto-start, and running.
+3. The service command points at the active version recorded in `current.json`.
+4. `scripts/doctor.ps1 -RequireNative` succeeds.
+
+If elevation is required, request UAC approval and wait for it. If policy or
+permissions prevent the native service from being installed, report the install
+as incomplete and identify that exact blocker. Fallback mode is valid only when
+the user explicitly asks for it.
+
 ```
 instant-file-search-MCP-server/             # repo name; binary: instant-file-search-mcp-server
 ├── Cargo.toml              # Cargo workspace (MCP server + indexer crate)

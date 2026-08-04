@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param(
-    [string]$InstallRoot = (Join-Path $env:LOCALAPPDATA 'ClayLeopardLabs\instant-file-search')
+    [string]$InstallRoot = (Join-Path $env:LOCALAPPDATA 'ClayLeopardLabs\instant-file-search'),
+    [switch]$RequireNative
 )
 
 $ErrorActionPreference = 'Continue'
@@ -169,19 +170,24 @@ if (-not $servicePath -and $indexerSvc) {
 if (Test-Path -LiteralPath $indexerExe) {
     Pass "Native indexer binary present ('$indexerExe')."
 } else {
-    Warn "Native indexer binary missing ('$indexerExe'). Searches will use the Everything fallback."
+    if ($RequireNative) { Fail "Native indexer binary missing ('$indexerExe')." }
+    else { Warn "Native indexer binary missing ('$indexerExe'). Searches will use the Everything fallback." }
 }
 if ($indexerSvc) {
     if ($indexerSvc.Status -eq 'Running') { Pass 'Native indexer service is running.' }
+    elseif ($RequireNative) { Fail "Native indexer service exists but is '$($indexerSvc.Status)'. Start it with: sc.exe start instant-file-search-indexer" }
     else { Warn "Native indexer service exists but is '$($indexerSvc.Status)'. Start it with: sc.exe start instant-file-search-indexer" }
 } else {
-    Warn "Native indexer service is not installed. Run the installer elevated (or: sc.exe create instant-file-search-indexer binPath= `"$indexerExe service`" start= auto)."
+    $message = "Native indexer service is not installed. Run the installer elevated (or: sc.exe create instant-file-search-indexer binPath= `"$indexerExe service`" start= auto)."
+    if ($RequireNative) { Fail $message } else { Warn $message }
 }
 
 if ($servicePath -and $servicePath -notmatch [regex]::Escape($indexerExe)) {
-    Warn "Partial upgrade: service command does not point to the active indexer binary '$indexerExe'. Re-run the installer to switch it."
+    $message = "Partial upgrade: service command does not point to the active indexer binary '$indexerExe'. Re-run the installer to switch it."
+    if ($RequireNative) { Fail $message } else { Warn $message }
 } elseif ($indexerSvc -and -not $servicePath) {
-    Warn 'Could not read the native indexer service command, so its deployed version could not be verified.'
+    $message = 'Could not read the native indexer service command, so its deployed version could not be verified.'
+    if ($RequireNative) { Fail $message } else { Warn $message }
 }
 
 if (Test-Path -LiteralPath $stableBinary) {
