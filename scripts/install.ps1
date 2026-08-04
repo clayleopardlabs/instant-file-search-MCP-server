@@ -29,7 +29,7 @@ $versionRoot = $null
 $stableBinary = $null
 $stableIndexer = $null
 $installVersion = $null
-$downloadRoot = Join-Path $InstallRoot ("downloads\\$PID")
+$downloadRoot = Join-Path (Join-Path $InstallRoot 'downloads') $PID
 
 # Simulation mode: redirect all user-config writes into a sandbox and skip the
 # global env-var write, so parallel/simulated installs never touch the real

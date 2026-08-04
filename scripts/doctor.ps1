@@ -159,6 +159,13 @@ if (Test-Path -LiteralPath (Join-Path $versionRoot 'LICENSE-instant-file-search-
 $indexerExe = if ($installState -and $installState.indexer_binary) { $installState.indexer_binary } else { Join-Path $InstallRoot 'indexer\instant-file-search-indexer.exe' }
 $indexerSvc = Get-Service -Name 'instant-file-search-indexer' -ErrorAction SilentlyContinue
 $indexerServiceConfig = Get-CimInstance -ClassName Win32_Service -Filter "Name='instant-file-search-indexer'" -ErrorAction SilentlyContinue
+$servicePath = if ($indexerServiceConfig) { $indexerServiceConfig.PathName } else { $null }
+if (-not $servicePath -and $indexerSvc) {
+    $serviceQuery = (& sc.exe qc instant-file-search-indexer 2>&1 | Out-String)
+    if ($LASTEXITCODE -eq 0 -and $serviceQuery -match '(?m)^\s*BINARY_PATH_NAME\s*:\s*(.+)$') {
+        $servicePath = $Matches[1].Trim()
+    }
+}
 if (Test-Path -LiteralPath $indexerExe) {
     Pass "Native indexer binary present ('$indexerExe')."
 } else {
@@ -171,8 +178,10 @@ if ($indexerSvc) {
     Warn "Native indexer service is not installed. Run the installer elevated (or: sc.exe create instant-file-search-indexer binPath= `"$indexerExe service`" start= auto)."
 }
 
-if ($indexerServiceConfig -and $indexerServiceConfig.PathName -notmatch [regex]::Escape($indexerExe)) {
+if ($servicePath -and $servicePath -notmatch [regex]::Escape($indexerExe)) {
     Warn "Partial upgrade: service command does not point to the active indexer binary '$indexerExe'. Re-run the installer to switch it."
+} elseif ($indexerSvc -and -not $servicePath) {
+    Warn 'Could not read the native indexer service command, so its deployed version could not be verified.'
 }
 
 if (Test-Path -LiteralPath $stableBinary) {
