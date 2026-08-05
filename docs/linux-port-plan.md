@@ -22,7 +22,8 @@ that will serve as the live Linux sandbox. Rationale:
   unprivileged fanotify with FID (5.13+), `statx` btime. The only gap is
   `stx_subvol` (6.10+), which is btrfs-only and irrelevant on ext4.
 - ext4 root avoids the one real porting caveat: fanotify `FAN_MARK_FILESYSTEM` can
-  fail with `EXDEV` on btrfs subvolumes (forces the inotify fallback). ext4 tests
+  fail with `EXDEV` on btrfs subvolumes. The current build reports that case as
+  unsupported because the inotify fallback is not implemented. ext4 tests
   the **primary** fanotify path cleanly.
 - Optional: add a btrfs data partition/second disk later to exercise the fallback
   path deliberately.
@@ -187,16 +188,17 @@ Linux backends behind the same seams:
 - Commit per phase per rule #79 (update README, commit, push).
 
 ## Risks / decisions to confirm
-1. **fanotify permissions**: FAN_MARK_FILESYSTEM needs root. Acceptable for a service
-   install (systemd + AmbientCapabilities), with unprivileged per-dir inotify as the
-   fallback? (Recommended: yes, mirror Tracker.)
+1. **fanotify permissions**: FAN_MARK_FILESYSTEM needs root. The current service
+   install uses AmbientCapabilities; unprivileged per-dir inotify remains a future
+   fallback rather than a shipped capability.
 2. **atime**: date_accessed is unreliable on Linux defaults. Ship it documented, or
    omit? (Recommend: ship, documented.)
 3. **Raw ext4 reads**: skip for v1 (walk is fast enough on SSD; raw reads are
    ext4-only, root, and unsafe mounted-rw). Revisit only if cold-HDD latency matters.
 4. **Content store**: 256MB budget limitation carries over unchanged (known gap).
-5. **btrfs**: fanotify filesystem marks can fail (EXDEV) — inotify fallback covers it;
-   index keys use `stx_subvol` where available.
+5. **btrfs**: fanotify filesystem marks can fail (EXDEV) — currently reported as
+   unsupported until an inotify fallback is added; index keys use `stx_subvol` where
+   available.
 
 ## Rough effort
 - Phase 0-1: scaffolding + de-noise (small, CI-heavy) — ~1 session

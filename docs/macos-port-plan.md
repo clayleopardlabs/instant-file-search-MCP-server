@@ -40,6 +40,27 @@ adds macOS backends behind the same seams:
 | `src/native.rs` | named-pipe client | Unix socket client | **Unix socket client** | Reuse Linux arm |
 | `src/handler.rs` / `src/tools.rs` | MCP surface | same | same | Portable as-is (minus everything) |
 
+## Current implementation status (2026-08-05)
+
+Phases 0–6 are represented in the repository: the macOS target dependencies and
+CI workflow exist; `walk_macos.rs` implements bulk metadata enumeration;
+`fsevents.rs` implements persistent event-ID replay, extended-data file IDs,
+rename handling, and overflow rescans; the Unix socket and native-only routing
+are shared with Linux; and launchd packaging plus FDA guidance are present.
+
+The remaining work is validation and release hardening:
+
+- Confirm the workspace builds and tests on `macos-15` in GitHub Actions.
+- Run a real Mac smoke test covering APFS enumeration, firmlinks, external
+  volumes, FSEvents churn/rename/overflow, launchd restart, and MCP round trips.
+- Validate Full Disk Access for the deployed executable or signed bundle; root
+  access alone is not sufficient.
+- Verify the installer on a clean Mac, including idempotent bootstrap, logging,
+  permissions, and uninstall.
+- Keep the documented limitations explicit: initial scans are much slower than
+  Windows, access to protected locations depends on FDA, and content indexing
+  remains bounded by the shared 256 MB store.
+
 ## Phases
 
 ### Phase 0: Cross-platform build scaffolding (no runtime behavior change)
@@ -47,10 +68,9 @@ adds macOS backends behind the same seams:
   objc2-core-services with the FSEvents feature). `nix` supports macOS/BSD
   fully; rustix's `getdents64`/`statx`/`io_uring` surface is Linux-gated (fine —
   the macOS walker is libc anyway).
-- **Gates**: `#[cfg(target_os = "macos")]` around the new `walk_macos.rs` and
-  `fsevents.rs`; `platform.rs` gains a macOS arm re-exporting
-  `walk_macos`/`fsevents`/`pipe_unix`. macOS stubs return a clear "not yet
-  implemented" so the workspace compiles.
+- **Gates**: `#[cfg(target_os = "macos")]` around the macOS
+  `walk_macos.rs` and `fsevents.rs`; `platform.rs` re-exports
+  `walk_macos`/`fsevents`/`pipe_unix` for the native macOS build.
 - **CI**: add `.github/workflows/macos.yml` — macos-15 + macos-26 arm64,
   `cargo build` + `cargo test` both crates. Windows path untouched.
 - **Gate**: workspace compiles on all three targets; all portable unit tests

@@ -54,6 +54,8 @@ fi
 
 command -v cargo >/dev/null 2>&1 || { echo "error: cargo not found in PATH" >&2; exit 1; }
 command -v python3 >/dev/null 2>&1 || { echo "error: python3 required for client registration" >&2; exit 1; }
+command -v launchctl >/dev/null 2>&1 || { echo "error: launchctl not found; this installer must run on macOS" >&2; exit 1; }
+command -v plutil >/dev/null 2>&1 || { echo "error: plutil not found; cannot validate launchd plist" >&2; exit 1; }
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
@@ -87,14 +89,15 @@ fi
 
 # ---- 3. launchd daemon -------------------------------------------------------
 step "Installing launchd daemon $PLIST_NAME"
-action "cp $PLIST_SRC /Library/LaunchDaemons/$PLIST_NAME && launchctl bootstrap system /Library/LaunchDaemons/$PLIST_NAME"
+action "plutil -lint $PLIST_SRC && install -o root -g wheel -m 0644 $PLIST_SRC /Library/LaunchDaemons/$PLIST_NAME && launchctl bootstrap system /Library/LaunchDaemons/$PLIST_NAME"
 if [ "$DRY_RUN" -eq 0 ]; then
     [ -f "$PLIST_SRC" ] || { echo "error: plist missing: $PLIST_SRC" >&2; exit 1; }
-    cp "$PLIST_SRC" "/Library/LaunchDaemons/$PLIST_NAME"
+    plutil -lint "$PLIST_SRC" >/dev/null
+    install -o root -g wheel -m 0644 "$PLIST_SRC" "/Library/LaunchDaemons/$PLIST_NAME"
     # Remove any previous instance so bootstrap is idempotent.
     launchctl bootout "system/com.clayleopardlabs.instant-file-search" 2>/dev/null || true
     launchctl bootstrap system "/Library/LaunchDaemons/$PLIST_NAME"
-    launchctl kickstart -k "system/com.clayleopardlabs.instant-file-search" || true
+    launchctl kickstart -k "system/com.clayleopardlabs.instant-file-search"
     echo "Daemon status:"
     launchctl print "system/com.clayleopardlabs.instant-file-search" 2>/dev/null | head -20 || true
 fi

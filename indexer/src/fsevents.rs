@@ -280,8 +280,23 @@ fn apply_event(state: &WatcherState, flag: u32, path: &str, file_id: Option<i64>
     }
 
     // Everything else: created / modified / inode-meta / finder-info / owner / xattr / cloned.
-    state.index.record_change(now, "WRITE", path, is_dir);
+    state.index.record_change(now, event_reason(flag), path, is_dir);
     upsert_or_remove(state, path, is_dir);
+}
+
+/// Map an FSEvents item flag to the stable change vocabulary exposed by MCP.
+/// FSEvents distinguishes many metadata causes, but callers need the same
+/// portable created/modified/renamed/deleted categories on every platform.
+fn event_reason(flag: u32) -> &'static str {
+    if flag & kFSEventStreamEventFlagItemCreated != 0 {
+        "CREATE"
+    } else if flag & kFSEventStreamEventFlagItemRemoved != 0 {
+        "DELETE"
+    } else if flag & kFSEventStreamEventFlagItemRenamed != 0 {
+        "RENAME"
+    } else {
+        "WRITE"
+    }
 }
 
 /// Re-stat a path and upsert it into the index + content store, or remove it if
@@ -310,5 +325,27 @@ fn now_filetime() -> i64 {
         Ok(d) => (d.as_secs() as i64 + FILETIME_EPOCH_OFFSET) * 10_000_000
             + (d.subsec_nanos() as i64 / 100),
         Err(e) => (e.duration().as_secs() as i64 + FILETIME_EPOCH_OFFSET) * 10_000_000,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn event_reason_maps_portable_categories() {
+        assert_eq!(event_reason(kFSEventStreamEventFlagItemCreated), "CREATE");
+        assert_eq!(event_reason(kFSEventStreamEventFlagItemRemoved), "DELETE");
+        assert_eq!(event_reason(kFSEventStreamEventFlagItemRenamed), "RENAME");
+        assert_eq!(event_reason(kFSEventStreamEventFlagItemModified), "WRITE");
+        assert_eq!(event_reason(kFSEventStreamEventFlagItemXattrMod), "WRITE");
+    }
+
+    #[test]
+    fn overflow_flags_are_distinct_from_ordinary_events() {
+        let overflow = kFSEventStreamEventFlagMustScanSubDirs
+            | kFSEventStreamEventFlagKernelDropped;
+        assert_ne!(overflow & kFSEventStreamEventFlagMustScanSubDirs, 0);
+        assert_eq!(event_reason(overflow), "WRITE");
     }
 }

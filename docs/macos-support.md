@@ -2,12 +2,17 @@
 
 Feasibility research for porting the native indexer to macOS (three research
 lanes: change tracking, enumeration + index key, service host + transport).
-Status: assessment only — no code written.
+Status: implementation present; CI and live macOS validation remain outstanding.
+
+The repository now includes the macOS walker, FSEvents watcher, Unix-socket
+transport reuse, launchd plist, installer, and macOS CI workflow. This document
+records the architecture and the remaining validation risks; it is no longer a
+proposal for an unimplemented port.
 
 ## Executive summary
 
-The macOS port is **feasible and structurally mirrors the Linux port**: the
-`platform.rs` seam already isolates the Windows/Linux backends, and macOS plugs
+The macOS port is **implemented and structurally mirrors the Linux port**: the
+`platform.rs` seam isolates the Windows/Linux/macOS backends, and macOS plugs
 into the same seam. Two pillars have direct replacements (FSEvents for change
 tracking, `getattrlistbulk` for enumeration), the index key `(real devid,
 fileid)` is sound, and the transport (`pipe_unix.rs`) is reusable verbatim.
