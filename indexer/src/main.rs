@@ -163,7 +163,7 @@ fn serve_with_stop(stop: Arc<std::sync::atomic::AtomicBool>) -> Result<()> {
 
     let volumes = platform::discover_volumes();
     if volumes.is_empty() {
-        anyhow::bail!("no NTFS fixed volumes found");
+        anyhow::bail!("no indexable filesystem volumes found");
     }
     tracing::info!("volumes: {}", volumes.join(", "));
 

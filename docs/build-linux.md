@@ -72,7 +72,7 @@ sudo /usr/local/lib/instant-file-search/instant-file-search-indexer scan
 | Windows | Linux |
 |---|---|
 | $MFT raw scan | `getdents64` walk + `statx` (inode = `file_ref`, btime = created) |
-| USN Change Journal | fanotify FID-mode marks (root/CAP_SYS_ADMIN; inotify fallback) |
+| USN Change Journal | fanotify FID-mode marks (root/CAP_SYS_ADMIN; no inotify fallback yet) |
 | Named pipe | Unix socket `/tmp/instant-file-search-indexer.sock` |
 | Everything fallback | Not used — native is the only engine |
 | Windows service (SCM) | systemd `Type=notify` + sd_notify |
@@ -80,12 +80,12 @@ sudo /usr/local/lib/instant-file-search/instant-file-search-indexer scan
 ## Known gaps (Linux)
 
 - **fanotify needs root.** The systemd unit grants `CAP_SYS_ADMIN` via
-  `AmbientCapabilities`. Running the indexer unprivileged falls back to
-  inotify (documented, less complete change tracking).
+  `AmbientCapabilities`. There is currently no inotify fallback; unprivileged
+  execution fails clearly instead of providing incomplete change tracking.
 - **`date_accessed` is unreliable** on Linux defaults (relatime/noatime
   mounts). `date_accessed` queries may be stale or zero.
 - **Content store**: the 256MB bounded content store carries over unchanged.
-- **btrfs**: fanotify `EXDEV` caveat applies; inotify is the fallback.
+- **btrfs**: fanotify `EXDEV` caveat applies; there is no fallback yet.
 - **No Everything fallback**: on Linux the native indexer is the only search
   path, so `search_status` reports the native engine only.
 

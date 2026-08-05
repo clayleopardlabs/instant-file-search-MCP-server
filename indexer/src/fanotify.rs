@@ -13,7 +13,9 @@
 //!      whole subtree, since fanotify emits no per-child rename records)
 //!
 //! Requires root (or CAP_SYS_ADMIN) for `fanotify_init` with FID flags and
-//! `FAN_MARK_FILESYSTEM`. On queue overflow (`FAN_Q_OVERFLOW`) the index is
+//! `FAN_MARK_FILESYSTEM`. There is intentionally no inotify fallback in this
+//! backend yet: if fanotify cannot be initialized, the indexer reports a clear
+//! startup error rather than claiming complete change tracking. On queue overflow (`FAN_Q_OVERFLOW`) the index is
 //! rebuilt from a full re-scan via `index.replace(all)`, matching the USN
 //! rollover recovery (volume-scoped replacement is unsafe on Linux: root "/"
 //! is a prefix of every path).

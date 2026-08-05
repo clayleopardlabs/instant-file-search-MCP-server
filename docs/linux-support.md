@@ -33,18 +33,19 @@ GNOME Tracker (since 3.3) and FSearch (since 0.3) converged on.
 - **Why not inotify:** per-directory watches, no hierarchy, hard per-user limits
   (`max_user_watches` default ~1% of RAM, clamped 8192-1M; `max_queued_events` 16384).
   FSearch's author: unusable beyond ~1M files.
-- **Permissions:** `FAN_MARK_FILESYSTEM` requires root/CAP_SYS_ADMIN (unprivileged
-  fanotify since 5.13 is `FAN_CLASS_NOTIF` + FID but inode marks only). Run as a
-  systemd service with `AmbientCapabilities=CAP_SYS_ADMIN`, or fall back to per-directory
-  inode marks unprivileged (Tracker's model).
+- **Permissions:** `FAN_MARK_FILESYSTEM` requires root/CAP_SYS_ADMIN. The current
+  implementation runs this path through systemd with `AmbientCapabilities=CAP_SYS_ADMIN`.
+  It does not yet provide an inotify fallback, so unprivileged execution and filesystems
+  where filesystem-wide fanotify marks fail are reported as unsupported rather than
+  silently providing incomplete change tracking.
 - **Event identity:** FID events carry `(fsid, file handle)` + parent handle + name —
   survives renames, resolvable via `open_by_handle_at`. `FAN_RENAME` (5.17+) is a single
   atomic event with old+new parent+name (the USN rename analogue).
 - **Scalability:** one event queue per group, system-wide; default cap 16384 events
   (`FAN_Q_OVERFLOW` = rescan signal). FSearch handles "tens of thousands of changes/sec".
 - **Known blind spots:** no events for mmap/msync write-back, no remote NFS changes,
-  btrfs subvolumes may reject filesystem marks with `EXDEV` (fall back to inotify, as
-  Tracker does).
+  btrfs subvolumes may reject filesystem marks with `EXDEV`; this is currently a
+  documented limitation because the inotify fallback is not implemented.
 
 **There is no USN journal on Linux.** ext4's JBD2 is a metadata journal (not an API);
 XFS exposes an LSN (no userspace API); btrfs has an internal change log (no stable API).
@@ -53,11 +54,11 @@ unmerged. eBPF kprobes on `vfs_*` are viable (Datadog/Wazuh scale) but fragile a
 kernel versions, need root, and still have no persistence — wrong tool for an indexer.
 auditd can stream file events but loses events under load and is security-shaped.
 
-**Consequence for `recent_changes`:** the "since X" API must be a user-space
-construction — the daemon tails fanotify, persists every event into its own ring buffer
-(append log / SQLite), and serves "since X" from that store. Events that occurred while
-the daemon was down are unrecoverable → rescan required. This is exactly the Windows
-ring-buffer design, minus the kernel-side persistence.
+**Consequence for `recent_changes`:** the daemon persists its bounded event history as
+newline-delimited JSON at `/var/lib/instant-file-search/changes.jsonl` on Linux
+(override with `INSTANT_FS_CHANGE_LOG`). Events already written survive normal daemon
+restarts. Events that occur while the daemon is down remain unrecoverable, and a future
+hardening pass should add explicit downtime-gap detection and rescan signaling.
 
 ## 2. Fast enumeration ($MFT replacement)
 

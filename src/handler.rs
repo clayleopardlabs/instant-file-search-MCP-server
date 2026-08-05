@@ -20,9 +20,11 @@ fn everything_status_probe() -> anyhow::Result<serde_json::Value> {
 
 #[cfg(not(windows))]
 fn everything_status_probe() -> anyhow::Result<serde_json::Value> {
-    Err(anyhow::anyhow!(
-        "Everything engine is Windows-only; native indexer is the only engine"
-    ))
+    Ok(serde_json::json!({
+        "available": false,
+        "engine": "native-only",
+        "reason": "The Everything fallback engine is Windows-only"
+    }))
 }
 
 #[derive(Clone, Default)]

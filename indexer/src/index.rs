@@ -2,18 +2,21 @@
 
 use std::collections::VecDeque;
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::fs::{File, OpenOptions};
+use std::io::{BufRead, BufReader, BufWriter, Write};
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex, RwLock};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::types::IndexedFile;
 
-/// One recorded change event (populated from the USN journal).
-#[derive(Clone, Serialize, Debug)]
+/// One recorded change event (populated from USN, fanotify, or FSEvents).
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq, Eq)]
 pub struct ChangeEvent {
-    /// Windows FILETIME (100ns since 1601) of the change.
+    /// FILETIME-compatible timestamp (100ns since 1601) of the change.
     pub timestamp: i64,
-    /// Human-readable reason (e.g. "CREATE", "DELETE", "RENAME", "CLOSE").
+    /// Human-readable reason (e.g. "CREATE", "DELETE", "RENAME", "WRITE").
     pub reason: String,
     /// Full path affected.
     pub path: String,
@@ -25,6 +28,7 @@ pub struct ChangeEvent {
 #[derive(Default)]
 pub struct FileIndex {
     inner: RwLock<Inner>,
+    change_log: Mutex<Option<BufWriter<File>>>,
 }
 
 #[derive(Default)]
@@ -41,11 +45,15 @@ struct Inner {
 }
 
 /// Maximum number of change events retained in memory.
-const MAX_CHANGES: usize = 10_000;
+const MAX_CHANGES: usize = 100_000;
 
 impl FileIndex {
     pub fn new() -> Self {
-        Self::default()
+        let (changes, change_log) = open_change_log();
+        Self {
+            inner: RwLock::new(Inner { entries: HashMap::new(), refs: HashMap::new(), changes }),
+            change_log: Mutex::new(change_log),
+        }
     }
 
     /// Replace the entire index (initial scan).
@@ -146,15 +154,26 @@ impl FileIndex {
 
     /// Record a change event into the bounded ring buffer.
     pub fn record_change(&self, timestamp: i64, reason: &str, path: &str, is_dir: bool) {
-        let mut inner = self.inner.write().unwrap();
-        inner.changes.push_back(ChangeEvent {
+        let event = ChangeEvent {
             timestamp,
             reason: reason.to_string(),
             path: path.to_string(),
             is_dir,
-        });
+        };
+        let mut inner = self.inner.write().unwrap();
+        inner.changes.push_back(event.clone());
         while inner.changes.len() > MAX_CHANGES {
             inner.changes.pop_front();
+        }
+        drop(inner);
+        if let Ok(mut log) = self.change_log.lock() {
+            if let Some(writer) = log.as_mut() {
+                if serde_json::to_writer(&mut *writer, &event).is_ok()
+                    && writer.write_all(b"\n").is_ok()
+                {
+                    let _ = writer.flush();
+                }
+            }
         }
     }
 
@@ -282,8 +301,68 @@ impl FileIndex {
     }
 }
 
-/// Extract the volume root (`C:`) from a full path like `C:\Users\x`. Paths
-/// without a drive letter (bare names) are returned unchanged.
+fn change_log_path() -> Option<PathBuf> {
+    if let Some(path) = std::env::var_os("INSTANT_FS_CHANGE_LOG") {
+        return Some(PathBuf::from(path));
+    }
+    #[cfg(target_os = "linux")]
+    {
+        return Some(PathBuf::from("/var/lib/instant-file-search/changes.jsonl"));
+    }
+    #[cfg(target_os = "macos")]
+    {
+        return std::env::var_os("HOME").map(|home| {
+            PathBuf::from(home).join("Library/Application Support/instant-file-search/changes.jsonl")
+        });
+    }
+    #[cfg(windows)]
+    {
+        return std::env::var_os("LOCALAPPDATA").map(|root| {
+            PathBuf::from(root).join("ClayLeopardLabs/instant-file-search/changes.jsonl")
+        });
+    }
+    #[allow(unreachable_code)]
+    None
+}
+
+fn open_change_log() -> (VecDeque<ChangeEvent>, Option<BufWriter<File>>) {
+    let Some(path) = change_log_path() else {
+        return (VecDeque::new(), None);
+    };
+    let mut changes = VecDeque::new();
+    if let Ok(file) = File::open(&path) {
+        for line in BufReader::new(file).lines().flatten() {
+            if let Ok(event) = serde_json::from_str::<ChangeEvent>(&line) {
+                changes.push_back(event);
+                while changes.len() > MAX_CHANGES {
+                    changes.pop_front();
+                }
+            }
+        }
+    }
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    // Rewrite the retained tail on startup so the on-disk journal stays
+    // bounded instead of growing forever.
+    let writer = OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(path)
+        .ok()
+        .map(|file| {
+            let mut writer = BufWriter::new(file);
+            for event in &changes {
+                let _ = serde_json::to_writer(&mut writer, event);
+                let _ = writer.write_all(b"\n");
+            }
+            let _ = writer.flush();
+            writer
+        });
+    (changes, writer)
+}
+
 fn volume_of(path: &str) -> String {
     crate::platform::volume_of(path)
 }
@@ -324,10 +403,7 @@ pub type SharedIndex = Arc<FileIndex>;
 #[cfg(test)]
 mod tests {
     use super::*;
-use crate::types::IndexedFile;
-
-/// Maximum number of recent change events retained in the ring buffer.
-const MAX_CHANGES: usize = 100_000;
+    use crate::types::IndexedFile;
 
     fn e(path: &str) -> IndexedFile {
         IndexedFile::new(path.to_string(), 0, 0, 0, 0, false, 0)
@@ -536,6 +612,20 @@ const MAX_CHANGES: usize = 100_000;
         assert_eq!(ix.recent_changes_filtered(0, 0, Some("   ")).len(), 5);
         // Case-insensitive.
         assert_eq!(ix.recent_changes_filtered(0, 0, Some("DELETED")).len(), 1);
+    }
+
+    #[test]
+    fn change_event_jsonl_roundtrips() {
+        let event = ChangeEvent {
+            timestamp: 133_000_000_000_000_000,
+            reason: "RENAME_NEW".to_string(),
+            path: "/tmp/project/new.rs".to_string(),
+            is_dir: false,
+        };
+        let mut line = serde_json::to_vec(&event).unwrap();
+        line.push(b'\n');
+        let decoded: ChangeEvent = serde_json::from_slice(line.trim_ascii()).unwrap();
+        assert_eq!(decoded, event);
     }
 
     #[test]

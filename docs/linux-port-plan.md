@@ -35,6 +35,41 @@ that will serve as the live Linux sandbox. Rationale:
 - Dev machine PATH: cargo lives at `C:\Users\sophi\.cargo\bin` (not on PATH);
   mingw64 WinLibs toolchain for the Windows GNU target.
 
+## Current implementation assessment (2026-08-04)
+
+The repository now contains most of the planned Linux port: a `getdents64`/`statx`
+walker, platform abstractions, inode-based indexing, a fanotify watcher, Unix-domain
+socket transport, Linux-native MCP routing, systemd packaging, an installer, and Linux
+CI. The remaining work is primarily production validation and hardening rather than
+initial cross-platform scaffolding.
+
+Before advertising Linux support as production-ready, complete these items:
+
+1. **Run live Linux validation.** Test on Ubuntu 24.04/ext4 with a real filesystem:
+   full scans, search/count/aggregate, content indexing, create/modify/delete/rename
+   events, fanotify overflow recovery, Unix-socket MCP round trips, systemd readiness,
+   shutdown, and a clean installation.
+2. **Implement an inotify fallback.** The current implementation intentionally requires
+   fanotify with filesystem-wide marks. Unprivileged execution and btrfs cases where
+   those marks fail are reported as unsupported until a per-directory inotify backend
+   is added.
+3. **Harden restart semantics for `recent_changes`.** The index now persists its bounded
+   event history as JSONL, but events during daemon downtime remain unrecoverable. Add
+   explicit downtime-gap detection and rescan signaling before treating this as fully
+   equivalent to the Windows journal behavior.
+4. **Add integration and filesystem coverage.** Add fixture/live tests for walker parity,
+   permissions, symlinks, hard links, mount boundaries, fanotify event sequences,
+   overflow recovery, btrfs, non-root execution, and service startup.
+5. **Clean up Linux-facing behavior.** Correct stale Windows/NTFS wording in shared
+   errors and comments, make `search_status` explicitly native-only on Linux, and
+   align the installer and documentation with the actual fallback behavior.
+6. **Measure production limits.** Record cold/warm scan time, memory use, content-index
+   impact, event throughput, and recovery time under heavy filesystem churn.
+
+The two highest-risk gaps are fanotify edge cases and the lack of persistent recent-change
+history. The recommended next milestone is a live Ubuntu smoke test, followed by the
+inotify decision and implementation/documentation update.
+
 ## Architecture: platform abstraction
 
 The codebase already separates portable core from platform backends. The port adds
