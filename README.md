@@ -27,11 +27,98 @@ Once installed, your AI assistant can:
 
 | Tool | What it does |
 |------|--------------|
-| `find_files` | List files that match a search, with details like size and dates |
-| `count_files` | Tell you how many files match, without listing them all |
-| `search_status` | Check whether the search engine is working |
-| `recent_changes` | Show files changed recently (via the Windows change journal), newest first. Pass `hours=1` for the last hour (server computes the time); cap results with `limit` (default 100); filter with `reasons=created,modified,renamed,deleted` to skip delete noise |
+| `find_files` | Discover the exact files an agent should read, with names, paths, dates, sizes, and filters |
+| `count_files` | Measure the size of a search before returning a large result set |
+| `search_status` | Confirm which local search engine is available and whether the index is healthy |
+| `recent_changes` | Investigate what was created, modified, renamed, or deleted, newest first |
 | `aggregate_files` | Answer roll-up questions like largest files, file counts by type, or total size |
+
+## What This Unlocks for AI Agents
+
+Most coding assistants can read a file when you give them its path. The hard part
+is knowing which files matter in the first place. This MCP gives the assistant a
+fast, live map of your computer so it can investigate before it starts opening
+files one by one.
+
+### 1. Understand an unfamiliar project in seconds
+
+An agent can discover the shape of a codebase before touching the source:
+
+> “Show me the project’s source files, tests, configuration, generated output,
+> and largest directories. Ignore dependencies and build artifacts.”
+
+It can then decide where to look instead of guessing from a shallow directory
+listing or spending minutes walking the tree.
+
+### 2. Investigate what changed, not just what exists
+
+`recent_changes` lets an agent answer questions that ordinary file search cannot:
+
+- What changed in this project in the last hour?
+- Which files were renamed or deleted during the failed build?
+- What appeared after I installed this package?
+- Show only created and modified files; hide delete noise.
+
+This is especially useful for debugging, reviewing automated changes, and tracing
+unexpected activity. The indexer records change events locally and the tool returns
+them newest first.
+
+### 3. Search the whole computer without drowning in results
+
+Agents can search every indexed drive, then narrow the answer by folder, file type,
+date, size, or path. They can count first and list second:
+
+> “How many JSON files are there outside dependencies? Now show me the first 30
+> under this project.”
+
+That lets an agent reason about scale before requesting thousands of results.
+
+### 4. Answer questions involving totals and comparisons
+
+`aggregate_files` gives the agent facts that normally require a shell script or a
+manual spreadsheet:
+
+- total files and folders
+- total disk space used
+- largest matching entries
+- counts and sizes grouped by extension
+
+For example:
+
+> “Which file types take the most space in this project, and what are the five
+> largest files?”
+
+The agent receives the answer directly instead of listing everything and trying to
+sum it inside the conversation.
+
+### 5. Find secrets, stale artifacts, and suspicious leftovers
+
+An agent can perform broad hygiene and forensic sweeps locally:
+
+- find `.env`, credential, backup, dump, and installer files
+- locate old exports and duplicate filenames
+- find unexpectedly large files
+- identify files created or modified during a suspicious time window
+- search targeted text files with `content:"phrase"`
+
+These searches are useful for security reviews, release preparation, incident
+triage, and cleaning up a project before sharing it.
+
+### 6. Keep working at machine scale
+
+The native index is designed for millions of files. The agent does not need to run
+slow recursive shell commands, ask you where every folder is, or read a directory
+listing into its context just to find one file. Search stays local, fast, and small
+enough to use repeatedly during a task.
+
+### 7. Give sub-agents the same filesystem awareness
+
+The optional OpenCode adapter exposes the same search abilities to sub-agents. An
+explorer can map a repository, a librarian can locate documentation, and a fixer
+can find related tests or configuration without falling back to slow shell scans.
+
+The practical result is a different workflow: agents can discover, measure,
+investigate, and then read only the files that matter.
 
 ### Handy search filters and tricks
 
@@ -62,18 +149,119 @@ The AI can embed these in a search query:
 
 By default the tools skip noisy folders like `node_modules`, `.git`, and `WinSxS` to keep results useful. Use `include_all=true` to include them. To scope a search to one folder, pass the `path` parameter (forward slashes like `C:/Users` work fine, and the engine normalizes them).
 
-## Common Questions
+## Start Here
 
-**Do I need to install a separate search engine or any other program?** No. The search engine is built in.
+This tool gives your AI assistant a fast way to find files on your computer. After
+installation, you can ask normal questions such as:
 
-**Does it send my files anywhere?** No. Every search stays on your machine. There is no network, no cloud, no server.
+- “Find the project’s README file.”
+- “Show me the largest files in this folder, ignoring build output.”
+- “Which files changed today?”
+- “How many JSON files are on this computer?”
+- “Find configuration files, but skip dependencies and Git folders.”
 
-**Why is it so fast?** It keeps a live index of your files in memory, so it doesn't have to search your drives folder by folder.
+You do not need to learn a search language. The examples below are available when
+you want more control, but everyday questions work in plain English.
 
-**Will it slow down my computer?** It runs quietly in the background. The initial scan takes about 15 seconds, and after that it just tracks changes as they happen.
+### Frequently asked questions
 
-**Why Windows only?** It reads the NTFS master file list, which only Windows maintains.
+**Do I need to install another search program?**
 
+No. The installer includes everything the tool needs.
+
+**Does anything leave my computer?**
+
+No. Searches run locally. Your file names, file contents, and search results are
+not sent to a cloud service by this project.
+
+**Why is it fast?**
+
+The tool prepares a local index in the background. Your AI can search that index
+instead of opening every folder one at a time.
+
+**Will it slow down my computer?**
+
+The first scan uses some resources while it builds the index. After that, the
+background service watches for changes and normally stays quiet. On Windows, the
+first scan typically takes seconds; Linux and macOS scans can take longer because
+their operating systems do not provide the same fast file-table access.
+
+**What happens if the background service is unavailable?**
+
+Windows includes a built-in fallback search engine, so ordinary searches can still
+work. Linux and macOS use the native indexer only and will report when it is not
+available.
+
+**What permissions does it need?**
+
+Windows needs administrator approval once to install the background service. On
+macOS, Full Disk Access must also be granted manually in System Settings if you
+want to search protected folders such as Documents or Desktop.
+
+**How do I know it is working?**
+
+Ask your AI assistant to run `search_status`, or use the platform health-check
+command described below.
+
+### Install on Windows
+
+1. Open PowerShell.
+2. Run:
+
+   ```powershell
+   powershell -c "irm https://raw.githubusercontent.com/clayleopardlabs/instant-file-search-MCP-server/master/scripts/install.ps1 | iex"
+   ```
+
+3. Approve the Windows permission prompt.
+4. Restart your AI app.
+
+The installer detects supported AI apps, installs the search service, and updates
+their configuration. You can safely run it again when a new version is available.
+
+To check the installation from a repository checkout:
+
+```powershell
+.\scripts\doctor.ps1 -RequireNative
+```
+
+If the check fails because Windows blocked the administrator step, the installation
+is incomplete. Approve the prompt and run the installer again.
+
+### Install on Linux or macOS
+
+These ports are experimental and require a source checkout. They are intended for
+users comfortable running a service from a terminal.
+
+Linux:
+
+```sh
+sudo bash scripts/install-linux.sh
+```
+
+macOS:
+
+```sh
+sudo bash scripts/install-macos.sh
+```
+
+On macOS, grant Full Disk Access to the installed indexer in System Settings, then
+restart the launchd service. See the platform-specific build guides below for the
+details and current limitations.
+
+### Ask your AI for help
+
+You can ask the assistant to search, count, summarize, or inspect recent changes.
+For broad searches, ask it to count matches first. This helps it choose a useful
+number of results instead of flooding the conversation.
+
+By default, common noise folders such as `node_modules`, `.git`, and build output
+are skipped. Tell the assistant to include everything when you really need those
+folders.
+
+## Technical Details
+
+The following sections are for developers, advanced users, and anyone who wants
+to understand how the system works under the hood.
 
 ## Search Engine (Built In)
 
@@ -84,9 +272,10 @@ No separate programs to install. This tool brings its own search engine, so it w
 
 Searches are answered in milliseconds straight from memory. Nothing gets written to disk, and nothing leaves your machine.
 
-## Install
+## Detailed Installation Reference
 
-This tool is currently Windows-only but Linux and MacOS support should be ready in the next few days.
+The following sections provide the full installation and configuration reference
+for Windows, Linux, and macOS.
 
 ### The recommended method
 
