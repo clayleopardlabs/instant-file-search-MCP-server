@@ -6,7 +6,7 @@ An MCP server that gives AI agents instant filesystem search. Agents can filter 
 
 ## How It Works
 
-Windows records every file creation, rename, move, and deletion as it happens. This server maintains a live index of the NTFS Master File Table from those records, so agents can query the entire filesystem the same way a search engine queries a document index.
+Computers record every file creation, rename, move, and deletion as it happens. This server maintains a live index of the those records, so agents can query the entire filesystem the same way a search engine queries a document index.
 
 Agents will start using it automatically but can also be asked:
 
