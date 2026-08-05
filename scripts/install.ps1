@@ -693,22 +693,24 @@ function Install-NativeService {
 
 # Write a tiny helper that performs the admin-only switch. The binary was
 # already copied into a new versioned directory, so no running executable is
-# overwritten during an update.
+# overwritten during an update. Use cmd.exe for sc.exe because PowerShell
+# strips nested quotes from native-command arguments.
 $helper = @"
 `$ErrorActionPreference = 'Stop'
 `$serviceName = '$escServiceName'
 `$serviceIndexer = '$escServiceIndexer'
-`$serviceCommand = '"' + `$serviceIndexer + '" service'
+`$serviceCommand = 'sc.exe config "' + `$serviceName + '" binPath= "\"' + `$serviceIndexer + '\" service" start= auto'
 `$existing = Get-Service -Name `$serviceName -ErrorAction SilentlyContinue
 if (`$existing) {
   if (`$existing.Status -ne 'Stopped') {
     Stop-Service -Name `$serviceName -Force
     `$existing.WaitForStatus([System.ServiceProcess.ServiceControllerStatus]::Stopped, [TimeSpan]::FromSeconds(30))
   }
-  & sc.exe config `$serviceName "binPath= `$serviceCommand" start= auto | Out-Null
+  & cmd.exe /d /c `$serviceCommand | Out-Null
   if (`$LASTEXITCODE -ne 0) { throw "sc.exe config failed for service `$serviceName." }
 } else {
-  & sc.exe create `$serviceName "binPath= `$serviceCommand" start= auto | Out-Null
+  `$serviceCommand = 'sc.exe create "' + `$serviceName + '" binPath= "\"' + `$serviceIndexer + '\" service" start= auto'
+  & cmd.exe /d /c `$serviceCommand | Out-Null
   if (`$LASTEXITCODE -ne 0) { throw "sc.exe create failed for service `$serviceName." }
 }
 Start-Service -Name `$serviceName
