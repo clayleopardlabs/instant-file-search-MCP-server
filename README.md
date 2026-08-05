@@ -120,6 +120,14 @@ can find related tests or configuration without falling back to slow shell scans
 The practical result is a different workflow: agents can discover, measure,
 investigate, and then read only the files that matter.
 
+### 8. Know whether an answer is complete before relying on it
+
+`search_status` gives the agent a coverage and health check before it begins an
+investigation. It can see whether the native index is available, how many files
+are indexed, and which volumes are covered. That means the agent can recognize
+the difference between “nothing matched” and “the search service is not ready,”
+and can explain when a result is based on a fallback or a limited content index.
+
 ### Handy search filters and tricks
 
 The AI can embed these in a search query:
