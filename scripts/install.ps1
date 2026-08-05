@@ -684,19 +684,20 @@ function Install-NativeService {
     }
 
     New-Item -ItemType Directory -Path $indexerDir -Force | Out-Null
-    Copy-Item -LiteralPath $resolved -Destination $serviceIndexer -Force
 
     # Escape single quotes in paths so the generated helper survives usernames
     # or install roots that contain an apostrophe.
+    $escResolved = $resolved -replace "'", "''"
     $escServiceIndexer = $serviceIndexer -replace "'", "''"
     $escServiceName = $serviceName -replace "'", "''"
 
 # Write a tiny helper that performs the admin-only switch. The binary was
-# already copied into a new versioned directory, so no running executable is
-# overwritten during an update. Use cmd.exe for sc.exe because PowerShell
-# strips nested quotes from native-command arguments.
+# copied after the service stops, so updates can replace an existing binary.
+# Use cmd.exe for sc.exe because PowerShell strips nested quotes from native
+# command arguments.
 $helper = @"
 `$ErrorActionPreference = 'Stop'
+`$sourceIndexer = '$escResolved'
 `$serviceName = '$escServiceName'
 `$serviceIndexer = '$escServiceIndexer'
 `$serviceCommand = 'sc.exe config "' + `$serviceName + '" binPath= "\"' + `$serviceIndexer + '\" service" start= auto'
@@ -706,21 +707,30 @@ if (`$existing) {
     Stop-Service -Name `$serviceName -Force
     `$existing.WaitForStatus([System.ServiceProcess.ServiceControllerStatus]::Stopped, [TimeSpan]::FromSeconds(30))
   }
+  Copy-Item -LiteralPath `$sourceIndexer -Destination `$serviceIndexer -Force
   & cmd.exe /d /c `$serviceCommand | Out-Null
   if (`$LASTEXITCODE -ne 0) { throw "sc.exe config failed for service `$serviceName." }
 } else {
+  Copy-Item -LiteralPath `$sourceIndexer -Destination `$serviceIndexer -Force
   `$serviceCommand = 'sc.exe create "' + `$serviceName + '" binPath= "\"' + `$serviceIndexer + '\" service" start= auto'
   & cmd.exe /d /c `$serviceCommand | Out-Null
   if (`$LASTEXITCODE -ne 0) { throw "sc.exe create failed for service `$serviceName." }
 }
 Start-Service -Name `$serviceName
+`$started = Get-Service -Name `$serviceName
+`$started.WaitForStatus([System.ServiceProcess.ServiceControllerStatus]::Running, [TimeSpan]::FromSeconds(120))
 "@
     Set-Content -LiteralPath $registerHelper -Value $helper -Encoding UTF8
 
     if ($elevated) {
         & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $registerHelper
         if ($LASTEXITCODE -ne 0) { throw "Indexer service registration failed (exit $LASTEXITCODE)." }
-        Write-Host "PASS: indexer service '$serviceName' installed and started (auto-start)." -ForegroundColor Green
+        $svc = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
+        if ($svc -and $svc.Status -eq 'Running') {
+            Write-Host "PASS: indexer service '$serviceName' installed and started (auto-start)." -ForegroundColor Green
+        } else {
+            throw "Indexer service '$serviceName' was registered but is not running."
+        }
         return
     }
 
@@ -732,10 +742,22 @@ Start-Service -Name `$serviceName
 
     Write-Host 'The native indexer service needs administrator rights. A UAC prompt will appear - click Yes.' -ForegroundColor Yellow
     try {
-        Start-Process -FilePath powershell.exe -Verb RunAs -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$registerHelper`"" -Wait -ErrorAction Stop
-        $svc = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
-        if ($svc) { Write-Host "PASS: indexer service '$serviceName' installed and started (auto-start)." -ForegroundColor Green }
-        else { Write-Host "WARN: elevation did not produce the '$serviceName' service. Run the helper elevated manually:" -ForegroundColor Yellow; Write-Host "  powershell -NoProfile -ExecutionPolicy Bypass -File `"$registerHelper`"" -ForegroundColor Gray }
+        $elevatedProcess = Start-Process -FilePath powershell.exe -Verb RunAs -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$registerHelper`"" -Wait -PassThru -ErrorAction Stop
+        if ($elevatedProcess.ExitCode -ne 0) {
+            throw "elevated service helper exited with code $($elevatedProcess.ExitCode)."
+        }
+        $deadline = (Get-Date).AddSeconds(120)
+        do {
+            $svc = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
+            if ($svc -and $svc.Status -eq 'Running') { break }
+            Start-Sleep -Milliseconds 500
+        } while ((Get-Date) -lt $deadline)
+        if ($svc -and $svc.Status -eq 'Running') {
+            Write-Host "PASS: indexer service '$serviceName' installed and started (auto-start)." -ForegroundColor Green
+        } else {
+            Write-Host "WARN: elevation did not leave the '$serviceName' service running. Run the helper elevated manually:" -ForegroundColor Yellow
+            Write-Host "  powershell -NoProfile -ExecutionPolicy Bypass -File `"$registerHelper`"" -ForegroundColor Gray
+        }
     } catch {
         Write-Host "WARN: elevation was cancelled or failed: $($_.Exception.Message)" -ForegroundColor Yellow
         Write-Host "Run this elevated when ready:" -ForegroundColor Yellow
