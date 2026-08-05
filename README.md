@@ -147,7 +147,11 @@ The AI can embed these in a search query:
 | `" "` | `"exact phrase"` | Match an exact phrase |
 | `content:` | `content:"fn main"` | Match file contents. Backed by a bounded 256 MB store, so coverage is a subset of files — use it for targeted searches, not exhaustive counts |
 
-By default the tools skip noisy folders like `node_modules`, `.git`, and `WinSxS` to keep results useful. Use `include_all=true` to include them. To scope a search to one folder, pass the `path` parameter (forward slashes like `C:/Users` work fine, and the engine normalizes them).
+The tools automatically skip noisy folders such as `node_modules`, `.git`, and
+`WinSxS`, so the agent gets useful results without having to manage exclusions.
+When a task genuinely requires a complete inventory, the agent can include those
+folders automatically. Folder scoping also accepts ordinary paths such as
+`C:/Users`; the engine normalizes path separators for the agent.
 
 ## Start Here
 
@@ -250,9 +254,9 @@ details and current limitations.
 
 ### Ask your AI for help
 
-You can ask the assistant to search, count, summarize, or inspect recent changes.
-For broad searches, ask it to count matches first. This helps it choose a useful
-number of results instead of flooding the conversation.
+The assistant can search, count, summarize, or inspect recent changes. For broad
+searches, it can measure the result size first and choose a useful response on its
+own instead of flooding the conversation with thousands of matches.
 
 By default, common noise folders such as `node_modules`, `.git`, and build output
 are skipped. Tell the assistant to include everything when you really need those
