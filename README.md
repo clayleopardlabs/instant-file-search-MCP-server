@@ -8,7 +8,7 @@ An MCP server that gives AI agents instant filesystem search. Agents can filter 
 
 Windows records every file creation, rename, move, and deletion as it happens. This server maintains a live index of the NTFS Master File Table from those records, so agents can query the entire filesystem the same way a search engine queries a document index.
 
-Typical agent use cases:
+Agents will start using it automatically but can also be asked:
 
 * "Show me what changed in this project since yesterday."
 * "Find files that look like secrets or local config."
@@ -16,6 +16,70 @@ Typical agent use cases:
 * "Count how many test files exist beside implementation files."
 * "Find old exports, duplicate downloads, or forgotten installers."
 * "Give me the project's shape before reading the code."
+
+## What Your AI Can Do With It
+
+Once installed, your AI assistant can:
+
+| Tool | What it does |
+|------|--------------|
+| `find_files` | List files that match a search, with details like size and dates |
+| `count_files` | Tell you how many files match, without listing them all |
+| `search_status` | Check whether the search engine is working |
+| `recent_changes` | Show files changed recently (via the Windows change journal), newest first. Pass `hours=1` for the last hour (server computes the time); cap results with `limit` (default 100); filter with `reasons=created,modified,renamed,deleted` to skip delete noise |
+| `aggregate_files` | Answer roll-up questions like largest files, file counts by type, or total size |
+
+Your AI can use the tools to answer things like:
+
+- "What changed in this project since yesterday?"
+- "Find files that look like secrets or local config."
+- "List source files but ignore dependencies and build output."
+- "Count how many test files exist beside implementation files."
+- "Find old exports, duplicate downloads, or forgotten installers."
+- "What are the five largest files in my downloads folder?"
+- "What changed on this drive in the last week?"
+
+### Handy search tricks
+
+The AI can embed these in a search query:
+
+| Trick | Example | Effect |
+|-------|---------|--------|
+| `file:` | `file:*.ts` | Files only |
+| `folder:` | `folder:src` | Folders only |
+| `dm:` | `dm:today`, `dm:last2hours` | Modified date. Relative: today, yesterday, Ndays, lastNdays, prevNdays, thisweek/lastmonth/etc., Nhours/minutes/secs (rolling). Calendar: jan–dec (current year), sun–sat (current week), mtd, ytd, qtd |
+| `dc:` | `dc:thisweek` | Created this week |
+| `da:` | `da:yesterday` | Opened yesterday |
+| `size:` | `size:>10mb` | Larger than 10 MB (constants: tiny<1kb, small<1mb, medium<1gb, large>1gb, huge>4gb, gigantic>16gb, empty=0) |
+| `attrib:` | `attrib:h`, `attrib:!d` | Match by NTFS attribute (h hidden, s system, r readonly, d directory, a archive, t temp, c compressed, e encrypted, o offline, p reparse, i not-indexed, n normal) |
+| wildcards | `*.ts`, `file[0-9].txt`, `img#.png`, `**.rs` | `*` any run (not `\\`), `**` any run incl. `\\`, `?` one char, `[set]`/`[!set]` classes, `#` one digit, `\\x` escape |
+| `dupe:` | `dupe:filename` | Find duplicate filenames |
+| `!` | `!*.tmp` | Exclude a pattern |
+| `|` | `*.ts | *.tsx` | Match either pattern |
+| `len:` | `len:>10`, `len:1..5` | Filename length filter (same operators as `size:`) |
+| `frn:` | `frn:>1000` | File reference number filter |
+| anchors | `^foo`, `bar$`, `^exact$` | `^` start-of-name, `$` end-of-name; also `start-with:`, `end-with:`, `prefix:`, `suffix:` |
+| `is:` | `is:hidden`, `is:folder` | Type/attribute shorthand: `folder`/`file`, `hidden`, `system`, `readonly`, `archive`, `temporary`, `compressed`, `encrypted`, `offline`, `reparse`, `not-content-indexed`, `normal` |
+| `and:`/`or:`/`not:` | `and:foo`, `or:bar`, `not:baz` | Operator aliases: `and:` = default AND, `or:` = OR with previous, `not:` = exclude |
+| `metric:` | `metric:size:>1000kb` | Switch size interpretation from JEDEC (1024-based) to decimal (1000-based) |
+| `wholeword:` | `wholeword:foo`, `ww:foo` | Match whole word only |
+| `" "` | `"exact phrase"` | Match an exact phrase |
+| `content:` | `content:"fn main"` | Match file contents. Backed by a bounded 256 MB store, so coverage is a subset of files — use it for targeted searches, not exhaustive counts |
+
+By default the tools skip noisy folders like `node_modules`, `.git`, and `WinSxS` to keep results useful. Use `include_all=true` to include them. To scope a search to one folder, pass the `path` parameter (forward slashes like `C:/Users` work fine, and the engine normalizes them).
+
+## Common Questions
+
+**Do I need to install a separate search engine or any other program?** No. The search engine is built in.
+
+**Does it send my files anywhere?** No. Every search stays on your machine. There is no network, no cloud, no server.
+
+**Why is it so fast?** It keeps a live index of your files in memory, so it doesn't have to search your drives folder by folder.
+
+**Will it slow down my computer?** It runs quietly in the background. The initial scan takes about 15 seconds, and after that it just tracks changes as they happen.
+
+**Why Windows only?** It reads the NTFS master file list, which only Windows maintains.
+
 
 ## Search Engine (Built In)
 
@@ -131,68 +195,6 @@ NOTE: For a plain MCP host, use the active server path from `current.json`. For 
 
 3. Restart your AI app. The tool list will show the new tools.
 
-## What Your AI Can Do With It
-
-Once installed, your AI assistant can:
-
-| Tool | What it does |
-|------|--------------|
-| `find_files` | List files that match a search, with details like size and dates |
-| `count_files` | Tell you how many files match, without listing them all |
-| `search_status` | Check whether the search engine is working |
-| `recent_changes` | Show files changed recently (via the Windows change journal), newest first. Pass `hours=1` for the last hour (server computes the time); cap results with `limit` (default 100); filter with `reasons=created,modified,renamed,deleted` to skip delete noise |
-| `aggregate_files` | Answer roll-up questions like largest files, file counts by type, or total size |
-
-Your AI can use the tools to answer things like:
-
-- "What changed in this project since yesterday?"
-- "Find files that look like secrets or local config."
-- "List source files but ignore dependencies and build output."
-- "Count how many test files exist beside implementation files."
-- "Find old exports, duplicate downloads, or forgotten installers."
-- "What are the five largest files in my downloads folder?"
-- "What changed on this drive in the last week?"
-
-### Handy search tricks
-
-The AI can embed these in a search query:
-
-| Trick | Example | Effect |
-|-------|---------|--------|
-| `file:` | `file:*.ts` | Files only |
-| `folder:` | `folder:src` | Folders only |
-| `dm:` | `dm:today`, `dm:last2hours` | Modified date. Relative: today, yesterday, Ndays, lastNdays, prevNdays, thisweek/lastmonth/etc., Nhours/minutes/secs (rolling). Calendar: jan–dec (current year), sun–sat (current week), mtd, ytd, qtd |
-| `dc:` | `dc:thisweek` | Created this week |
-| `da:` | `da:yesterday` | Opened yesterday |
-| `size:` | `size:>10mb` | Larger than 10 MB (constants: tiny<1kb, small<1mb, medium<1gb, large>1gb, huge>4gb, gigantic>16gb, empty=0) |
-| `attrib:` | `attrib:h`, `attrib:!d` | Match by NTFS attribute (h hidden, s system, r readonly, d directory, a archive, t temp, c compressed, e encrypted, o offline, p reparse, i not-indexed, n normal) |
-| wildcards | `*.ts`, `file[0-9].txt`, `img#.png`, `**.rs` | `*` any run (not `\\`), `**` any run incl. `\\`, `?` one char, `[set]`/`[!set]` classes, `#` one digit, `\\x` escape |
-| `dupe:` | `dupe:filename` | Find duplicate filenames |
-| `!` | `!*.tmp` | Exclude a pattern |
-| `|` | `*.ts | *.tsx` | Match either pattern |
-| `len:` | `len:>10`, `len:1..5` | Filename length filter (same operators as `size:`) |
-| `frn:` | `frn:>1000` | File reference number filter |
-| anchors | `^foo`, `bar$`, `^exact$` | `^` start-of-name, `$` end-of-name; also `start-with:`, `end-with:`, `prefix:`, `suffix:` |
-| `is:` | `is:hidden`, `is:folder` | Type/attribute shorthand: `folder`/`file`, `hidden`, `system`, `readonly`, `archive`, `temporary`, `compressed`, `encrypted`, `offline`, `reparse`, `not-content-indexed`, `normal` |
-| `and:`/`or:`/`not:` | `and:foo`, `or:bar`, `not:baz` | Operator aliases: `and:` = default AND, `or:` = OR with previous, `not:` = exclude |
-| `metric:` | `metric:size:>1000kb` | Switch size interpretation from JEDEC (1024-based) to decimal (1000-based) |
-| `wholeword:` | `wholeword:foo`, `ww:foo` | Match whole word only |
-| `" "` | `"exact phrase"` | Match an exact phrase |
-| `content:` | `content:"fn main"` | Match file contents. Backed by a bounded 256 MB store, so coverage is a subset of files — use it for targeted searches, not exhaustive counts |
-
-By default the tools skip noisy folders like `node_modules`, `.git`, and `WinSxS` to keep results useful. Use `include_all=true` to include them. To scope a search to one folder, pass the `path` parameter (forward slashes like `C:/Users` work fine, and the engine normalizes them).
-
-## Common Questions
-
-**Do I need to install a separate search engine or any other program?** No. The search engine is built in.
-
-**Does it send my files anywhere?** No. Every search stays on your machine. There is no network, no cloud, no server.
-
-**Why is it so fast?** It keeps a live index of your files in memory, so it doesn't have to search your drives folder by folder.
-
-**Will it slow down my computer?** It runs quietly in the background. The initial scan takes about 15 seconds, and after that it just tracks changes as they happen.
-
-**Why Windows only?** It reads the NTFS master file list, which only Windows maintains.
 
 ## For Developers
 
