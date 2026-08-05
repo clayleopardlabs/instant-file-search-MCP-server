@@ -213,7 +213,7 @@ The installer registers the indexer as a Windows service (`instant-file-search-i
 
 ## Linux (experimental)
 
-The native indexer also builds and runs on Linux (Ubuntu 24.04 LTS recommended; kernel 5.17+ for full change-tracking support). The Linux backend swaps the Windows pillars for their Linux equivalents:
+The native indexer also builds and runs on Linux (Ubuntu 24.04 LTS tested; kernel 5.17+ for full change-tracking support). The Linux backend swaps the Windows pillars for their Linux equivalents:
 
 | Windows | Linux |
 |---|---|
