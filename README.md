@@ -8,7 +8,7 @@ An MCP server that gives AI agents instant filesystem search. Agents can filter 
 
 Computers record every file creation, rename, move, and deletion as it happens. This server maintains a live index of the those records, so agents can query the entire filesystem the same way a search engine queries a document index.
 
-Agents will start using it automatically but can also be asked:
+Agents will start using it automatically but can also be asked things like:
 
 * "Show me what changed in this project since yesterday."
 * "Find files that look like secrets or local config."
@@ -28,16 +28,6 @@ Once installed, your AI assistant can:
 | `search_status` | Check whether the search engine is working |
 | `recent_changes` | Show files changed recently (via the Windows change journal), newest first. Pass `hours=1` for the last hour (server computes the time); cap results with `limit` (default 100); filter with `reasons=created,modified,renamed,deleted` to skip delete noise |
 | `aggregate_files` | Answer roll-up questions like largest files, file counts by type, or total size |
-
-Your AI can use the tools to answer things like:
-
-- "What changed in this project since yesterday?"
-- "Find files that look like secrets or local config."
-- "List source files but ignore dependencies and build output."
-- "Count how many test files exist beside implementation files."
-- "Find old exports, duplicate downloads, or forgotten installers."
-- "What are the five largest files in my downloads folder?"
-- "What changed on this drive in the last week?"
 
 ### Handy search tricks
 
