@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [ValidateSet('codex', 'opencode', 'claude', 'all')]
+    [ValidateSet('codex', 'opencode', 'claude', 'hermes', 'all')]
     [string[]]$Clients,
     [string]$InstallRoot = (Join-Path $env:LOCALAPPDATA 'ClayLeopardLabs\instant-file-search'),
     [string]$ReleaseBase = 'https://github.com/clayleopardlabs/instant-file-search-MCP-server/releases/latest/download',
@@ -14,6 +14,7 @@ param(
     [switch]$SkipCodex,
     [switch]$SkipOpenCode,
     [switch]$SkipClaude,
+    [switch]$SkipHermes,
     [switch]$DryRun
 )
 
@@ -37,8 +38,11 @@ $downloadRoot = Join-Path (Join-Path $InstallRoot 'downloads') $PID
 $simulateRoot = $env:INSTANT_FS_SIMULATE
 if ($simulateRoot) {
     $openCodeConfigDir = Join-Path $simulateRoot '.config\opencode'
+    $hermesConfig = Join-Path $simulateRoot 'hermes\config.yaml'
 } else {
     $openCodeConfigDir = Join-Path $env:USERPROFILE '.config\opencode'
+    $hermesHome = if ($env:HERMES_HOME) { $env:HERMES_HOME } else { Join-Path $env:LOCALAPPDATA 'hermes' }
+    $hermesConfig = Join-Path $hermesHome 'config.yaml'
 }
 $openCodePluginRoot = Join-Path $openCodeConfigDir 'plugins\instant-file-search-mcp-plugin'
 $claudeConfig = if ($simulateRoot) { Join-Path $simulateRoot 'claude-desktop-config.json' } else { Join-Path $env:APPDATA 'Claude\claude_desktop_config.json' }
@@ -57,11 +61,30 @@ function Test-ClaudeInstalled {
         (Get-Command claude -ErrorAction SilentlyContinue)
 }
 
+function Find-HermesCli {
+    $candidates = @()
+    if ($env:HERMES_CLI_PATH) { $candidates += $env:HERMES_CLI_PATH }
+    $onPath = Get-Command hermes -ErrorAction SilentlyContinue
+    if ($onPath -and $onPath.Source) { $candidates += $onPath.Source }
+    $candidates += (Join-Path $env:LOCALAPPDATA 'hermes\hermes-agent\venv\Scripts\hermes.exe')
+    foreach ($candidate in ($candidates | Select-Object -Unique)) {
+        if (-not (Test-Path -LiteralPath $candidate)) { continue }
+        if ($candidate -match '\\WindowsApps\\') { continue }
+        return (Get-Item -LiteralPath $candidate)
+    }
+    return $null
+}
+
+function Test-HermesInstalled {
+    return (Find-HermesCli) -or (Test-Path -LiteralPath $hermesConfig)
+}
+
 function Get-DetectedClients {
     $found = @()
     if ((Get-Command codex -ErrorAction SilentlyContinue) -or (Test-Path -LiteralPath (Join-Path $env:USERPROFILE '.codex\config.toml'))) { $found += 'codex' }
     if ((Get-Command opencode -ErrorAction SilentlyContinue) -or (Test-Path -LiteralPath $openCodeConfigDir)) { $found += 'opencode' }
     if (Test-ClaudeInstalled) { $found += 'claude' }
+    if (Test-HermesInstalled) { $found += 'hermes' }
     return $found
 }
 
@@ -78,15 +101,15 @@ function Select-InstallClients {
     }
 
     Write-Host "Detected clients: $(if($detected){$detected -join ', '}else{'none'})" -ForegroundColor Green
-    Write-Host 'Choose clients to configure: [A]ll detected, or enter a comma-separated list: codex, opencode, claude'
+    Write-Host 'Choose clients to configure: [A]ll detected, or enter a comma-separated list: codex, opencode, claude, hermes'
     $answer = Read-Host 'Selection (default A)'
     if ([string]::IsNullOrWhiteSpace($answer)) { return $detected }
     $choice = $answer.Trim().ToLowerInvariant()
     if ($choice -eq 'a') { return $detected }
     if ($choice -eq 'n') { return @() }
     $selected = @($choice -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
-    $invalid = @($selected | Where-Object { $_ -notin @('codex', 'opencode', 'claude') })
-    if ($invalid) { throw "Unknown client(s): $($invalid -join ', '). Use codex, opencode, claude, or all detected." }
+    $invalid = @($selected | Where-Object { $_ -notin @('codex', 'opencode', 'claude', 'hermes') })
+    if ($invalid) { throw "Unknown client(s): $($invalid -join ', '). Use codex, opencode, claude, hermes, or all detected." }
     return @($selected | Select-Object -Unique)
 }
 
@@ -502,6 +525,97 @@ function Install-Codex {
     Write-Host 'PASS: Codex MCP server registered.' -ForegroundColor Green
 }
 
+# Hermes stores MCP servers in YAML under mcp_servers.  Its `mcp add` command
+# performs interactive discovery and tool selection, so the installer writes
+# the documented stdio entry directly and leaves probing to Hermes at startup.
+function Get-HermesMcpEntryLines([string]$BinaryPath) {
+    $quoted = $BinaryPath.Replace("'", "''")
+    return @(
+        "  ${serverName}:",
+        "    command: '$quoted'",
+        '    enabled: true'
+    )
+}
+
+function Write-HermesConfig {
+    $desired = @(Get-HermesMcpEntryLines $stableBinary)
+    $newline = if (Test-Path -LiteralPath $hermesConfig) {
+        $existingRaw = Get-Content -LiteralPath $hermesConfig -Raw
+        if ($existingRaw.Contains("`r`n")) { "`r`n" } else { "`n" }
+    } else { "`r`n" }
+
+    $raw = if (Test-Path -LiteralPath $hermesConfig) { Get-Content -LiteralPath $hermesConfig -Raw } else { '' }
+    $lines = if ($raw) { @($raw -split "`r?`n") } else { @() }
+    $mcpIndex = -1
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        if ($lines[$i] -match '^mcp_servers\s*:\s*(?:#.*)?$') { $mcpIndex = $i; break }
+    }
+
+    $changed = $false
+    if ($mcpIndex -lt 0) {
+        $prefix = if ($raw -and -not $raw.EndsWith("`n")) { @('') } else { @() }
+        $lines = @($lines + $prefix + @('mcp_servers:') + $desired + @(''))
+        $changed = $true
+    } elseif ($lines[$mcpIndex] -match '^mcp_servers\s*:\s*\S+') {
+        # Replace an inline map (for example `mcp_servers: {}`) with the
+        # documented block form so the entry remains readable and stable.
+        $before = if ($mcpIndex -gt 0) { @($lines[0..($mcpIndex - 1)]) } else { @() }
+        $after = if ($mcpIndex + 1 -lt $lines.Count) { @($lines[($mcpIndex + 1)..($lines.Count - 1)]) } else { @() }
+        $lines = @($before + @('mcp_servers:') + $desired + $after)
+        $changed = $true
+    } else {
+        $sectionEnd = $lines.Count
+        for ($i = $mcpIndex + 1; $i -lt $lines.Count; $i++) {
+            if ($lines[$i] -match '^\S' -and $lines[$i] -notmatch '^\s*(#|$)') { $sectionEnd = $i; break }
+        }
+
+        $entryStart = -1
+        for ($i = $mcpIndex + 1; $i -lt $sectionEnd; $i++) {
+            if ($lines[$i] -match '^  ' + [regex]::Escape($serverName) + '\s*:') { $entryStart = $i; break }
+        }
+
+        if ($entryStart -ge 0) {
+            $entryEnd = $sectionEnd
+            for ($i = $entryStart + 1; $i -lt $sectionEnd; $i++) {
+                if ($lines[$i] -match '^  \S' -and $lines[$i] -notmatch '^    ') { $entryEnd = $i; break }
+            }
+            $currentEntry = (@($lines[$entryStart..($entryEnd - 1)]) -join $newline).TrimEnd()
+            $desiredEntry = $desired -join $newline
+            if ($currentEntry -ne $desiredEntry) {
+                $before = @($lines[0..($entryStart - 1)])
+                $after = if ($entryEnd -lt $lines.Count) { @($lines[$entryEnd..($lines.Count - 1)]) } else { @() }
+                $lines = @($before + $desired + $after)
+                $changed = $true
+            }
+        } else {
+            $before = if ($sectionEnd -gt 0) { @($lines[0..($sectionEnd - 1)]) } else { @() }
+            $after = if ($sectionEnd -lt $lines.Count) { @($lines[$sectionEnd..($lines.Count - 1)]) } else { @() }
+            $lines = @($before + $desired + $after)
+            $changed = $true
+        }
+    }
+
+    if ($changed) {
+        $parent = Split-Path -Parent $hermesConfig
+        New-Item -ItemType Directory -Path $parent -Force | Out-Null
+        Backup-Config $hermesConfig
+        [System.IO.File]::WriteAllText($hermesConfig, ($lines -join $newline), [System.Text.UTF8Encoding]::new($false))
+    }
+    return $true
+}
+
+function Install-Hermes {
+    Write-Step 'Configuring Hermes'
+    if ($DryRun) { Write-Action "Add MCP server '$serverName' to '$hermesConfig'"; return }
+    if (-not (Test-HermesInstalled)) {
+        Write-Host 'WARN: Hermes was not found; skipping Hermes registration.' -ForegroundColor Yellow
+        return
+    }
+    if (Write-HermesConfig) {
+        Write-Host "PASS: Hermes MCP server configured in '$hermesConfig'." -ForegroundColor Green
+    }
+}
+
 function Install-OpenCode {
     Write-Step 'Configuring OpenCode'
     $openCodeConfig = Resolve-OpenCodeConfig
@@ -824,11 +938,12 @@ $selected = @(Select-InstallClients)
 if ($SkipCodex) { $selected = @($selected | Where-Object { $_ -ne 'codex' }) }
 if ($SkipOpenCode) { $selected = @($selected | Where-Object { $_ -ne 'opencode' }) }
 if ($SkipClaude) { $selected = @($selected | Where-Object { $_ -ne 'claude' }) }
+if ($SkipHermes) { $selected = @($selected | Where-Object { $_ -ne 'hermes' }) }
 
 # Always install the server, engines, and diagnostics even when no supported
 # MCP client was detected - a user may configure any MCP host manually.
 if (-not $selected) {
-    Write-Host 'No MCP clients detected (Codex, OpenCode, or Claude Desktop).' -ForegroundColor Yellow
+    Write-Host 'No MCP clients detected (Codex, OpenCode, Claude Desktop, or Hermes).' -ForegroundColor Yellow
     Write-Host 'The MCP server and engines will still be installed so you can configure any host manually.' -ForegroundColor Yellow
 } else {
     Write-Host "Selected: $($selected -join ', ')" -ForegroundColor Green
@@ -851,6 +966,7 @@ foreach ($client in $selected) {
         'codex' { Install-Codex }
         'opencode' { Install-OpenCode }
         'claude' { Install-Claude }
+        'hermes' { Install-Hermes }
     }
 }
 

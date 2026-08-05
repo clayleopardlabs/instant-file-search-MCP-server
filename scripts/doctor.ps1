@@ -18,6 +18,8 @@ $openCodePluginRoot = Join-Path $env:USERPROFILE '.config\opencode\plugins\insta
 $openCodeJson = Join-Path $env:USERPROFILE '.config\opencode\opencode.json'
 $openCodeJsonc = Join-Path $env:USERPROFILE '.config\opencode\opencode.jsonc'
 $claudeConfig = Join-Path $env:APPDATA 'Claude\claude_desktop_config.json'
+$hermesHome = if ($env:HERMES_HOME) { $env:HERMES_HOME } else { Join-Path $env:LOCALAPPDATA 'hermes' }
+$hermesConfig = Join-Path $hermesHome 'config.yaml'
 $failures = 0
 $warnings = 0
 
@@ -35,6 +37,20 @@ function Find-CodexCli {
         $candidates += @(Get-ChildItem -Path (Join-Path $bundledRoot '*\codex.exe') -File -ErrorAction SilentlyContinue |
             Sort-Object LastWriteTime -Descending | Select-Object -ExpandProperty FullName)
     }
+    foreach ($candidate in ($candidates | Select-Object -Unique)) {
+        if (-not (Test-Path -LiteralPath $candidate)) { continue }
+        if ($candidate -match '\\WindowsApps\\') { continue }
+        return (Get-Item -LiteralPath $candidate)
+    }
+    return $null
+}
+
+function Find-HermesCli {
+    $candidates = @()
+    if ($env:HERMES_CLI_PATH) { $candidates += $env:HERMES_CLI_PATH }
+    $onPath = Get-Command hermes -ErrorAction SilentlyContinue
+    if ($onPath -and $onPath.Source) { $candidates += $onPath.Source }
+    $candidates += (Join-Path $env:LOCALAPPDATA 'hermes\hermes-agent\venv\Scripts\hermes.exe')
     foreach ($candidate in ($candidates | Select-Object -Unique)) {
         if (-not (Test-Path -LiteralPath $candidate)) { continue }
         if ($candidate -match '\\WindowsApps\\') { continue }
@@ -129,6 +145,44 @@ if (-not $codex) {
         Pass "Codex MCP server '$serverName' is registered."
     } else {
         Fail "Codex MCP server '$serverName' is not registered. Run .\scripts\install.ps1."
+    }
+}
+
+$hermes = Find-HermesCli
+if ($hermes -or (Test-Path -LiteralPath $hermesConfig)) {
+    if ($hermes) { Pass "Hermes found at '$($hermes.FullName)'." }
+    else { Warn "Hermes config exists, but hermes.exe was not found; registration can be inspected but Hermes may not be runnable." }
+
+    if (-not (Test-Path -LiteralPath $hermesConfig)) {
+        Warn "Hermes config was not found at '$hermesConfig'. Run .\scripts\install.ps1 -Clients hermes."
+    } else {
+        $hermesLines = @(Get-Content -LiteralPath $hermesConfig)
+        $mcpStart = -1
+        for ($i = 0; $i -lt $hermesLines.Count; $i++) {
+            if ($hermesLines[$i] -match '^mcp_servers\s*:\s*(?:#.*)?$') { $mcpStart = $i; break }
+        }
+        $hermesEntry = -1
+        $hermesEnd = $hermesLines.Count
+        if ($mcpStart -ge 0) {
+            for ($i = $mcpStart + 1; $i -lt $hermesLines.Count; $i++) {
+                if ($hermesLines[$i] -match '^\S' -and $hermesLines[$i] -notmatch '^\s*(#|$)') { $hermesEnd = $i; break }
+                if ($hermesLines[$i] -match '^  ' + [regex]::Escape($serverName) + '\s*:') { $hermesEntry = $i; break }
+            }
+        }
+        if ($hermesEntry -ge 0) {
+            $hermesEntryEnd = $hermesEnd
+            for ($i = $hermesEntry + 1; $i -lt $hermesEnd; $i++) {
+                if ($hermesLines[$i] -match '^  \S' -and $hermesLines[$i] -notmatch '^    ') { $hermesEntryEnd = $i; break }
+            }
+            $hermesEntryText = if ($hermesEntryEnd -gt $hermesEntry) { @($hermesLines[$hermesEntry..($hermesEntryEnd - 1)]) -join "`n" } else { '' }
+            if ($hermesEntryText.Contains($stableBinary)) {
+                Pass "Hermes MCP server '$serverName' is configured in '$hermesConfig'."
+            } else {
+                Warn "Hermes MCP server '$serverName' is configured with an older binary path in '$hermesConfig'. Run .\scripts\install.ps1 -Clients hermes."
+            }
+        } else {
+            Warn "Hermes MCP server '$serverName' is not configured in '$hermesConfig'. Run .\scripts\install.ps1 -Clients hermes."
+        }
     }
 }
 

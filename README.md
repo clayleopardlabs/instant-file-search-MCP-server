@@ -253,7 +253,7 @@ If you downloaded or cloned this repository, operate the installer from the fold
 .\scripts\install.ps1
 ```
 
-The installer finds the AI apps on your computer: Codex, OpenCode, and Claude Desktop. It selects the apps to set up. Press **A** to select all the detected apps, or type a comma-separated list. The installer saves a copy of the configuration files before it changes them. It is safe to operate the installer again at any time. If you operate it from a checkout, it uses the newly built files in `target/release` and downloads the other files from the release.
+The installer finds the AI apps on your computer: Codex, OpenCode, Claude Desktop, and Hermes. It selects the apps to set up. Press **A** to select all the detected apps, or type a comma-separated list. The installer saves a copy of the configuration files before it changes them. It is safe to operate the installer again at any time. If you operate it from a checkout, it uses the newly built files in `target/release` and downloads the other files from the release.
 
 Do the health check:
 
@@ -290,7 +290,16 @@ Add the server to the MCP client configuration:
    }
    ```
 
-For a plain MCP host, use the active server path from `current.json`. For OpenCode, add the configuration to `opencode.json` or `opencode.jsonc`. The installer adds the plug-in adapter automatically. `doctor.ps1` reports a partial upgrade if the configured client or service still points to an older version.
+For a plain MCP host, use the active server path from `current.json`. For OpenCode, add the configuration to `opencode.json` or `opencode.jsonc`. For Hermes, add the server under `mcp_servers` in `%LOCALAPPDATA%\hermes\config.yaml` (or the directory selected by `HERMES_HOME`):
+
+   ```yaml
+   mcp_servers:
+     instant-file-search:
+       command: 'C:\path\to\instant-file-search-mcp-server.exe'
+       enabled: true
+   ```
+
+The Windows installer writes this Hermes entry automatically and preserves the rest of the YAML file. The installer adds the OpenCode plug-in adapter automatically. `doctor.ps1` reports a partial upgrade if the configured client or service still points to an older version.
 
 3. Restart your AI app. The tool list will show the new tools.
 
@@ -378,7 +387,7 @@ More detail lives in `docs/`: `architecture.md`, `build.md`, `development.md`, `
 ## How It Fits Together
 
 ```
-MCP Host (VS Code / Cursor / Claude Desktop / OpenCode)
+MCP Host (VS Code / Cursor / Claude Desktop / OpenCode / Hermes)
   └─ MCP server (Rust, stdin/stdout)
        └─ named pipe ──► indexer service (in-memory index, primary)
                             └─ NTFS master file list + change journal
