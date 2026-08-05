@@ -134,8 +134,8 @@ The AI can embed these in a search query:
 
 | Trick | Example | Effect |
 |-------|---------|--------|
-| `file:` | `file:*.ts` | Files only |
-| `folder:` | `folder:src` | Folders only |
+| `file:` | `file: *.ts` | Files only |
+| `folder:` | `folder: src` | Folders only |
 | `dm:` | `dm:today`, `dm:last2hours` | Modified date. Relative: today, yesterday, Ndays, lastNdays, prevNdays, thisweek/lastmonth/etc., Nhours/minutes/secs (rolling). Calendar: jan–dec (current year), sun–sat (current week), mtd, ytd, qtd |
 | `dc:` | `dc:thisweek` | Created this week |
 | `da:` | `da:yesterday` | Opened yesterday |

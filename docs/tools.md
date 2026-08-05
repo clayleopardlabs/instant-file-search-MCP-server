@@ -61,7 +61,7 @@ Everything-compatible tokens the native engine supports. Full parity detail live
 
 | Token | Example | Effect |
 |-------|---------|--------|
-| `file:` / `folder:` | `file:*.ts` | Type filter |
+| `file:` / `folder:` | `file: *.ts` / `folder: src` | Type filter |
 | `ext:` | `ext:rs,py` | Extension filter (comma list) |
 | `size:` | `size:>10mb` | Size filter; JEDEC units (1024-based) by default; constants `tiny`(<1kb), `small`(<1mb), `medium`(<1gb), `large`(>1gb), `huge`(>4gb), `gigantic`(>16gb), `empty`(=0) |
 | `metric:` | `metric:size:>1000kb` | Switch size interpretation to decimal (1000-based) |
