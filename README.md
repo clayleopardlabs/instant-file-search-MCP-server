@@ -356,11 +356,15 @@ Install from source on a Mac with the command shown in Start Here. The script bu
 
 See `docs/build-macos.md` and `docs/macos-support.md` for details, known gaps, and the TCC/app-bundle discussion.
 
-#### oh-my-opencode-slim (OMO) auto-configuration
+#### oh-my-opencode and slim (OMO) auto-configuration for subagents
 
 If [oh-my-opencode-slim](https://github.com/anthropics/oh-my-opencode-slim) is installed, the installer automatically patches its config to add `instant-file-search` to every sub-agent's `mcps` array. This gives sub-agents (explorer, fixer, designer, oracle, librarian) access to the instant search tools so they can use them instead of falling back to slow shell commands.
 
 Orchestrators with `mcps: ["*"]` are left untouched. The installer creates a timestamped backup before modifying the config.
+
+#### Hermes Auto Config
+
+Installer detects Hermes and autoconfigures the MCP server
 
 #### Plugin adapter (OpenCode sub-agents)
 
