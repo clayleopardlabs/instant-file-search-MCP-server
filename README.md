@@ -6,7 +6,7 @@ An MCP server that gives AI agents instant filesystem search. Agents can filter 
 
 ## How It Works
 
-Computers record every file creation, rename, move, and deletion as it happens. This server maintains a live index of the those records, so agents can query the entire filesystem the same way a search engine queries a document index.
+Computers record every file creation, rename, move, and deletion as it happens. This server maintains a live index of the those records, so agents can filter the entire filesystem the same way a search engine reads a document index.
 
 Agents will start using it automatically but can also be asked things like:
 
@@ -16,6 +16,10 @@ Agents will start using it automatically but can also be asked things like:
 * "Count how many test files exist beside implementation files."
 * "Find old exports, duplicate downloads, or forgotten installers."
 * "Give me the project's shape before reading the code."
+
+## Forensic level analysis
+
+Monitors file changes on your computer on a forensic level. A trojan modifies a file in only miliseconds? The evidence will now be there for your agent to find.
 
 ## What Your AI Can Do With It
 
@@ -29,7 +33,7 @@ Once installed, your AI assistant can:
 | `recent_changes` | Show files changed recently (via the Windows change journal), newest first. Pass `hours=1` for the last hour (server computes the time); cap results with `limit` (default 100); filter with `reasons=created,modified,renamed,deleted` to skip delete noise |
 | `aggregate_files` | Answer roll-up questions like largest files, file counts by type, or total size |
 
-### Handy search tricks
+### Handy search filters and tricks
 
 The AI can embed these in a search query:
 
