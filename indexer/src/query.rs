@@ -1777,40 +1777,52 @@ mod tests {
 
     #[test]
     fn path_scope_forward_slashes() {
-        // Forward slashes (C:/Users) must behave like backslashes (C:\Users).
-        // Regression: the engine never normalized separators, so forward-slash
-        // scopes silently matched nothing.
+        // A foreign separator in a scope must behave like the native one.
+        // Windows indexes use drive-rooted backslash paths; Unix indexes use
+        // slash-rooted paths. Keep the fixture native so this tests the
+        // production path representation on every target.
+        let inside_path = if cfg!(windows) { r"C:\Users\a.txt" } else { "/Users/a.txt" };
+        let other_path = if cfg!(windows) { r"C:\Windows\a.txt" } else { "/Windows/a.txt" };
+        let scopes: &[&str] = if cfg!(windows) {
+            &[r"C:\Users", "C:/Users"]
+        } else {
+            &["/Users", r"\Users"]
+        };
         let map: HashMap<String, IndexedFile> = HashMap::from([
-            ("inside".to_string(), entry(r"C:\Users\a.txt", false, 1_700_000_000)),
-            ("other".to_string(), entry(r"C:\Windows\a.txt", false, 1_700_000_000)),
+            ("inside".to_string(), entry(inside_path, false, 1_700_000_000)),
+            ("other".to_string(), entry(other_path, false, 1_700_000_000)),
         ]);
-        for scope in [r"C:\Users", "C:/Users"] {
+        for scope in scopes {
             let opts = QueryOptions {
                 query: "*".to_string(),
-                path: Some(scope.to_string()),
+                path: Some((*scope).to_string()),
                 ..Default::default()
             };
             let r = search(&map, &opts);
             let paths: Vec<&str> = r.entries.iter().map(|e| e.path.as_str()).collect();
-            assert_eq!(paths, vec![r"C:\Users\a.txt"], "scope {scope:?}");
+            assert_eq!(paths, vec![inside_path], "scope {scope:?}");
         }
     }
 
     #[test]
     fn path_scope_is_directory_boundary() {
-        // Regression: scope `B:\p` must not match `B:\pfoo\...`.
+        // Regression: scope `B:\p` (or `/p`) must not match its sibling
+        // `B:\pfoo\...` (or `/pfoo/...`).
+        let scope = if cfg!(windows) { r"B:\p" } else { "/p" };
+        let inside_path = if cfg!(windows) { r"B:\p\a.txt" } else { "/p/a.txt" };
+        let sibling_path = if cfg!(windows) { r"B:\pfoo\b.txt" } else { "/pfoo/b.txt" };
         let opts = QueryOptions {
             query: "*".to_string(),
-            path: Some(r"B:\p".to_string()),
+            path: Some(scope.to_string()),
             ..Default::default()
         };
         let map: HashMap<String, IndexedFile> = HashMap::from([
-            ("inside".to_string(), entry(r"B:\p\a.txt", false, 1_700_000_000)),
-            ("sibling".to_string(), entry(r"B:\pfoo\b.txt", false, 1_700_000_000)),
+            ("inside".to_string(), entry(inside_path, false, 1_700_000_000)),
+            ("sibling".to_string(), entry(sibling_path, false, 1_700_000_000)),
         ]);
         let r = search(&map, &opts);
         let paths: Vec<&str> = r.entries.iter().map(|e| e.path.as_str()).collect();
-        assert_eq!(paths, vec![r"B:\p\a.txt"]);
+        assert_eq!(paths, vec![inside_path]);
     }
 
     #[test]

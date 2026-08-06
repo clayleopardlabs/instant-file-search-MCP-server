@@ -405,6 +405,18 @@ mod tests {
     use super::*;
     use crate::types::IndexedFile;
 
+    // Unit tests must not open the process-wide persistent change journal.
+    // FileIndex::new() is intentionally persistent in production, but using
+    // it here lets parallel tests observe each other's events through the
+    // journal file (especially on macOS, where the test account can write its
+    // real $HOME journal).
+    fn test_index() -> FileIndex {
+        FileIndex {
+            inner: RwLock::new(Inner::default()),
+            change_log: Mutex::new(None),
+        }
+    }
+
     fn e(path: &str) -> IndexedFile {
         IndexedFile::new(path.to_string(), 0, 0, 0, 0, false, 0)
     }
@@ -423,7 +435,7 @@ mod tests {
     }
 
     fn build() -> FileIndex {
-        let ix = FileIndex::new();
+        let ix = test_index();
         ix.replace(vec![
             e(r"C:\olddir\a.txt"),
             e(r"C:\olddir\sub\b.txt"),
@@ -435,7 +447,7 @@ mod tests {
 
     #[test]
     fn change_log_ring_buffers_and_orders() {
-        let ix = FileIndex::new();
+        let ix = test_index();
         ix.record_change(100, "CREATE", r"C:\a.txt", false);
         ix.record_change(200, "RENAME", r"C:\b.txt", false);
         ix.record_change(300, "DELETE", r"C:\a.txt", false);
@@ -455,7 +467,7 @@ mod tests {
 
     #[test]
     fn adjust_ancestors_propagates_delta() {
-        let ix = FileIndex::new();
+        let ix = test_index();
         // C:\a\b\f.txt (20) + C:\a\g.txt (30). Dir sizes are recursive totals.
         ix.replace(vec![
             edir(r"C:", 50),
@@ -483,7 +495,7 @@ mod tests {
     fn upsert_keeps_dir_recursive_total() {
         // A USN re-stat of a directory must NOT clobber its recursive total
         // with the dir's own allocation (e.g. 0): the recursive size stays.
-        let ix = FileIndex::new();
+        let ix = test_index();
         ix.replace(vec![
             edir(r"C:", 100),
             edir(r"C:\a", 100),
@@ -496,7 +508,7 @@ mod tests {
             assert_eq!(m[r"C:\a"].size, 100, "dir recursive total must persist");
         });
         // A new empty directory starts at recursive size 0.
-        let ix2 = FileIndex::new();
+        let ix2 = test_index();
         ix2.replace(vec![edir(r"C:", 0)]);
         ix2.upsert(edir(r"C:\empty", 0));
         ix2.with_entries(|m| {
@@ -506,7 +518,7 @@ mod tests {
 
     #[test]
     fn remove_prefix_subtracts_recursive_size() {
-        let ix = FileIndex::new();
+        let ix = test_index();
         // C: = C:\a (120, subtree 100+20ish) + C:\b (20) = 140.
         ix.replace(vec![
             edir(r"C:", 140),
@@ -525,7 +537,7 @@ mod tests {
 
     #[test]
     fn rename_prefix_moves_recursive_size() {
-        let ix = FileIndex::new();
+        let ix = test_index();
         // C: = C:\a (120) + C:\b (20) = 140; a rename keeps C:'s total.
         ix.replace(vec![
             edir(r"C:", 140),
@@ -550,7 +562,7 @@ mod tests {
         // contain record 0x1001; the refs map must keep them separate or a
         // USN parent-FRN lookup on C: can resolve to an unrelated D: path
         // (the cross-volume collision that produced "file.cat\\child.log").
-        let ix = FileIndex::new();
+        let ix = test_index();
         let mut d = edir(r"C:\Users\sophi", 0);
         d.file_ref = 0x1001;
         let mut e = efile(r"D:\Windows\servicing\x.cat", 0);
@@ -573,7 +585,7 @@ mod tests {
         // On Unix the volume is the mount point (volume_of returns the longest
         // matching mount prefix). Verify the refs map resolves a record number
         // under the path's own volume and rejects a different record number.
-        let ix = FileIndex::new();
+        let ix = test_index();
         let mut d = edir("/Users/test", 0);
         d.file_ref = 0x1001;
         ix.replace(vec![d]);
@@ -585,7 +597,7 @@ mod tests {
 
     #[test]
     fn recent_changes_filters_by_reason() {
-        let ix = FileIndex::new();
+        let ix = test_index();
         ix.record_change(100, "CREATE", r"C:\a\new.txt", false);
         ix.record_change(200, "WRITE", r"C:\a\changed.txt", false);
         ix.record_change(300, "RENAME", r"C:\a\old.txt", false);
