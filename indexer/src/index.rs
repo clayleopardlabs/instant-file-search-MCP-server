@@ -227,7 +227,7 @@ impl FileIndex {
         let doomed: Vec<String> = inner
             .entries
             .keys()
-            .filter(|p| p.starts_with(prefix) && (*p == prefix || p.starts_with(&format!("{prefix}\\"))))
+            .filter(|p| p.starts_with(prefix) && (*p == prefix || p.starts_with(&format!("{}{}", prefix, crate::platform::SEP))))
             .cloned()
             .collect();
         for p in doomed {
@@ -248,7 +248,7 @@ impl FileIndex {
         let doomed: Vec<(String, IndexedFile)> = inner
             .entries
             .iter()
-            .filter(|(p, _)| p.starts_with(old_prefix) && (*p == old_prefix || p.starts_with(&format!("{old_prefix}\\"))))
+            .filter(|(p, _)| p.starts_with(old_prefix) && (*p == old_prefix || p.starts_with(&format!("{}{}", old_prefix, crate::platform::SEP))))
             .map(|(p, e)| (p.clone(), e.clone()))
             .collect();
         for (old_path, mut e) in doomed {
@@ -272,7 +272,11 @@ impl FileIndex {
     /// `volume_of` on an indexed path yields `C:`. Without this, every USN
     /// parent lookup misses the refs map and falls back to a bare-root path.
     pub fn path_by_ref(&self, volume: &str, file_ref: u64) -> Option<String> {
-        let vol = volume.trim_end_matches('\\');
+        let vol = if cfg!(windows) {
+            volume.trim_end_matches('\\')
+        } else {
+            crate::platform::trim_trailing_sep(volume)
+        };
         self.inner
             .read()
             .unwrap()
@@ -376,7 +380,7 @@ fn adjust_ancestors(inner: &mut Inner, path: &str, delta: i64) {
         return;
     }
     let mut p = path;
-    while let Some(idx) = p.rfind('\\') {
+    while let Some(idx) = p.rfind(crate::platform::SEP) {
         p = &p[..idx];
         if let Some(e) = inner.entries.get_mut(p) {
             e.size = (e.size as i64 + delta).max(0) as u64;
@@ -388,11 +392,11 @@ fn adjust_ancestors(inner: &mut Inner, path: &str, delta: i64) {
 /// own size, subdirectories by their recursive total). Used to seed a new
 /// directory's recursive total from children already in the index.
 fn sum_children(inner: &Inner, dir_path: &str) -> u64 {
-    let prefix = format!("{dir_path}\\");
+    let prefix = format!("{}{}", dir_path, crate::platform::SEP);
     inner
         .entries
         .iter()
-        .filter(|(p, _)| p.starts_with(&prefix) && !p[prefix.len()..].contains('\\'))
+        .filter(|(p, _)| p.starts_with(&prefix) && !p[prefix.len()..].contains(crate::platform::SEP))
         .map(|(_, e)| e.size)
         .sum()
 }
@@ -434,13 +438,18 @@ mod tests {
         f
     }
 
+    /// Build a platform-native path from components joined by the native separator.
+    fn p(components: &[&str]) -> String {
+        components.join(&crate::platform::SEP.to_string())
+    }
+
     fn build() -> FileIndex {
         let ix = test_index();
         ix.replace(vec![
-            e(r"C:\olddir\a.txt"),
-            e(r"C:\olddir\sub\b.txt"),
-            e(r"C:\other\c.txt"),
-            e(r"C:\olddir"),
+            e(&p(&["C:", "olddir", "a.txt"])),
+            e(&p(&["C:", "olddir", "sub", "b.txt"])),
+            e(&p(&["C:", "other", "c.txt"])),
+            e(&p(&["C:", "olddir"])),
         ]);
         ix
     }
@@ -468,26 +477,32 @@ mod tests {
     #[test]
     fn adjust_ancestors_propagates_delta() {
         let ix = test_index();
-        // C:\a\b\f.txt (20) + C:\a\g.txt (30). Dir sizes are recursive totals.
+        let abf = p(&["C:", "a", "b", "f.txt"]);
+        let ag = p(&["C:", "a", "g.txt"]);
+        let ab = p(&["C:", "a", "b"]);
+        let a = p(&["C:", "a"]);
+        let c = "C:".to_string();
+        // a/b/f.txt (20) + a/g.txt (30). Dir sizes are recursive totals.
         ix.replace(vec![
-            edir(r"C:", 50),
-            edir(r"C:\a", 50),
-            edir(r"C:\a\b", 20),
-            efile(r"C:\a\b\f.txt", 20),
-            efile(r"C:\a\g.txt", 30),
+            edir(&c, 50),
+            edir(&a, 50),
+            edir(&ab, 20),
+            efile(&abf, 20),
+            efile(&ag, 30),
         ]);
-        // Adding a 5-byte file under C:\a\b\ bumps C:\a\b, C:\a, C:.
-        ix.upsert(efile(r"C:\a\b\h.txt", 5));
+        // Adding a 5-byte file under a/b/ bumps a/b, a, C:.
+        let abh = p(&["C:", "a", "b", "h.txt"]);
+        ix.upsert(efile(&abh, 5));
         ix.with_entries(|m| {
-            assert_eq!(m[r"C:\a\b"].size, 25);
-            assert_eq!(m[r"C:\a"].size, 55);
-            assert_eq!(m[r"C:"].size, 55);
+            assert_eq!(m[ab.as_str()].size, 25);
+            assert_eq!(m[a.as_str()].size, 55);
+            assert_eq!(m[c.as_str()].size, 55);
         });
         // Removing a 30-byte file shrinks its ancestors.
-        ix.remove(r"C:\a\g.txt");
+        ix.remove(&ag);
         ix.with_entries(|m| {
-            assert_eq!(m[r"C:\a"].size, 25);
-            assert_eq!(m[r"C:"].size, 25);
+            assert_eq!(m[a.as_str()].size, 25);
+            assert_eq!(m[c.as_str()].size, 25);
         });
     }
 
@@ -496,62 +511,79 @@ mod tests {
         // A USN re-stat of a directory must NOT clobber its recursive total
         // with the dir's own allocation (e.g. 0): the recursive size stays.
         let ix = test_index();
+        let c = "C:".to_string();
+        let a = p(&["C:", "a"]);
+        let af = p(&["C:", "a", "f.txt"]);
+        let aempty = p(&["C:", "empty"]);
         ix.replace(vec![
-            edir(r"C:", 100),
-            edir(r"C:\a", 100),
-            efile(r"C:\a\f.txt", 100),
+            edir(&c, 100),
+            edir(&a, 100),
+            efile(&af, 100),
         ]);
-        let mut fresh_stat = edir(r"C:\a", 0); // stat reports dir allocation 0
+        let mut fresh_stat = edir(&a, 0); // stat reports dir allocation 0
         fresh_stat.created = 1; // force timestamps to differ from existing entry
         ix.upsert(fresh_stat);
         ix.with_entries(|m| {
-            assert_eq!(m[r"C:\a"].size, 100, "dir recursive total must persist");
+            assert_eq!(m[a.as_str()].size, 100, "dir recursive total must persist");
         });
         // A new empty directory starts at recursive size 0.
         let ix2 = test_index();
-        ix2.replace(vec![edir(r"C:", 0)]);
-        ix2.upsert(edir(r"C:\empty", 0));
+        ix2.replace(vec![edir(&c, 0)]);
+        ix2.upsert(edir(&aempty, 0));
         ix2.with_entries(|m| {
-            assert_eq!(m[r"C:\empty"].size, 0);
+            assert_eq!(m[aempty.as_str()].size, 0);
         });
     }
 
     #[test]
     fn remove_prefix_subtracts_recursive_size() {
         let ix = test_index();
+        let c = "C:".to_string();
+        let a = p(&["C:", "a"]);
+        let asub = p(&["C:", "a", "sub"]);
+        let asubf = p(&["C:", "a", "sub", "f.bin"]);
+        let b = p(&["C:", "b"]);
+        let bg = p(&["C:", "b", "g.bin"]);
         // C: = C:\a (120, subtree 100+20ish) + C:\b (20) = 140.
         ix.replace(vec![
-            edir(r"C:", 140),
-            edir(r"C:\a", 120),
-            edir(r"C:\a\sub", 100),
-            efile(r"C:\a\sub\f.bin", 100),
-            edir(r"C:\b", 20),
-            efile(r"C:\b\g.bin", 20),
+            edir(&c, 140),
+            edir(&a, 120),
+            edir(&asub, 100),
+            efile(&asubf, 100),
+            edir(&b, 20),
+            efile(&bg, 20),
         ]);
-        ix.remove_prefix(r"C:\a");
+        ix.remove_prefix(&a);
         ix.with_entries(|m| {
-            assert!(!m.contains_key(r"C:\a"));
-            assert_eq!(m[r"C:"].size, 20, r"C: loses the C:\a subtree total");
+            assert!(!m.contains_key(a.as_str()));
+            assert_eq!(m[c.as_str()].size, 20, "C: loses the a subtree total");
         });
     }
 
     #[test]
     fn rename_prefix_moves_recursive_size() {
         let ix = test_index();
+        let c = "C:".to_string();
+        let a = p(&["C:", "a"]);
+        let asub = p(&["C:", "a", "sub"]);
+        let asubf = p(&["C:", "a", "sub", "f.bin"]);
+        let b = p(&["C:", "b"]);
+        let bg = p(&["C:", "b", "g.bin"]);
+        let renamed = p(&["C:", "renamed"]);
         // C: = C:\a (120) + C:\b (20) = 140; a rename keeps C:'s total.
         ix.replace(vec![
-            edir(r"C:", 140),
-            edir(r"C:\a", 120),
-            edir(r"C:\a\sub", 100),
-            efile(r"C:\a\sub\f.bin", 100),
-            edir(r"C:\b", 20),
-            efile(r"C:\b\g.bin", 20),
+            edir(&c, 140),
+            edir(&a, 120),
+            edir(&asub, 100),
+            efile(&asubf, 100),
+            edir(&b, 20),
+            efile(&bg, 20),
         ]);
-        ix.rename_prefix(r"C:\a", r"C:\renamed");
+        ix.rename_prefix(&a, &renamed);
         ix.with_entries(|m| {
-            assert_eq!(m[r"C:\renamed"].size, 120, "dir keeps recursive total");
-            assert_eq!(m[r"C:"].size, 140, "C: total unchanged by rename");
-            assert!(!m.contains_key(r"C:\a"));
+            assert_eq!(m[renamed.as_str()].size, 120, "dir keeps recursive total");
+            assert_eq!(m[c.as_str()].size, 140, "C: total unchanged by rename");
+            assert!(!m.contains_key(a.as_str()));
         });
     }
 
@@ -643,13 +675,15 @@ mod tests {
     #[test]
     fn rename_prefix_moves_subtree() {
         let ix = build();
-        ix.rename_prefix(r"C:\olddir", r"C:\newdir");
+        let olddir = p(&["C:", "olddir"]);
+        let newdir = p(&["C:", "newdir"]);
+        ix.rename_prefix(&olddir, &newdir);
         ix.with_entries(|m| {
-            assert!(m.contains_key(r"C:\newdir\a.txt"));
-            assert!(m.contains_key(r"C:\newdir\sub\b.txt"));
-            assert!(m.contains_key(r"C:\newdir"));
-            assert!(m.contains_key(r"C:\other\c.txt"));
-            assert!(!m.contains_key(r"C:\olddir"));
+            assert!(m.contains_key(&p(&["C:", "newdir", "a.txt"])));
+            assert!(m.contains_key(&p(&["C:", "newdir", "sub", "b.txt"])));
+            assert!(m.contains_key(newdir.as_str()));
+            assert!(m.contains_key(&p(&["C:", "other", "c.txt"])));
+            assert!(!m.contains_key(olddir.as_str()));
         });
         // Path-by-ref resolution must follow the rename too.
         assert!(ix.len() == 4);
@@ -658,12 +692,13 @@ mod tests {
     #[test]
     fn remove_prefix_drops_subtree() {
         let ix = build();
-        ix.remove_prefix(r"C:\olddir");
+        let olddir = p(&["C:", "olddir"]);
+        ix.remove_prefix(&olddir);
         ix.with_entries(|m| {
-            assert!(!m.contains_key(r"C:\olddir"));
-            assert!(!m.contains_key(r"C:\olddir\a.txt"));
-            assert!(!m.contains_key(r"C:\olddir\sub\b.txt"));
-            assert!(m.contains_key(r"C:\other\c.txt"));
+            assert!(!m.contains_key(olddir.as_str()));
+            assert!(!m.contains_key(&p(&["C:", "olddir", "a.txt"])));
+            assert!(!m.contains_key(&p(&["C:", "olddir", "sub", "b.txt"])));
+            assert!(m.contains_key(&p(&["C:", "other", "c.txt"])));
         });
     }
 
@@ -671,11 +706,16 @@ mod tests {
     fn rename_prefix_does_not_hit_sibling() {
         // `C:\olddir` must not rename `C:\olddirX`.
         let ix = FileIndex::new();
-        ix.replace(vec![e(r"C:\olddir\a.txt"), e(r"C:\olddirX\b.txt")]);
-        ix.rename_prefix(r"C:\olddir", r"C:\newdir");
+        ix.replace(vec![
+            e(&p(&["C:", "olddir", "a.txt"])),
+            e(&p(&["C:", "olddirX", "b.txt"])),
+        ]);
+        let olddir = p(&["C:", "olddir"]);
+        let newdir = p(&["C:", "newdir"]);
+        ix.rename_prefix(&olddir, &newdir);
         ix.with_entries(|m| {
-            assert!(m.contains_key(r"C:\newdir\a.txt"));
-            assert!(m.contains_key(r"C:\olddirX\b.txt"));
+            assert!(m.contains_key(&p(&["C:", "newdir", "a.txt"])));
+            assert!(m.contains_key(&p(&["C:", "olddirX", "b.txt"])));
         });
     }
 }
