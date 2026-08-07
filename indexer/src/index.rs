@@ -56,6 +56,20 @@ impl FileIndex {
         }
     }
 
+    /// Create an empty index without loading the persisted change log.
+    /// Used by tests that need a clean slate.
+    #[cfg(test)]
+    pub fn new_empty() -> Self {
+        Self {
+            inner: RwLock::new(Inner {
+                entries: HashMap::new(),
+                refs: HashMap::new(),
+                changes: VecDeque::new(),
+            }),
+            change_log: Mutex::new(None),
+        }
+    }
+
     /// Replace the entire index (initial scan).
     pub fn replace(&self, entries: Vec<IndexedFile>) -> usize {
         let mut inner = self.inner.write().unwrap();

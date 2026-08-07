@@ -334,6 +334,8 @@ Install from source on a Linux box with the command shown in Start Here. The scr
 
 See `docs/build-linux.md` and `docs/linux-port-plan.md` for details and known gaps.
 
+**Note:** `/tmp` is typically tmpfs (RAM-backed) and is excluded from the indexer scan. Use paths on real disk volumes (e.g. `/home`, `/var`, `/usr`) for test files.
+
 ### macOS (experimental)
 
 The native indexer also builds and runs on macOS (Apple Silicon / arm64; any recent macOS version). The macOS backend is native-only: the Everything fallback engine is Windows-only by construction. The platform seam is the same one the Linux port established; macOS adds a third backend to it:

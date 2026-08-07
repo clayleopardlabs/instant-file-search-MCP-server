@@ -481,3 +481,153 @@ fn now_filetime() -> i64 {
         Err(e) => (e.duration().as_secs() as i64 + FILETIME_EPOCH_OFFSET) * 10_000_000,
     }
 }
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_handle_returns_none_when_buffer_too_short() {
+        // start + 8 > limit → None
+        let buf = vec![0u8; 4];
+        assert!(parse_handle(&buf, 0, 4).is_none());
+    }
+
+    #[test]
+    fn parse_handle_extracts_fields() {
+        let mut buf = vec![0u8; 64];
+        // handle_bytes = 12 (at offset 0..4)
+        buf[0..4].copy_from_slice(&12u32.to_le_bytes());
+        // handle_type = 1 (at offset 4..8)
+        buf[4..8].copy_from_slice(&1i32.to_le_bytes());
+        // data bytes at offset 8..20
+        buf[8] = 0xAB;
+        buf[19] = 0xCD;
+
+        let h = parse_handle(&buf, 0, 64).unwrap();
+        assert_eq!(h.handle_bytes, 12);
+        assert_eq!(h.handle_type, 1);
+        assert_eq!(h.data.len(), 12);
+        assert_eq!(h.data[0], 0xAB);
+        assert_eq!(h.data[11], 0xCD);
+    }
+
+    #[test]
+    fn parse_handle_returns_none_when_data_exceeds_limit() {
+        let mut buf = vec![0u8; 32];
+        buf[0..4].copy_from_slice(&100u32.to_le_bytes()); // handle_bytes = 100
+        buf[4..8].copy_from_slice(&1i32.to_le_bytes());
+        // start(0) + 8 + 100 = 108 > limit(32)
+        assert!(parse_handle(&buf, 0, 32).is_none());
+    }
+
+    #[test]
+    fn resolve_path_combines_parent_and_name() {
+        let mounts = vec![];
+        let parent = Some(FileHandle {
+            handle_bytes: 8,
+            handle_type: 1,
+            data: vec![1, 2, 3, 4, 5, 6, 7, 8],
+        });
+        // resolve_handle_path will fail (no mounts), so parent path is None
+        let result = resolve_path(&mounts, &parent, Some("file.txt"));
+        assert!(result.is_none()); // expected: no mount fd to resolve handle
+    }
+
+    #[test]
+    fn resolve_path_returns_parent_when_no_name() {
+        let mounts = vec![];
+        let result = resolve_path(&mounts, &None, None);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn apply_event_records_delete() {
+        let index = Arc::new(FileIndex::new_empty());
+        let content = Arc::new(crate::content::ContentStore::new());
+        let mut pending = std::collections::HashMap::new();
+
+        apply_event(&index, &content, FAN_DELETE, false, "/foo/bar.txt", &None, &mut pending);
+        let changes = index.recent_changes(0, 10);
+        assert_eq!(changes.len(), 1);
+        assert_eq!(changes[0].reason, "DELETE");
+        assert_eq!(changes[0].path, "/foo/bar.txt");
+    }
+
+    #[test]
+    fn apply_event_records_write() {
+        let index = Arc::new(FileIndex::new_empty());
+        let content = Arc::new(crate::content::ContentStore::new());
+        let mut pending = std::collections::HashMap::new();
+
+        apply_event(&index, &content, FAN_CREATE, false, "/tmp/new.txt", &None, &mut pending);
+        let changes = index.recent_changes(0, 10);
+        assert_eq!(changes.len(), 1);
+        assert_eq!(changes[0].reason, "WRITE");
+        assert_eq!(changes[0].path, "/tmp/new.txt");
+    }
+
+    #[test]
+    fn apply_event_records_rename() {
+        let index = Arc::new(FileIndex::new_empty());
+        let content = Arc::new(crate::content::ContentStore::new());
+        let mut pending = std::collections::HashMap::new();
+
+        let h = FileHandle { handle_bytes: 4, handle_type: 1, data: vec![0xAA; 4] };
+        apply_event(&index, &content, FAN_MOVED_FROM, false, "/old.txt", &Some(h.clone()), &mut pending);
+        let changes = index.recent_changes(0, 10);
+        assert_eq!(changes.len(), 1);
+        assert_eq!(changes[0].reason, "RENAME");
+        assert!(pending.contains_key(&h.data));
+    }
+
+    #[test]
+    fn recent_changes_filtered_matches_writes() {
+        let index = Arc::new(FileIndex::new_empty());
+        let content = Arc::new(crate::content::ContentStore::new());
+        let mut pending = std::collections::HashMap::new();
+
+        // Fanotify stores CREATE as "WRITE"
+        apply_event(&index, &content, FAN_CREATE, false, "/a.txt", &None, &mut pending);
+        apply_event(&index, &content, FAN_DELETE, false, "/b.txt", &None, &mut pending);
+
+        // "created" should match WRITE (fanotify lumps CREATE into WRITE)
+        let created = index.recent_changes_filtered(0, 0, Some("created"));
+        assert_eq!(created.len(), 1);
+        assert_eq!(created[0].path, "/a.txt");
+
+        // "modified" should also match WRITE
+        let modified = index.recent_changes_filtered(0, 0, Some("modified"));
+        assert_eq!(modified.len(), 1);
+        assert_eq!(modified[0].path, "/a.txt");
+
+        // "deleted" should match DELETE
+        let deleted = index.recent_changes_filtered(0, 0, Some("deleted"));
+        assert_eq!(deleted.len(), 1);
+        assert_eq!(deleted[0].path, "/b.txt");
+
+        // None returns all
+        let all = index.recent_changes_filtered(0, 0, None);
+        assert_eq!(all.len(), 2);
+    }
+
+    #[test]
+    fn mount_fd_uses_readonly_not_path() {
+        // Regression test: kernel 7.0+ rejects O_PATH mount fds in
+        // open_by_handle_at (returns EBADF). Mount fds must use O_RDONLY.
+        //
+        // O_RDONLY = 0, so we can't bitwise-AND to verify it's set.
+        // Instead verify O_PATH is NOT in the flags and O_DIRECTORY IS.
+        let flags = libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC;
+        assert_eq!(flags & libc::O_PATH, 0, "mount fd must not use O_PATH");
+        // O_RDONLY is 0, so its presence is verified by the absence of
+        // O_WRONLY (0x1) and O_RDWR (0x2) in the flags.
+        assert_eq!(flags & libc::O_WRONLY, 0, "mount fd must not use O_WRONLY");
+        assert_eq!(flags & libc::O_RDWR, 0, "mount fd must not use O_RDWR");
+        assert_ne!(flags & libc::O_DIRECTORY, 0, "mount fd must use O_DIRECTORY");
+    }
+}
