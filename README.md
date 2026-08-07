@@ -7,7 +7,41 @@ Search every file on your computer. All 3 million of them. In under a second.
 
 ## Start Here
 
-This tool gives your AI assistant a fast way to find files on your computer. After installation, you can ask normal questions such as:
+You computer already knows where all the files are. It has to. It knows their names and how old they are and when you renamed or moved something. It knows where your collection of my little pony fan art is and how many pdfs you have in your 'Hopes and Dreams' folder. It already has all the answers. So why does your AI agent find stuff by going door to door? Peeking in folders one by one?
+
+Windows, MacOS and Linux all do it in different ways but they all have a list of every single file on your computer. If the info is already there, let's use it!
+
+### How it works
+
+What instant-file-search-MCP-server does is let your agent cheat by maintaining its own list of your files so it doesn't have to tediously search every time you ask it to find something. 
+
+First, it catches up by sneaking a peak at the current one your computer already has, then starting from what's already there, uses that to maintain its own super fast copy. When you delete, move or rename something its list is updated so it doesn't get out of date. That's it. That's the trick. 
+
+Now when you ask your agent to /init and learn a new codebase, it can find every single file in milliseconds. It knows where every agents.md file is, whether it's in the /docs folder or in the /.opencode folder. It finds all of them instantly.
+
+### Forensic in practice
+
+A file modified in milliseconds still leaves a trace your agent can find. You can have your agent find every file modified by that new program you installed or keep an eye on things. It now keeps tabs on your PC on the same hardware level as the programs we used in my Information Security classes. 
+
+### Endlessly tested
+
+I tested this MCP server with a half dozen different model from tiny locally hosted Qwen models and mid size 400b models like deepseek and chatgpt. The only problem I found was a ChatGPT model (luna) trying get away with only half installing it.
+
+### New tools
+
+You agent gets 5 new tools:
+
+| Tool | What it does |
+|------|--------------|
+| `find_files` | Discover the exact files an agent should read, with names, paths, dates, sizes, and filters |
+| `count_files` | Measure the size of a search before returning a large result set |
+| `search_status` | Confirm which local search engine is available and whether the index is healthy |
+| `recent_changes` | Investigate what was created, modified, renamed, or deleted, newest first |
+| `aggregate_files` | Answer roll-up questions like largest files, file counts by type, or total size |
+
+It also gets a mountain of filters it can use to narrow its searches down (these are listed in the 'Search query filters' section below). 
+
+You could ask it very specific questions like the examples below, 
 
 - "Find the project's README file."
 - "Show me the largest files in this folder, ignoring build output."
@@ -19,11 +53,7 @@ This tool gives your AI assistant a fast way to find files on your computer. Aft
 - "Find old exports, duplicate downloads, or forgotten installers."
 - "Give me the project's shape before reading the code."
 
-You do not need to learn a search language: everyday questions work in plain English. The optional query filters under Technical Details give you more control when you want it.
-
-## How It Works
-
-Computers record every file creation, rename, move, and deletion as it happens. This server maintains a live index of those records, so agents can filter the entire filesystem the same way a search engine reads a document index. Because every change event is captured, the record is forensic in practice: a file modified in milliseconds still leaves a trace your agent can find.
+...but 99% of the time my agents use it automatically. When they're working on a codebase and need to know where that library is or when they're trying to find some config file on my computer, etc. Or this past week when I was doing a reinstall of Windows and needed to backup my Witcher 3 save files.
 
 ### Frequently asked questions
 
@@ -33,19 +63,21 @@ No. The installer includes everything the tool needs.
 
 **Does anything leave my computer?**
 
-No. Searches run locally. Your file names, file contents, and search results are not sent to a cloud service by this project.
+Never ever. Searches run completely locally. Your file names, file contents, and search results are not sent to any cloud service or leave your computer in any way. At least not by this MCP server, what you do with your AI and where you send your info is your business. 
 
-**Why is it fast?**
+**How is it this fast?**
 
-The tool prepares a local index in the background. Your AI can search that index instead of opening every folder one at a time.
+The tool prepares a local index in the background. Your AI can search that index instead of opening every folder one at a time. 
 
 **Will it slow down my computer?**
 
-The first scan uses some resources while it builds the index. After that, the background service watches for changes and normally stays quiet.
+No. The first scan builds the index. After that, the background service watches for changes and updated the list it made the first time.
 
 **What happens if the background service is unavailable?**
 
-On Windows, ordinary searches can still work through the fallback search engine that ships with this release. It is the Windows-native Everything engine, distributed with the installer for exactly this case. Linux and macOS use the native indexer only and will report when it is not available.
+Windows: Hooray! You get a fallback search engine. It's the called the Everything engine made by void-tools. It doesn't have every last feature my native engine has but it's serviceable if you need it. I might pull it from future releases and just keep it in the repo for testing purposes, but for now this project is smart enough to know when the native engine is down and immediately use the backup.
+
+Linux and macOS: can only use the native indexer, so if there's a problem it'll tell you.
 
 **What permissions does it need?**
 
@@ -97,17 +129,6 @@ On macOS, grant Full Disk Access to the installed indexer in System Settings, th
 
 The assistant can search, count, summarize, or inspect recent changes. For broad searches, it can measure the result size first and choose a useful response on its own instead of flooding the conversation with thousands of matches. It skips common noise folders by default; tell it to include everything when you really need those folders.
 
-## What Your AI Can Do With It
-
-Once installed, your AI assistant can:
-
-| Tool | What it does |
-|------|--------------|
-| `find_files` | Discover the exact files an agent should read, with names, paths, dates, sizes, and filters |
-| `count_files` | Measure the size of a search before returning a large result set |
-| `search_status` | Confirm which local search engine is available and whether the index is healthy |
-| `recent_changes` | Investigate what was created, modified, renamed, or deleted, newest first |
-| `aggregate_files` | Answer roll-up questions like largest files, file counts by type, or total size |
 
 ## What This Unlocks for AI Agents
 
