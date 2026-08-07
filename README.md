@@ -40,7 +40,7 @@ The tool prepares a local index in the background. Your AI can search that index
 
 **Will it slow down my computer?**
 
-The first scan uses some resources while it builds the index. After that, the background service watches for changes and normally stays quiet. On Windows, the first scan typically takes seconds; Linux and macOS scans can take longer because their operating systems do not provide the same fast file-table access.
+The first scan uses some resources while it builds the index. After that, the background service watches for changes and normally stays quiet.
 
 **What happens if the background service is unavailable?**
 
@@ -77,8 +77,6 @@ To check the installation from a repository checkout:
 If the check fails because Windows blocked the administrator step, the installation is incomplete. Approve the prompt and run the installer again.
 
 ### Install on Linux or macOS
-
-These ports are experimental and require a source checkout. They are intended for users comfortable running a service from a terminal.
 
 Linux:
 
@@ -190,8 +188,8 @@ The following sections are for developers, advanced users, and anyone who wants 
 
 No separate programs to install. This tool brings its own search engine, so it works out of the box:
 
-1. **A background indexer.** A small service keeps a live, always-up-to-date list of everything on your drives. It runs as a Windows service on Windows, a systemd unit on Linux, or a launchd daemon on macOS. The first scan takes about 15 seconds on a typical Windows PC (roughly 2.4 million files); the initial walk takes longer on Linux and macOS. After that it stays current on its own by watching for new, renamed, or deleted files.
-2. **A Fallback Engine (`instant-file-search-fallback-engine-1.5.0.1418b`).** Just in case. If the background indexer is ever stopped, your searches are answered automatically by the Fallback Engine instead. You never have to start or manage anything. It is a Windows-native engine (Everything) that ships with the release installer; Linux and macOS do not use it, so on those platforms the native indexer is the only engine.
+1. **A background indexer.** A small service keeps a live, always-up-to-date list of everything on your drives. It runs as a Windows service on Windows, a systemd unit on Linux, or a launchd daemon on macOS. The first scan takes about 15 seconds on a typical Windows PC (roughly 2.4 million files). After that it stays current on its own by watching for new, renamed, or deleted files.
+2. **A Fallback Engine (`instant-file-search-fallback-engine-1.5.0.1418b`).** Just in case. If the background indexer is ever stopped, your searches are answered automatically by the Fallback Engine instead. You never have to start or manage anything. It is a Windows-native engine (Everything) that ships with the release installer; Linux and macOS use the native indexer exclusively.
 
 Searches are answered in milliseconds straight from memory. Nothing gets written to disk, and nothing leaves your machine.
 
@@ -320,9 +318,9 @@ Outputs:
 
 The installer registers the indexer as a Windows service (`instant-file-search-indexer`, auto-start). Run `indexer.exe scan` for a one-shot diagnostic, or `indexer.exe serve` to run the indexer in the foreground.
 
-### Linux (experimental)
+### Linux
 
-The native indexer also builds and runs on Linux (Ubuntu 24.04 LTS tested; kernel 5.17+ for full change-tracking support). The Linux backend swaps the Windows pillars for their Linux equivalents:
+The native indexer runs on Linux. Tested on Ubuntu 26.04 LTS, kernel 7.0, x86_64. The Linux backend swaps the Windows pillars for their Linux equivalents:
 
 | Windows | Linux |
 |---|---|
@@ -397,7 +395,7 @@ MCP Host (VS Code / Cursor / Claude Desktop / OpenCode / Hermes)
                             └─ NTFS master file list + change journal
 ```
 
-On Windows, if the indexer service is unreachable, the server answers from the `instant-file-search-fallback-engine` instead, with the same tools and results and no setup. On Linux and macOS there is no fallback engine; the native indexer is the only search path, so the tools report the native engine's status only.
+On Windows, if the indexer service is unreachable, the server answers from the `instant-file-search-fallback-engine` instead, with the same tools and results and no setup. On Linux and macOS the native indexer is the only engine.
 
 ## License
 
