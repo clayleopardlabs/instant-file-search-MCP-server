@@ -118,7 +118,17 @@ Windows needs administrator approval once to install the background service. On 
 
 Ask your AI assistant to run `search_status`, or use the platform health-check command described below.
 
-### Manual install on Windows
+## How to Install
+
+Have your AI agent do it:
+
+"Hey robot, install this thing on this github repo https://github.com/clayleopardlabs/instant-file-search-MCP-server"
+
+Then the AI uses the following (which you can use manually if you want):
+
+### Automatic installer on Windows
+
+Detects a bunch of common programs like Codex and Opencode (and has plugins for ohmyopencode and omo-slim), installs the search service, and updates their configuration. You can safely run it again when a new version is available.
 
 1. Open PowerShell.
 2. Run:
@@ -130,7 +140,6 @@ Ask your AI assistant to run `search_status`, or use the platform health-check c
 3. Approve the Windows permission prompt.
 4. Restart your AI app.
 
-The installer detects supported AI apps, installs the search service, and updates their configuration. You can safely run it again when a new version is available.
 
 To check the installation from a repository checkout:
 
@@ -140,7 +149,7 @@ To check the installation from a repository checkout:
 
 If the check fails because Windows blocked the administrator step, the installation is incomplete. Approve the prompt and run the installer again.
 
-### Manual install on Linux or macOS
+### Automatic installer on Linux or macOS
 
 Linux:
 
@@ -155,10 +164,6 @@ sudo bash scripts/install-macos.sh
 ```
 
 On macOS, grant Full Disk Access to the installed indexer in System Settings, then restart the launched service. See the platform-specific build guides below for the details and current limitations.
-
-### Ask your AI for help
-
-The assistant can search, count, summarize, or inspect recent changes. For broad searches, it can measure the result size first and choose a useful response on its own instead of flooding the conversation with thousands of matches. It skips common noise folders by default; tell it to include everything when you really need those folders.
 
 
 ## What This Unlocks for AI Agents
