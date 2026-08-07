@@ -203,9 +203,15 @@ impl FileIndex {
             let cat = match reason {
                 "DELETE" => "deleted",
                 "RENAME" | "RENAME_NEW" => "renamed",
-                _ => "modified", // CREATE and CLOSE both surface as WRITE
+                _ => "modified", // CREATE/CLOSE/MODIFY all surface as WRITE
             };
-            list.split(',').any(|w| w.trim().eq_ignore_ascii_case(cat))
+            list.split(',').any(|w| {
+                let w = w.trim().to_ascii_lowercase();
+                // fanotify lumps CREATE into WRITE; "created" is a synonym for "modified"
+                let expanded = w == "created";
+                let w = if expanded { "modified" } else { &w };
+                w.eq_ignore_ascii_case(cat)
+            })
         };
         let inner = self.inner.read().unwrap();
         inner

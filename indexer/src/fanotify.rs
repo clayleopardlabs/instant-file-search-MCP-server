@@ -97,8 +97,9 @@ struct FileHandle {
     data: Vec<u8>,
 }
 
-/// A volume mount: its path and an O_PATH fd on the mount point, used as the
-/// `mount_fd` argument to `open_by_handle_at`.
+/// A volume mount: its path and an O_RDONLY fd on the mount point, used as the
+/// `mount_fd` argument to `open_by_handle_at`. Must be O_RDONLY (not O_PATH)
+/// because kernel 7.0+ rejects O_PATH fds for open_by_handle_at.
 struct Mount {
     path: String,
     fd: RawFd,
@@ -123,11 +124,15 @@ pub fn watch_all(
 ) -> Result<()> {
     let fd = fanotify_init()?;
 
-    // Open an O_PATH fd on each volume root for handle resolution.
+    // Open an O_RDONLY fd on each volume root for handle resolution.
+    // Must NOT be O_PATH — kernel 7.0+ rejects O_PATH fds in open_by_handle_at
+    // (returns EBADF). O_RDONLY | O_DIRECTORY works reliably.
     let mut mounts: Vec<Mount> = Vec::new();
     for v in volumes {
         let c = CString::new(v.as_str()).context("volume path contains NUL")?;
-        let mfd = unsafe { libc::open(c.as_ptr(), libc::O_PATH | libc::O_DIRECTORY | libc::O_CLOEXEC) };
+        // O_RDONLY (not O_PATH) so open_by_handle_at works on newer kernels
+        // (7.0+) that reject O_PATH mount fds.
+        let mfd = unsafe { libc::open(c.as_ptr(), libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC) };
         if mfd < 0 {
             tracing::warn!(
                 "fanotify: cannot open mount {}: {}",

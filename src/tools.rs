@@ -39,6 +39,7 @@ pub enum SortOrder {
 
 impl SortOrder {
     /// The wire token for this sort order (matches the indexer's sort keys).
+    #[allow(dead_code)]
     pub fn as_str(&self) -> &'static str {
         match self {
             SortOrder::Name => "name",
@@ -81,6 +82,7 @@ pub struct SearchParams {
     /// Restrict search to files under this path. USE FORWARD SLASHES to avoid JSON escaping: "C:/Users" or "B:/Projects". Backslashes also work but must be escaped in JSON.
     pub path: Option<String>,
     /// Comma-separated list of fields to return: filename, path, size, date_modified, date_created, date_accessed, attributes, extension, run_count, date_run, date_recently_changed.
+    #[allow(dead_code)]
     pub fields: Option<String>,
     /// Directories to exclude from results. Supports Everything ! prefix syntax. Pass one or more paths separated by `;`. Example: "C:\\Windows\\WinSxS;C:\\Program Files" skips both directories. Can also be a partial path like "node_modules" to exclude all folders with that name anywhere.
     pub exclude_path: Option<String>,

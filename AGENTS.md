@@ -196,5 +196,8 @@ Build with `cargo build --release` from the workspace root.
 - Never run the indexer in the foreground — it blocks until timeout; use fire-and-forget elevated starts with output redirected to files.
 - Linux: `CapabilityBoundingSet=CAP_SYS_ADMIN` alone strips `CAP_DAC_OVERRIDE`/`CAP_DAC_READ_SEARCH`, preventing traversal of `drwxr-x---` directories. The systemd unit must include all three capabilities.
 - Linux: path separator in index.rs must use `crate::platform::SEP` — hardcoded `\\` breaks `adjust_ancestors`, `sum_children`, `remove_prefix`, `rename_prefix`.
+- Linux: fanotify `open_by_handle_at` fails with `O_PATH` mount fds on kernel 7.0+ (returns EBADF). Mount fds must be opened with `O_RDONLY | O_DIRECTORY` instead.
+- Linux: fanotify lumps CREATE/MODIFY/CLOSE_WRITE into a single "WRITE" reason. The `recent_changes` "created" filter is a synonym for "modified" — there is no way to distinguish file creation from modification via fanotify alone.
+- Linux: `/tmp` is typically tmpfs (not a real disk) and is excluded from the indexer scan. Use paths on real disk volumes for test files.
 
 See `docs/` for architecture, build instructions, tool reference, and development notes.

@@ -1,9 +1,10 @@
 # Instant File Search Indexer — systemd unit (Linux native backend)
 #
 # The indexer needs CAP_SYS_ADMIN for fanotify FAN_MARK_FILESYSTEM volume
-# marks (fanotify_init/fanotify_mark). The Unix socket is world-writable
-# (0666) so the user-level MCP server can connect even though the indexer
-# runs as root.
+# marks (fanotify_init/fanotify_mark). CAP_DAC_OVERRIDE and CAP_DAC_READ_SEARCH
+# are needed to traverse every directory on the system (e.g. drwxr-x--- home dirs).
+# The Unix socket is world-writable (0666) so the user-level MCP server can
+# connect even though the indexer runs as root.
 #
 # Install:
 #   sudo cp instant-file-search-indexer.service /etc/systemd/system/
@@ -24,14 +25,13 @@ ExecStart=/usr/local/lib/instant-file-search/instant-file-search-indexer serve
 Restart=on-failure
 RestartSec=2
 # fanotify FAN_MARK_FILESYSTEM requires CAP_SYS_ADMIN.
-AmbientCapabilities=CAP_SYS_ADMIN
-CapabilityBoundingSet=CAP_SYS_ADMIN
-NoNewPrivileges=true
+# CAP_DAC_OVERRIDE + CAP_DAC_READ_SEARCH are needed to traverse every
+# directory on the system (e.g. drwxr-x--- home dirs).
+AmbientCapabilities=CAP_SYS_ADMIN CAP_DAC_OVERRIDE CAP_DAC_READ_SEARCH
+CapabilityBoundingSet=CAP_SYS_ADMIN CAP_DAC_OVERRIDE CAP_DAC_READ_SEARCH
 # The indexer must read every file on the system; keep the full mount
 # namespace visible and disable the private /tmp (socket lives there).
 PrivateTmp=false
-ProtectSystem=full
-ProtectHome=false
 
 [Install]
 WantedBy=multi-user.target
