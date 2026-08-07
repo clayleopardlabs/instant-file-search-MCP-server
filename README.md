@@ -2,11 +2,8 @@
 
 ![](demo.gif)
 
-An MCP server that gives AI agents instant filesystem search. Agents can filter files by name, extension, size, or date, scope searches to a directory, exclude noise folders, and count matches across millions of files in milliseconds, without walking folders one by one.
+Search every file on your computer. All 3 million of them. In under a second.
 
-## How It Works
-
-Computers record every file creation, rename, move, and deletion as it happens. This server maintains a live index of those records, so agents can filter the entire filesystem the same way a search engine reads a document index. Because every change event is captured, the record is forensic in practice: a file modified in milliseconds still leaves a trace your agent can find.
 
 ## Start Here
 
@@ -23,6 +20,10 @@ This tool gives your AI assistant a fast way to find files on your computer. Aft
 - "Give me the project's shape before reading the code."
 
 You do not need to learn a search language: everyday questions work in plain English. The optional query filters under Technical Details give you more control when you want it.
+
+## How It Works
+
+Computers record every file creation, rename, move, and deletion as it happens. This server maintains a live index of those records, so agents can filter the entire filesystem the same way a search engine reads a document index. Because every change event is captured, the record is forensic in practice: a file modified in milliseconds still leaves a trace your agent can find.
 
 ### Frequently asked questions
 
