@@ -21,11 +21,11 @@ Now when you ask your agent to /init and learn a new codebase, it can find every
 
 ### Forensic in practice
 
-A file modified in milliseconds still leaves a trace your agent can find. You can have your agent find every file modified by that new program you installed or keep an eye on things. It now keeps tabs on your PC on the same hardware level as the programs we used in my Information Security classes. 
+A file modified in milliseconds still leaves a trace your agent can now find. You can have your agent find every file modified by that new program you installed or keep an eye on things. It now keeps tabs on your PC on the same hardware level as the programs we used in my Information Security classes. 
 
 ### Endlessly tested
 
-I tested this MCP server with a half dozen different model from tiny locally hosted Qwen models and mid size 400b models like deepseek and chatgpt. The only problem I found was a ChatGPT model (luna) trying get away with only half installing it.
+I tested this MCP server with a dozen different models from tiny locally hosted Qwen models and mid size 35b models, and API sized 400b models like deepseek and chatgpt. The only problem I found was a ChatGPT model (luna) trying get away with only half installing it.
 
 ### New tools
 
@@ -41,7 +41,7 @@ You agent gets 5 new tools:
 
 It also gets a mountain of filters it can use to narrow its searches down (these are listed in the 'Search query filters' section below). 
 
-You could ask it very specific questions like the examples below, 
+You could ask it very specific questions like, 
 
 - "Find the project's README file."
 - "Show me the largest files in this folder, ignoring build output."
@@ -54,6 +54,35 @@ You could ask it very specific questions like the examples below,
 - "Give me the project's shape before reading the code."
 
 ...but 99% of the time my agents use it automatically. When they're working on a codebase and need to know where that library is or when they're trying to find some config file on my computer, etc. Or this past week when I was doing a reinstall of Windows and needed to backup my Witcher 3 save files.
+
+### Search query filters
+
+The AI can embed these in a search query:
+
+| Trick | Example | Effect |
+|-------|---------|--------|
+| `file:` | `file: *.ts` | Files only |
+| `folder:` | `folder: src` | Folders only |
+| `dm:` | `dm:today`, `dm:last2hours` | Modified date. Relative: today, yesterday, Ndays, lastNdays, prevNdays, thisweek/lastmonth/etc., Nhours/minutes/secs (rolling). Calendar: jan-dec (current year), sun-sat (current week), mtd, ytd, qtd |
+| `dc:` | `dc:thisweek` | Created this week |
+| `da:` | `da:yesterday` | Opened yesterday |
+| `size:` | `size:>10mb` | Larger than 10 MB (constants: tiny<1kb, small<1mb, medium<1gb, large>1gb, huge>4gb, gigantic>16gb, empty=0) |
+| `attrib:` | `attrib:h`, `attrib:!d` | Match by NTFS attribute (h hidden, s system, r readonly, d directory, a archive, t temp, c compressed, e encrypted, o offline, p reparse, i not-indexed, n normal) |
+| wildcards | `*.ts`, `file[0-9].txt`, `img#.png`, `**.rs` | `*` any run (not `\\`), `**` any run incl. `\\`, `?` one char, `[set]`/`[!set]` classes, `#` one digit, `\\x` escape |
+| `dupe:` | `dupe:filename` | Find duplicate filenames |
+| `!` | `!*.tmp` | Exclude a pattern |
+| `|` | `*.ts | *.tsx` | Match either pattern |
+| `len:` | `len:>10`, `len:1..5` | Filename length filter (same operators as `size:`) |
+| `frn:` | `frn:>1000` | File reference number filter |
+| anchors | `^foo`, `bar$`, `^exact$` | `^` start-of-name, `$` end-of-name; also `start-with:`, `end-with:`, `prefix:`, `suffix:` |
+| `is:` | `is:hidden`, `is:folder` | Type/attribute shorthand: `folder`/`file`, `hidden`, `system`, `readonly`, `archive`, `temporary`, `compressed`, `encrypted`, `offline`, `reparse`, `not-content-indexed`, `normal` |
+| `and:`/`or:`/`not:` | `and:foo`, `or:bar`, `not:baz` | Operator aliases: `and:` = default AND, `or:` = OR with previous, `not:` = exclude |
+| `metric:` | `metric:size:>1000kb` | Switch size interpretation from JEDEC (1024-based) to decimal (1000-based) |
+| `wholeword:` | `wholeword:foo`, `ww:foo` | Match whole word only |
+| `" "` | `"exact phrase"` | Match an exact phrase |
+| `content:` | `content:"fn main"` | Match file contents. Backed by a bounded 256 MB store, so coverage is a subset of files; use it for targeted searches, not exhaustive counts |
+
+Noisy folders such as `node_modules`, `.git`, and `WinSxS` are skipped by default so results stay useful. When a task genuinely requires a complete inventory, the agent can include those folders with `include_all=true`. Folder scoping also accepts ordinary paths such as `C:/Users`; the engine normalizes path separators for the agent.
 
 ### Frequently asked questions
 
@@ -71,13 +100,15 @@ The tool prepares a local index in the background. Your AI can search that index
 
 **Will it slow down my computer?**
 
-No. The first scan builds the index. After that, the background service watches for changes and updated the list it made the first time.
+No. The first scan builds the index. After that, the background service watches for changes and updates the list it made the first time. My AI buddies are telling me that given how linux inodes work (what a weird system) they could be slower to build the index the first time, but when I tested it on Ubuntu LTS on a 15 yr old i5 work laptop with a 15 yr old SSD, I didn't notice anything. 
 
 **What happens if the background service is unavailable?**
 
 Windows: Hooray! You get a fallback search engine. It's the called the Everything engine made by void-tools. It doesn't have every last feature my native engine has but it's serviceable if you need it. I might pull it from future releases and just keep it in the repo for testing purposes, but for now this project is smart enough to know when the native engine is down and immediately use the backup.
 
-Linux and macOS: can only use the native indexer, so if there's a problem it'll tell you.
+Linux and macOS: sorry, you can only use the native indexer, so if there's a problem it'll tell you. Truth is, aside from a bad installation I can't imagine there's going to be a time when the native engine fails but the backup doesn't, so you're not missing anything.
+
+(okay the human's getting tired so AI will take over from here on down)
 
 **What permissions does it need?**
 
@@ -87,7 +118,7 @@ Windows needs administrator approval once to install the background service. On 
 
 Ask your AI assistant to run `search_status`, or use the platform health-check command described below.
 
-### Install on Windows
+### Manual install on Windows
 
 1. Open PowerShell.
 2. Run:
@@ -109,7 +140,7 @@ To check the installation from a repository checkout:
 
 If the check fails because Windows blocked the administrator step, the installation is incomplete. Approve the prompt and run the installer again.
 
-### Install on Linux or macOS
+### Manual install on Linux or macOS
 
 Linux:
 
@@ -123,7 +154,7 @@ macOS:
 sudo bash scripts/install-macos.sh
 ```
 
-On macOS, grant Full Disk Access to the installed indexer in System Settings, then restart the launchd service. See the platform-specific build guides below for the details and current limitations.
+On macOS, grant Full Disk Access to the installed indexer in System Settings, then restart the launched service. See the platform-specific build guides below for the details and current limitations.
 
 ### Ask your AI for help
 
@@ -214,35 +245,6 @@ No separate programs to install. This tool brings its own search engine, so it w
 2. **A Fallback Engine (`instant-file-search-fallback-engine-1.5.0.1418b`).** Just in case. If the background indexer is ever stopped, your searches are answered automatically by the Fallback Engine instead. You never have to start or manage anything. It is a Windows-native engine (Everything) that ships with the release installer; Linux and macOS use the native indexer exclusively.
 
 Searches are answered in milliseconds straight from memory. Nothing gets written to disk, and nothing leaves your machine.
-
-### Search query filters
-
-The AI can embed these in a search query:
-
-| Trick | Example | Effect |
-|-------|---------|--------|
-| `file:` | `file: *.ts` | Files only |
-| `folder:` | `folder: src` | Folders only |
-| `dm:` | `dm:today`, `dm:last2hours` | Modified date. Relative: today, yesterday, Ndays, lastNdays, prevNdays, thisweek/lastmonth/etc., Nhours/minutes/secs (rolling). Calendar: jan-dec (current year), sun-sat (current week), mtd, ytd, qtd |
-| `dc:` | `dc:thisweek` | Created this week |
-| `da:` | `da:yesterday` | Opened yesterday |
-| `size:` | `size:>10mb` | Larger than 10 MB (constants: tiny<1kb, small<1mb, medium<1gb, large>1gb, huge>4gb, gigantic>16gb, empty=0) |
-| `attrib:` | `attrib:h`, `attrib:!d` | Match by NTFS attribute (h hidden, s system, r readonly, d directory, a archive, t temp, c compressed, e encrypted, o offline, p reparse, i not-indexed, n normal) |
-| wildcards | `*.ts`, `file[0-9].txt`, `img#.png`, `**.rs` | `*` any run (not `\\`), `**` any run incl. `\\`, `?` one char, `[set]`/`[!set]` classes, `#` one digit, `\\x` escape |
-| `dupe:` | `dupe:filename` | Find duplicate filenames |
-| `!` | `!*.tmp` | Exclude a pattern |
-| `|` | `*.ts | *.tsx` | Match either pattern |
-| `len:` | `len:>10`, `len:1..5` | Filename length filter (same operators as `size:`) |
-| `frn:` | `frn:>1000` | File reference number filter |
-| anchors | `^foo`, `bar$`, `^exact$` | `^` start-of-name, `$` end-of-name; also `start-with:`, `end-with:`, `prefix:`, `suffix:` |
-| `is:` | `is:hidden`, `is:folder` | Type/attribute shorthand: `folder`/`file`, `hidden`, `system`, `readonly`, `archive`, `temporary`, `compressed`, `encrypted`, `offline`, `reparse`, `not-content-indexed`, `normal` |
-| `and:`/`or:`/`not:` | `and:foo`, `or:bar`, `not:baz` | Operator aliases: `and:` = default AND, `or:` = OR with previous, `not:` = exclude |
-| `metric:` | `metric:size:>1000kb` | Switch size interpretation from JEDEC (1024-based) to decimal (1000-based) |
-| `wholeword:` | `wholeword:foo`, `ww:foo` | Match whole word only |
-| `" "` | `"exact phrase"` | Match an exact phrase |
-| `content:` | `content:"fn main"` | Match file contents. Backed by a bounded 256 MB store, so coverage is a subset of files; use it for targeted searches, not exhaustive counts |
-
-Noisy folders such as `node_modules`, `.git`, and `WinSxS` are skipped by default so results stay useful. When a task genuinely requires a complete inventory, the agent can include those folders with `include_all=true`. Folder scoping also accepts ordinary paths such as `C:/Users`; the engine normalizes path separators for the agent.
 
 ### Detailed Installation Reference
 
