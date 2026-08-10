@@ -126,7 +126,7 @@ Have your AI agent do it:
 
 Then the AI uses the following (which you can use manually if you want):
 
-### Automatic installer on Windows
+### Windows - Automatic installer
 
 Detects a bunch of common programs like Codex and Opencode (and has plugins for ohmyopencode and omo-slim), installs the search service, and updates their configuration. You can safely run it again when a new version is available.
 
@@ -149,7 +149,7 @@ To check the installation from a repository checkout:
 
 If the check fails because Windows blocked the administrator step, the installation is incomplete. Approve the prompt and run the installer again.
 
-### Automatic installer on Linux or macOS
+### Linux & macOS - Automatic installer 
 
 Linux:
 
