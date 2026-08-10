@@ -76,6 +76,10 @@ sudo bash scripts/install-macos.sh
 
 On macOS, grant Full Disk Access to the installed indexer in System Settings, then restart the launched service. See the platform-specific build guides below for the details and current limitations.
 
+## More details!
+
+Below is a deeper dive into what tools and filtering terms this MCP server gives your agents.
+
 ### New tools
 
 You agent gets 5 new tools:
