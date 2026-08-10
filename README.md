@@ -149,7 +149,7 @@ To check the installation from a repository checkout:
 
 If the check fails because Windows blocked the administrator step, the installation is incomplete. Approve the prompt and run the installer again.
 
-##Linux - Automatic installer 
+## Linux - Automatic installer 
 
 Linux:
 
@@ -157,7 +157,7 @@ Linux:
 sudo bash scripts/install-linux.sh
 ```
 
-##MacOS - Automatic installer 
+## MacOS - Automatic installer 
 
 macOS:
 
