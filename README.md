@@ -27,6 +27,55 @@ A file modified in milliseconds still leaves a trace your agent can now find. Yo
 
 I tested this MCP server with a dozen different models from tiny locally hosted Qwen models and mid size 35b models, and API sized 400b models like deepseek and chatgpt. The only problem I found was a ChatGPT model (luna) trying get away with only half installing it.
 
+## How to Install (Recommended)
+
+Have your AI agent do it:
+
+"Hey robot, install this thing on this github repo https://github.com/clayleopardlabs/instant-file-search-MCP-server"
+
+Then the AI uses the following (which you can use manually if you want):
+
+## Windows - Automatic installer
+
+Detects a bunch of common programs like Codex and Opencode (and has plugins for ohmyopencode and omo-slim), installs the search service, and updates their configuration. You can safely run it again when a new version is available.
+
+1. Open PowerShell.
+2. Run:
+
+   ```powershell
+   powershell -c "irm https://raw.githubusercontent.com/clayleopardlabs/instant-file-search-MCP-server/master/scripts/install.ps1 | iex"
+   ```
+
+3. Approve the Windows permission prompt.
+4. Restart your AI app.
+
+
+To check the installation from a repository checkout:
+
+```powershell
+.\scripts\doctor.ps1 -RequireNative
+```
+
+If the check fails because Windows blocked the administrator step, the installation is incomplete. Approve the prompt and run the installer again.
+
+## Linux - Automatic installer 
+
+Linux:
+
+```sh
+sudo bash scripts/install-linux.sh
+```
+
+## MacOS - Automatic installer 
+
+macOS:
+
+```sh
+sudo bash scripts/install-macos.sh
+```
+
+On macOS, grant Full Disk Access to the installed indexer in System Settings, then restart the launched service. See the platform-specific build guides below for the details and current limitations.
+
 ### New tools
 
 You agent gets 5 new tools:
@@ -114,58 +163,9 @@ Linux and macOS: sorry, you can only use the native indexer, so if there's a pro
 
 Windows needs administrator approval once to install the background service. On macOS, Full Disk Access must also be granted manually in System Settings if you want to search protected folders such as Documents or Desktop.
 
-**How do I know it is working?**
+**How do I know it's working?**
 
 Ask your AI assistant to run `search_status`, or use the platform health-check command described below.
-
-## How to Install (Recommended)
-
-Have your AI agent do it:
-
-"Hey robot, install this thing on this github repo https://github.com/clayleopardlabs/instant-file-search-MCP-server"
-
-Then the AI uses the following (which you can use manually if you want):
-
-## Windows - Automatic installer
-
-Detects a bunch of common programs like Codex and Opencode (and has plugins for ohmyopencode and omo-slim), installs the search service, and updates their configuration. You can safely run it again when a new version is available.
-
-1. Open PowerShell.
-2. Run:
-
-   ```powershell
-   powershell -c "irm https://raw.githubusercontent.com/clayleopardlabs/instant-file-search-MCP-server/master/scripts/install.ps1 | iex"
-   ```
-
-3. Approve the Windows permission prompt.
-4. Restart your AI app.
-
-
-To check the installation from a repository checkout:
-
-```powershell
-.\scripts\doctor.ps1 -RequireNative
-```
-
-If the check fails because Windows blocked the administrator step, the installation is incomplete. Approve the prompt and run the installer again.
-
-## Linux - Automatic installer 
-
-Linux:
-
-```sh
-sudo bash scripts/install-linux.sh
-```
-
-## MacOS - Automatic installer 
-
-macOS:
-
-```sh
-sudo bash scripts/install-macos.sh
-```
-
-On macOS, grant Full Disk Access to the installed indexer in System Settings, then restart the launched service. See the platform-specific build guides below for the details and current limitations.
 
 
 ## What This Unlocks for AI Agents
