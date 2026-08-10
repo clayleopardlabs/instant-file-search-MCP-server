@@ -76,6 +76,78 @@ sudo bash scripts/install-macos.sh
 
 On macOS, grant Full Disk Access to the installed indexer in System Settings, then restart the launched service. See the platform-specific build guides below for the details and current limitations.
 
+## What This Unlocks for AI Agents
+
+Most coding assistants can read a file when you give them its path. The hard part is knowing which files matter in the first place. This MCP gives the assistant a fast, live map of your computer so it can investigate before it starts opening files one by one.
+
+### 1. Understand an unfamiliar project in seconds
+
+An agent can discover the shape of a codebase before touching the source:
+
+> "Show me the project's source files, tests, configuration, generated output, and largest directories. Ignore dependencies and build artifacts."
+
+It can then decide where to look instead of guessing from a shallow directory listing or spending minutes walking the tree.
+
+### 2. Investigate what changed, not just what exists
+
+`recent_changes` lets an agent answer questions that ordinary file search cannot:
+
+- What changed in this project in the last hour?
+- Which files were renamed or deleted during the failed build?
+- What appeared after I installed this package?
+- Show only created and modified files; hide delete noise.
+
+The indexer records change events locally, at a forensic level: a file modified in only milliseconds still leaves evidence for the agent to find. This is especially useful for debugging, reviewing automated changes, and tracing unexpected activity. The tool returns events newest first.
+
+### 3. Search the whole computer without drowning in results
+
+Agents can search every indexed drive, then narrow the answer by folder, file type, date, size, or path. They can count first and list second:
+
+> "How many JSON files are there outside dependencies? Now show me the first 30 under this project."
+
+That lets an agent reason about scale before requesting thousands of results.
+
+### 4. Answer questions involving totals and comparisons
+
+`aggregate_files` gives the agent facts that normally require a shell script or a manual spreadsheet:
+
+- total files and folders
+- total disk space used
+- largest matching entries
+- counts and sizes grouped by extension
+
+For example:
+
+> "Which file types take the most space in this project, and what are the five largest files?"
+
+The agent receives the answer directly instead of listing everything and trying to sum it inside the conversation.
+
+### 5. Find secrets, stale artifacts, and suspicious leftovers
+
+An agent can perform broad hygiene and forensic sweeps locally:
+
+- find `.env`, credential, backup, dump, and installer files
+- locate old exports and duplicate filenames
+- find unexpectedly large files
+- identify files created or modified during a suspicious time window
+- search targeted text files with `content:"phrase"`
+
+These searches are useful for security reviews, release preparation, incident triage, and cleaning up a project before sharing it.
+
+### 6. Keep working at machine scale
+
+The native index is designed for millions of files. The agent does not need to run slow recursive shell commands, ask you where every folder is, or read a directory listing into its context just to find one file. Search stays local, fast, and small enough to use repeatedly during a task.
+
+### 7. Give sub-agents the same filesystem awareness
+
+The optional OpenCode adapter exposes the same search abilities to sub-agents. An explorer can map a repository, a librarian can locate documentation, and a fixer can find related tests or configuration without falling back to slow shell scans.
+
+The practical result is a different workflow: agents can discover, measure, investigate, and then read only the files that matter.
+
+### 8. Know whether an answer is complete before relying on it
+
+`search_status` gives the agent a coverage and health check before it begins an investigation. It can see whether the native index is available, how many files are indexed, and which volumes are covered. That means the agent can recognize the difference between "nothing matched" and "the search service is not ready," and can explain when a result is based on a fallback or a limited content index.
+
 ## More details!
 
 Below is a deeper dive into what tools and filtering terms this MCP server gives your agents.
@@ -172,77 +244,7 @@ Windows needs administrator approval once to install the background service. On 
 Ask your AI assistant to run `search_status`, or use the platform health-check command described below.
 
 
-## What This Unlocks for AI Agents
 
-Most coding assistants can read a file when you give them its path. The hard part is knowing which files matter in the first place. This MCP gives the assistant a fast, live map of your computer so it can investigate before it starts opening files one by one.
-
-### 1. Understand an unfamiliar project in seconds
-
-An agent can discover the shape of a codebase before touching the source:
-
-> "Show me the project's source files, tests, configuration, generated output, and largest directories. Ignore dependencies and build artifacts."
-
-It can then decide where to look instead of guessing from a shallow directory listing or spending minutes walking the tree.
-
-### 2. Investigate what changed, not just what exists
-
-`recent_changes` lets an agent answer questions that ordinary file search cannot:
-
-- What changed in this project in the last hour?
-- Which files were renamed or deleted during the failed build?
-- What appeared after I installed this package?
-- Show only created and modified files; hide delete noise.
-
-The indexer records change events locally, at a forensic level: a file modified in only milliseconds still leaves evidence for the agent to find. This is especially useful for debugging, reviewing automated changes, and tracing unexpected activity. The tool returns events newest first.
-
-### 3. Search the whole computer without drowning in results
-
-Agents can search every indexed drive, then narrow the answer by folder, file type, date, size, or path. They can count first and list second:
-
-> "How many JSON files are there outside dependencies? Now show me the first 30 under this project."
-
-That lets an agent reason about scale before requesting thousands of results.
-
-### 4. Answer questions involving totals and comparisons
-
-`aggregate_files` gives the agent facts that normally require a shell script or a manual spreadsheet:
-
-- total files and folders
-- total disk space used
-- largest matching entries
-- counts and sizes grouped by extension
-
-For example:
-
-> "Which file types take the most space in this project, and what are the five largest files?"
-
-The agent receives the answer directly instead of listing everything and trying to sum it inside the conversation.
-
-### 5. Find secrets, stale artifacts, and suspicious leftovers
-
-An agent can perform broad hygiene and forensic sweeps locally:
-
-- find `.env`, credential, backup, dump, and installer files
-- locate old exports and duplicate filenames
-- find unexpectedly large files
-- identify files created or modified during a suspicious time window
-- search targeted text files with `content:"phrase"`
-
-These searches are useful for security reviews, release preparation, incident triage, and cleaning up a project before sharing it.
-
-### 6. Keep working at machine scale
-
-The native index is designed for millions of files. The agent does not need to run slow recursive shell commands, ask you where every folder is, or read a directory listing into its context just to find one file. Search stays local, fast, and small enough to use repeatedly during a task.
-
-### 7. Give sub-agents the same filesystem awareness
-
-The optional OpenCode adapter exposes the same search abilities to sub-agents. An explorer can map a repository, a librarian can locate documentation, and a fixer can find related tests or configuration without falling back to slow shell scans.
-
-The practical result is a different workflow: agents can discover, measure, investigate, and then read only the files that matter.
-
-### 8. Know whether an answer is complete before relying on it
-
-`search_status` gives the agent a coverage and health check before it begins an investigation. It can see whether the native index is available, how many files are indexed, and which volumes are covered. That means the agent can recognize the difference between "nothing matched" and "the search service is not ready," and can explain when a result is based on a fallback or a limited content index.
 
 ## Technical Details
 
