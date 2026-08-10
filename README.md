@@ -25,7 +25,7 @@ A file modified in milliseconds still leaves a trace your agent can now find. Yo
 
 ### Endlessly tested
 
-I tested this MCP server with a dozen different models from tiny locally hosted Qwen models and mid size 35b models, and API sized 400b models like deepseek and chatgpt. The only problem I found was a ChatGPT model (luna) trying get away with only half installing it.
+I tested this MCP server with a dozen different models from tiny locally hosted Qwen models and mid size 35b models, and API sized 400b models like deepseek and chatgpt. The only problem I found was a ChatGPT model (luna) trying get away with only half installing it. After you install it, just confirm with your agent that they installed everything.
 
 ## How to Install (Recommended)
 
