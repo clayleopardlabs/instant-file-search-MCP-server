@@ -11,6 +11,7 @@ You computer already knows where all the files are. It has to. It knows their na
 
 Windows, MacOS and Linux all do it in different ways but they all have a list of every single file on your computer. If the info is already there, let's use it!
 
+
 ### How it works
 
 What instant-file-search-MCP-server does is let your agent cheat by maintaining its own list of your files so it doesn't have to tediously search every time you ask it to find something. 
@@ -33,7 +34,7 @@ Have your AI agent do it:
 
 "Hey robot, install this thing on this github repo https://github.com/clayleopardlabs/instant-file-search-MCP-server"
 
-Then the AI uses the following (which you can use manually if you want):
+Then the AI uses the following auto installers which pull from the releases. Which you can use manually yourself if you want. They detect if you have Hermes, opencode, and ohmyopencode. If you have OMO, normally subagents don't have access to top-level MCP servers so this adds a plugin to allow them to use the tools too. The goal is that the tools from instant-file-search become the new go-to tools instead of the much slower an inefficient defaults.
 
 ## Windows - Automatic installer
 
