@@ -118,7 +118,7 @@ Windows needs administrator approval once to install the background service. On 
 
 Ask your AI assistant to run `search_status`, or use the platform health-check command described below.
 
-## How to Install
+## How to Install (Recommended)
 
 Have your AI agent do it:
 
