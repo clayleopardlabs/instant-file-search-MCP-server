@@ -1972,38 +1972,56 @@ mod tests {
             e.modified = ft(ts);
             e
         };
-        let map: HashMap<String, IndexedFile> = HashMap::from([
+        let rolling_map: HashMap<String, IndexedFile> = HashMap::from([
             // modified now (in the rolling week)
             ("now".to_string(), entry_mod(r"B:\p\now.txt", now - 3600)),
-            // 10 days ago: in rolling lastweek, not in prevweek
+            // 10 days ago: in rolling lastmonth, not in rolling lastweek
             ("10d".to_string(), entry_mod(r"B:\p\ten.txt", now - 10 * 86400)),
-            // 40 days ago: in rolling lastmonth, not in prevmonth
-            ("40d".to_string(), entry_mod(r"B:\p\forty.txt", now - 40 * 86400)),
         ]);
-        let r = search(&map, &QueryOptions {
+        let r = search(&rolling_map, &QueryOptions {
             query: "dm:lastweek".to_string(),
             ..Default::default()
         });
         assert_eq!(r.entries.len(), 1, "lastweek = rolling 7d");
         assert_eq!(r.entries[0].path, r"B:\p\now.txt");
-        let r = search(&map, &QueryOptions {
+        let r = search(&rolling_map, &QueryOptions {
             query: "dm:pastweek".to_string(),
             ..Default::default()
         });
         assert_eq!(r.entries.len(), 1, "pastweek = rolling 7d");
-        let r = search(&map, &QueryOptions {
+        let r = search(&rolling_map, &QueryOptions {
             query: "dm:lastmonth".to_string(),
             ..Default::default()
         });
         assert_eq!(r.entries.len(), 2, "lastmonth = rolling 31d (now + 10d)");
-        let r = search(&map, &QueryOptions {
+
+        // Use explicit calendar dates for this assertion. A relative fixture
+        // such as "40 days ago" can also land in the previous calendar month
+        // depending on the day the test runs, making CI fail intermittently.
+        let (year, month, _) = unix_to_ymd(now);
+        let (prev_year, prev_month) = if month == 1 { (year - 1, 12) } else { (year, month - 1) };
+        let (older_year, older_month) = if prev_month == 1 {
+            (prev_year - 1, 12)
+        } else {
+            (prev_year, prev_month - 1)
+        };
+        let calendar_map: HashMap<String, IndexedFile> = HashMap::from([
+            ("prev".to_string(), entry_mod(
+                r"B:\p\prev-month.txt",
+                unix_from_ymd(prev_year, prev_month, 15) + 12 * 3600,
+            )),
+            ("older".to_string(), entry_mod(
+                r"B:\p\older-month.txt",
+                unix_from_ymd(older_year, older_month, 15) + 12 * 3600,
+            )),
+            ("now".to_string(), entry_mod(r"B:\p\now.txt", now - 3600)),
+        ]);
+        let r = search(&calendar_map, &QueryOptions {
             query: "dm:prevmonth".to_string(),
             ..Default::default()
         });
-        // 10 days ago falls in the calendar previous month (July, from Aug);
-        // 40 days ago and now do not.
         assert_eq!(r.entries.len(), 1, "prevmonth = calendar previous month");
-        assert_eq!(r.entries[0].path, r"B:\p\ten.txt");
+        assert_eq!(r.entries[0].path, r"B:\p\prev-month.txt");
     }
 
     #[test]
