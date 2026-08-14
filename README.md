@@ -16,9 +16,7 @@ Windows, MacOS and Linux already know where every last file is. They know their 
 
 
 
-### Endlessly tested
 
-I tested this MCP server with a dozen different models from tiny locally hosted Qwen models and mid size 35b models, and API sized 400b models like deepseek and chatgpt. The only problem I found was a ChatGPT model (luna) trying get away with only half installing it. After you install it, just confirm with your agent that they installed everything.
 
 ## How to Install (Recommended)
 
@@ -259,7 +257,9 @@ Windows needs administrator approval once to install the background service. On 
 
 Ask your AI assistant to run `search_status`, or use the platform health-check command described below.
 
+### Endlessly tested
 
+I tested this MCP server with a dozen different models from tiny locally hosted Qwen models and mid size 35b models, and API sized 400b models like deepseek and chatgpt. The only problem I found was a ChatGPT model (luna) trying get away with only half installing it. After you install it, just confirm with your agent that they installed everything.
 
 
 ## Technical Details
