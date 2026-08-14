@@ -8,9 +8,9 @@ Search every file on your computer. All 3 million of them. In under a second.
 
 # It's time to stop using inefficient search methods
 
-You computer already knows where all the files are. It has to. It knows their names and how old they are and when you renamed or moved something. It knows where your collection of my little pony fan art is and how many pdfs you have in your 'Hopes and Dreams' folder. It already has all the answers. So why does your AI agent find stuff by going door to door? Peeking in folders one by one?
+Windows, MacOS and Linux already know where every last file is. They know their names and how old they are and when you renamed or moved something and they never have to search for them, they know exactly where they are without searching folder by folder. Now your agents do too.
 
-Windows, MacOS and Linux all do it in different ways but they all have a list of every single file on your computer. If the info is already there, let's use it!
+
 
 ![](demo.gif)
 
