@@ -82,8 +82,6 @@ sudo bash scripts/install-macos.sh
 
 On macOS, grant Full Disk Access to the installed indexer in System Settings, then restart the launched service. See the platform-specific build guides below for the details and current limitations.
 
-![Five MCP tools at a glance](docs/images/five-tool-capabilities.png)
-
 ## What This Unlocks for AI Agents
 
 Most coding assistants can read a file when you give them its path. The hard part is knowing which files matter in the first place. This MCP gives the assistant a fast, live map of your computer so it can investigate before it starts opening files one by one.
@@ -163,6 +161,8 @@ Below is a deeper dive into what tools and filtering terms this MCP server gives
 ### New tools
 
 You agent gets 5 new tools:
+
+![Five MCP tools at a glance](docs/images/five-tool-capabilities.png)
 
 | Tool | What it does |
 |------|--------------|
