@@ -191,6 +191,8 @@ You could ask it very specific questions like,
 
 The AI can embed these in a search query:
 
+![Search query filters flowing into a single instant file search](docs/images/search-query-filters.png)
+
 | Trick | Example | Effect |
 |-------|---------|--------|
 | `file:` | `file: *.ts` | Files only |
