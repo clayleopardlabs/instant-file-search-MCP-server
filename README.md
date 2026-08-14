@@ -14,19 +14,7 @@ Windows, MacOS and Linux all do it in different ways but they all have a list of
 
 ![](demo.gif)
 
-### How it works
 
-What instant-file-search-MCP-server does is let your agent cheat by maintaining its own list of your files so it doesn't have to tediously search every time you ask it to find something. 
-
-![Instant File Search architecture](docs/images/architecture-diagram.png)
-
-First, it catches up by sneaking a peak at the current one your computer already has, then starting from what's already there, uses that to maintain its own super fast copy. When you delete, move or rename something its list is updated so it doesn't get out of date. That's it. That's the trick. 
-
-Now when you ask your agent to /init and learn a new codebase, it can find every single file in milliseconds. It knows where every agents.md file is, whether it's in the /docs folder or in the /.opencode folder. It finds all of them instantly.
-
-### Forensic in practice
-
-A file modified in milliseconds still leaves a trace your agent can now find. You can have your agent find every file modified by that new program you installed or keep an eye on things. It now keeps tabs on your PC on the same hardware level as the programs we used in my Information Security classes. 
 
 ### Endlessly tested
 
@@ -219,6 +207,20 @@ Your agent has endless options for narrowing down a search:
 | `content:` | `content:"fn main"` | Match file contents. Backed by a bounded 256 MB store, so coverage is a subset of files; use it for targeted searches, not exhaustive counts |
 
 Noisy folders such as `node_modules`, `.git`, and `WinSxS` are skipped by default so results stay useful. When a task genuinely requires a complete inventory, the agent can include those folders with `include_all=true`. Folder scoping also accepts ordinary paths such as `C:/Users`; the engine normalizes path separators for the agent.
+
+### How it works
+
+What instant-file-search-MCP-server does is let your agent cheat by maintaining its own list of your files so it doesn't have to tediously search every time you ask it to find something. 
+
+![Instant File Search architecture](docs/images/architecture-diagram.png)
+
+First, it catches up by sneaking a peak at the current one your computer already has, then starting from what's already there, uses that to maintain its own super fast copy. When you delete, move or rename something its list is updated so it doesn't get out of date. That's it. That's the trick. 
+
+Now when you ask your agent to /init and learn a new codebase, it can find every single file in milliseconds. It knows where every agents.md file is, whether it's in the /docs folder or in the /.opencode folder. It finds all of them instantly.
+
+### Forensic in practice
+
+A file modified in milliseconds still leaves a trace your agent can now find. You can have your agent find every file modified by that new program you installed or keep an eye on things. It now keeps tabs on your PC on the same hardware level as the programs we used in my Information Security classes. 
 
 ### Frequently asked questions
 
