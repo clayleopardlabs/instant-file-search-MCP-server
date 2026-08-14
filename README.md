@@ -73,7 +73,7 @@ On macOS, grant Full Disk Access to the installed indexer in System Settings, th
 
 ## What This Unlocks for AI Agents
 
-Most coding assistants can read a file when you give them its path. The hard part is knowing which files matter in the first place. This MCP gives the assistant a fast, live map of your computer so it can investigate before it starts opening files one by one.
+Most coding assistants can read a file when you give them its path. The hard part is knowing which files matter in the first place or worse, finding them in the first place. When you ask your agent to work on something the most tedious step is the first step. It has to go folder by folder peeking inside trying to find it. When you use /init it makes a handy agents.md with a map but it has to go folder by folder to make that map. It's silly. And it takes ages. Now they instantly know where every last file is. 
 
 ![Indexed search versus recursive file discovery](docs/images/speed-comparison.png)
 
