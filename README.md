@@ -4,7 +4,7 @@
 
 Search every file on your computer. All 3 million of them. In under a second.
 
-![Indexed search versus recursive file discovery](docs/images/speed-comparison.png)
+
 
 # It's time to stop using inefficient search methods
 
@@ -74,6 +74,9 @@ On macOS, grant Full Disk Access to the installed indexer in System Settings, th
 ## What This Unlocks for AI Agents
 
 Most coding assistants can read a file when you give them its path. The hard part is knowing which files matter in the first place. This MCP gives the assistant a fast, live map of your computer so it can investigate before it starts opening files one by one.
+
+![Indexed search versus recursive file discovery](docs/images/speed-comparison.png)
+
 
 ### 1. Understand an unfamiliar project in seconds
 
