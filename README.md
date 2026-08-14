@@ -6,7 +6,7 @@ Search every file on your computer. All 3 million of them. In under a second.
 
 ![Indexed search versus recursive file discovery](docs/images/speed-comparison.png)
 
-# Search millions of files. Instantly.
+# It's time to stop using inefficient search methods
 
 You computer already knows where all the files are. It has to. It knows their names and how old they are and when you renamed or moved something. It knows where your collection of my little pony fan art is and how many pdfs you have in your 'Hopes and Dreams' folder. It already has all the answers. So why does your AI agent find stuff by going door to door? Peeking in folders one by one?
 
