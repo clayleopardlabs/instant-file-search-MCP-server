@@ -36,7 +36,9 @@ I tested this MCP server with a dozen different models from tiny locally hosted 
 
 Have your AI agent do it:
 
-"install the MCP server from this github repo using the appropriate automatic installer https://github.com/clayleopardlabs/instant-file-search-MCP-server"
+```text
+install the MCP server from this github repo using the appropriate automatic installer https://github.com/clayleopardlabs/instant-file-search-MCP-server
+```
 
 Then the AI uses the following auto installers which pull from the releases. Which you can use manually yourself if you want. They detect if you have Hermes, opencode, and ohmyopencode. If you have OMO, normally subagents don't have access to top-level MCP servers so this adds a plugin to allow them to use the tools too. The goal is that the tools from instant-file-search become the new go-to tools instead of the much slower an inefficient defaults.
 
