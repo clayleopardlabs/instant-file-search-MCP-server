@@ -19,7 +19,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$serverName = 'instant-file-search'
+$serverName   = 'instant'
 $binaryName = 'instant-file-search-mcp-server.exe'
 $indexerName = 'instant-file-search-indexer.exe'
 $serviceName = 'instant-file-search-indexer'
@@ -329,6 +329,20 @@ function Write-JsonConfig([string]$Path, $Config) {
     $Config | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $Path -Encoding UTF8
 }
 
+# Write the current MCP registration key over any legacy key (e.g. "everything"
+# or "instant-file-search") in raw JSONC text, keeping comments and formatting.
+# Existing installs migrate in place instead of accumulating a duplicate entry.
+function Migrate-LegacyMcpKeys([string]$Raw) {
+    foreach ($legacy in @('everything', 'instant-file-search')) {
+        if ($legacy -eq $serverName) { continue }
+        $pattern = '"' + [regex]::Escape($legacy) + '"(\s*:)'
+        if ($Raw -match $pattern) {
+            $Raw = [regex]::Replace($Raw, $pattern, ('"' + $serverName + '"$1'))
+        }
+    }
+    return $Raw
+}
+
 # Add the MCP server entry to an opencode config while preserving the file's
 # comments and formatting. If the entry already exists with the same command,
 # the file is left untouched (no churn, no comment loss on reinstall).
@@ -342,6 +356,15 @@ function Write-McpConfigPreserving([string]$Path) {
     }
 
     $raw = Get-Content -LiteralPath $Path -Raw
+    $migrated = Migrate-LegacyMcpKeys $raw
+    if ($migrated -ne $raw) {
+        # A legacy registration key exists. Rewrite the file with the current
+        # key so the migration persists, then continue to refresh the entry.
+        Backup-Config $Path
+        Set-Content -LiteralPath $Path -Value $migrated -Encoding UTF8
+        Write-Host "   MCP entry migrated to '$serverName' in '$Path'." -ForegroundColor Gray
+        $raw = $migrated
+    }
     $config = Read-JsonConfig $Path
     if ($null -eq $config) { return $false }
 
@@ -475,7 +498,7 @@ function Remove-OrphanOpenCodeJson([string]$ActiveConfig) {
         $cfg = Read-JsonConfig $json
         $mcp = $cfg.PSObject.Properties['mcp'].Value
         $keys = @($mcp.PSObject.Properties.Name)
-        if ($keys.Count -eq 1 -and $keys[0] -eq $serverName) {
+        if ($keys.Count -eq 1 -and ($keys[0] -eq $serverName -or $keys[0] -eq 'everything' -or $keys[0] -eq 'instant-file-search')) {
             Backup-Config $json
             Remove-Item -LiteralPath $json -Force
             Write-Host "Removed orphaned config '$json' (its only entry was '$serverName', now merged into '$jsonc')." -ForegroundColor Gray
@@ -508,14 +531,22 @@ function Install-Codex {
     if ($DryRun) { Write-Action "codex mcp add $serverName -- '$stableBinary'"; return }
 
     $listOutput = (& $codex.FullName mcp list 2>&1 | Out-String)
-    if ($listOutput -match '(?im)\beverything\b' -or $listOutput -match '(?im)\binstant-file-search\b') {
+    # The entry may be registered under the current name or a legacy name from
+    # an older installer. Resolve the actual registered name (legacy first, so
+    # the current name does not match as a prefix of "instant-file-search")
+    # and remove that exact entry, then add the current name.
+    $registeredName = $null
+    if ($listOutput -match '(?im)\binstant-file-search\b') { $registeredName = 'instant-file-search' }
+    elseif ($listOutput -match '(?im)\beverything\b') { $registeredName = 'everything' }
+    elseif ($listOutput -match ('(?im)\b' + [regex]::Escape($serverName) + '\b')) { $registeredName = $serverName }
+    if ($registeredName) {
         $helpOutput = (& $codex.FullName mcp --help 2>&1 | Out-String)
         if ($helpOutput -match '(?im)\bremove\b') {
-            & $codex.FullName mcp remove $serverName
-            if ($LASTEXITCODE -ne 0) { throw "Could not replace existing Codex MCP server '$serverName'." }
+            & $codex.FullName mcp remove $registeredName
+            if ($LASTEXITCODE -ne 0) { throw "Could not replace existing Codex MCP server '$registeredName'." }
             & $codex.FullName mcp add $serverName -- $stableBinary
         } else {
-            Write-Host "Codex server '$serverName' already exists; leaving it unchanged because this Codex version lacks 'mcp remove'." -ForegroundColor Yellow
+            Write-Host "Codex server '$serverName' already exists (as '$registeredName'); leaving it unchanged because this Codex version lacks 'mcp remove'." -ForegroundColor Yellow
             return
         }
     } else {
@@ -552,6 +583,18 @@ function Write-HermesConfig {
     }
 
     $changed = $false
+    # Migrate a legacy entry key in place (never leave a duplicate entry).
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        foreach ($legacy in @('everything', 'instant-file-search')) {
+            if ($legacy -eq $serverName) { continue }
+            if ($lines[$i] -match ('^\s+' + [regex]::Escape($legacy) + '\s*:')) {
+                $lines[$i] = $lines[$i] -replace [regex]::Escape($legacy), $serverName
+                $changed = $true
+                Write-Host "   Hermes MCP entry migrated from legacy key '$legacy' to '$serverName'." -ForegroundColor Gray
+                break
+            }
+        }
+    }
     if ($mcpIndex -lt 0) {
         $prefix = if ($raw -and -not $raw.EndsWith("`n")) { @('') } else { @() }
         $lines = @($lines + $prefix + @('mcp_servers:') + $desired + @(''))
@@ -693,6 +736,14 @@ function Install-Claude {
     $config = Read-JsonConfig $claudeConfig
     $servers = $config.PSObject.Properties['mcpServers'].Value
     if (-not $servers) { $servers = [pscustomobject]@{}; Ensure-Property $config 'mcpServers' $servers }
+    # Migrate a legacy entry key in place (never leave a duplicate entry).
+    foreach ($legacy in @('everything', 'instant-file-search')) {
+        if ($legacy -eq $serverName) { continue }
+        if ($servers.PSObject.Properties[$legacy]) {
+            $servers.PSObject.Properties.Remove($legacy)
+            Write-Host "   Claude Desktop entry migrated from legacy key '$legacy' to '$serverName'." -ForegroundColor Gray
+        }
+    }
     Ensure-Property $servers $serverName ([pscustomobject]@{ command = $stableBinary; args = @() })
     Write-JsonConfig $claudeConfig $config
     Write-Host "PASS: Claude Desktop MCP server configured in '$claudeConfig'." -ForegroundColor Green
@@ -715,7 +766,7 @@ function Install-OmoMcpAccess {
     }
 
     if ($DryRun) {
-        Write-Action "Add 'instant-file-search' to sub-agent mcps in '$omoPath'"
+        Write-Action "Add '$serverName' to sub-agent mcps in '$omoPath'"
         return
     }
 
@@ -728,7 +779,7 @@ function Install-OmoMcpAccess {
 
     Backup-Config $omoPath
     $changed = $false
-    $mcpEntry = 'instant-file-search'
+    $mcpEntry = $serverName
 
     # OMO config has a top-level 'presets' object, each containing agent
     # definitions with optional 'mcps' arrays.  We iterate every preset and
@@ -758,6 +809,15 @@ function Install-OmoMcpAccess {
                 continue
             }
 
+            # Migrate a legacy mcps entry in place (never leave a duplicate).
+            if ($mcps -contains 'instant-file-search' -or $mcps -contains 'everything') {
+                $newMcps = @($mcps | Where-Object { $_ -ne 'instant-file-search' -and $_ -ne 'everything' }) + @($mcpEntry)
+                $agent.mcps = $newMcps
+                $changed = $true
+                Write-Host "   preset '$presetName' / $agentName`: migrated '$mcpEntry' in mcps" -ForegroundColor Green
+                continue
+            }
+
             # Add the entry.
             $newMcps = @($mcps) + @($mcpEntry)
             $agent.mcps = $newMcps
@@ -775,7 +835,7 @@ function Install-OmoMcpAccess {
         [System.IO.File]::WriteAllText($omoPath, $json, $utf8NoBom)
         Write-Host "PASS: OMO sub-agent MCP access configured." -ForegroundColor Green
     } else {
-        Write-Host '   All sub-agents already have instant-file-search; no changes needed.' -ForegroundColor Gray
+        Write-Host "   All sub-agents already have $serverName; no changes needed." -ForegroundColor Gray
     }
 }
 

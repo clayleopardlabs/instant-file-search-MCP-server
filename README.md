@@ -334,7 +334,7 @@ Add the server to the MCP client configuration:
    ```json
    {
      "mcpServers": {
-       "instant-file-search": {
+       "instant": {
          "type": "local",
          "command": ["C:/path/to/instant-file-search-mcp-server.exe"],
          "enabled": true
@@ -347,7 +347,7 @@ For a plain MCP host, use the active server path from `current.json`. For OpenCo
 
    ```yaml
    mcp_servers:
-     instant-file-search:
+     instant:
        command: 'C:\path\to\instant-file-search-mcp-server.exe'
        enabled: true
    ```
@@ -413,7 +413,7 @@ See `docs/build-macos.md` and `docs/macos-support.md` for details, known gaps, a
 
 #### oh-my-opencode and slim (OMO) auto-configuration for subagents
 
-If [oh-my-opencode-slim](https://github.com/anthropics/oh-my-opencode-slim) is installed, the installer automatically patches its config to add `instant-file-search` to every sub-agent's `mcps` array. This gives sub-agents (explorer, fixer, designer, oracle, librarian) access to the instant search tools so they can use them instead of falling back to slow shell commands.
+If [oh-my-opencode-slim](https://github.com/anthropics/oh-my-opencode-slim) is installed, the installer automatically patches its config to add `instant` to every sub-agent's `mcps` array. This gives sub-agents (explorer, fixer, designer, oracle, librarian) access to the instant search tools so they can use them instead of falling back to slow shell commands.
 
 Orchestrators with `mcps: ["*"]` are left untouched. The installer creates a timestamped backup before modifying the config.
 

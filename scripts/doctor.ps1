@@ -5,7 +5,10 @@ param(
 )
 
 $ErrorActionPreference = 'Continue'
-$serverName = 'instant-file-search'
+$serverName = 'instant'
+# Registration keys used by older installers; doctor must still recognize
+# them so pre-migration installs do not report a false "not registered".
+$legacyServerNames = @('everything', 'instant-file-search')
 $binaryName = 'instant-file-search-mcp-server.exe'
 $statePath = Join-Path $InstallRoot 'current.json'
 $installState = $null
@@ -141,7 +144,7 @@ if (-not $codex) {
     $listOutput = (& $codex.FullName mcp list 2>&1 | Out-String)
     if ($LASTEXITCODE -ne 0) {
         Fail 'Codex could not list MCP servers.'
-    } elseif ($listOutput -match '(?im)\binstant-file-search\b' -or $listOutput -match '(?im)\beverything\b') {
+    } elseif ($listOutput -match ('(?im)\b' + [regex]::Escape($serverName) + '\b') -or $listOutput -match '(?im)\binstant-file-search\b' -or $listOutput -match '(?im)\beverything\b') {
         Pass "Codex MCP server '$serverName' is registered."
     } else {
         Fail "Codex MCP server '$serverName' is not registered. Run .\scripts\install.ps1."
@@ -166,7 +169,7 @@ if ($hermes -or (Test-Path -LiteralPath $hermesConfig)) {
         if ($mcpStart -ge 0) {
             for ($i = $mcpStart + 1; $i -lt $hermesLines.Count; $i++) {
                 if ($hermesLines[$i] -match '^\S' -and $hermesLines[$i] -notmatch '^\s*(#|$)') { $hermesEnd = $i; break }
-                if ($hermesLines[$i] -match '^  ' + [regex]::Escape($serverName) + '\s*:') { $hermesEntry = $i; break }
+                if ($hermesLines[$i] -match '^  ' + [regex]::Escape($serverName) + '\s*:' -or $hermesLines[$i] -match '^  (everything|instant-file-search)\s*:') { $hermesEntry = $i; break }
             }
         }
         if ($hermesEntry -ge 0) {
@@ -291,7 +294,11 @@ $activeConfig = Resolve-OpenCodeConfig
 if ($activeConfig) {
     $cfg = Read-JsonConfig $activeConfig
     $mcp = if ($cfg) { $cfg.PSObject.Properties['mcp'].Value } else { $null }
-    if ($mcp -and $mcp.PSObject.Properties['instant-file-search']) {
+    $mcpRegistered = $false
+    foreach ($keyName in @($serverName) + $legacyServerNames) {
+        if ($mcp -and $mcp.PSObject.Properties[$keyName]) { $mcpRegistered = $true; break }
+    }
+    if ($mcpRegistered) {
         Pass "OpenCode MCP server '$serverName' is configured in '$activeConfig'."
     } else {
         Warn "'$serverName' is not in the OpenCode config '$activeConfig'. Run .\scripts\install.ps1."
@@ -303,7 +310,7 @@ if ($activeConfig) {
 if (Test-Path -LiteralPath $claudeConfig) {
     try {
         $claude = Get-Content -LiteralPath $claudeConfig -Raw | ConvertFrom-Json
-        if ($claude.PSObject.Properties['mcpServers'].Value.PSObject.Properties['instant-file-search'] -or $claude.PSObject.Properties['mcpServers'].Value.PSObject.Properties['everything']) {
+        if ($claude.PSObject.Properties['mcpServers'].Value.PSObject.Properties[$serverName] -or $claude.PSObject.Properties['mcpServers'].Value.PSObject.Properties['instant-file-search'] -or $claude.PSObject.Properties['mcpServers'].Value.PSObject.Properties['everything']) {
             Pass 'Claude Desktop MCP server is configured.'
         } else { Warn "Claude Desktop config exists but '$serverName' is not configured." }
     } catch { Warn "Claude Desktop config could not be parsed: $claudeConfig" }

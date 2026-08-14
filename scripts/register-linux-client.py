@@ -4,11 +4,15 @@ register-linux-client.py — register the instant-file-search MCP server as a
 client for OpenCode on Linux, mirroring what scripts/install.ps1 does on
 Windows:
 
-  1. Adds the `instant-file-search` server entry to the OpenCode config's
+  1. Adds the `instant` server entry to the OpenCode config's
      top-level `mcp` object (~/.config/opencode/opencode.jsonc, or
      opencode.json if that is what exists).
   2. Patches oh-my-opencode-slim sub-agent `mcps` lists so explorer/fixer/
      oracle/designer/librarian can see the MCP-instantiated tools.
+
+Existing installs registered under the legacy keys (`everything`,
+`instant-file-search`) are migrated to `instant` in place - never a
+duplicate entry.
 
 Comment-aware: JSONC (comments + trailing commas) is preserved for the
 OpenCode config by editing the raw text, exactly like Insert-McpEntryText
@@ -27,7 +31,8 @@ import shutil
 import sys
 import tempfile
 
-SERVER_NAME = "instant-file-search"
+SERVER_NAME = "instant"
+LEGACY_NAMES = ["everything", "instant-file-search"]
 
 
 def config_paths(config_dir: str) -> list[str]:
@@ -140,9 +145,29 @@ def entry_text(server_binary: str, indent: str) -> str:
     )
 
 
+def migrate_legacy_keys(raw: str) -> str:
+    """Rewrite legacy MCP registration keys to SERVER_NAME in raw JSONC text."""
+    migrated = raw
+    for legacy in LEGACY_NAMES:
+        if legacy == SERVER_NAME:
+            continue
+        migrated = re.sub(
+            rf'"{re.escape(legacy)}"(\s*:)',
+            f'"{SERVER_NAME}"\\1',
+            migrated,
+        )
+    return migrated
+
+
 def patch_opencode_config(path: str, server_binary: str, dry_run: bool) -> bool:
     """Add the server entry to an existing OpenCode config; returns changed."""
     raw = read_text(path)
+    migrated = migrate_legacy_keys(raw)
+    if migrated != raw:
+        if not dry_run:
+            write_text(path, migrated)
+            print(f"PASS: migrated legacy MCP entry key to '{SERVER_NAME}' in {path}")
+        raw = migrated
     found = find_mcp_object(raw)
     if found is None:
         # No top-level mcp object: append one.
@@ -178,9 +203,10 @@ def patch_opencode_config(path: str, server_binary: str, dry_run: bool) -> bool:
 
 def patch_omo_config(path: str, dry_run: bool) -> bool:
     """
-    Add 'instant-file-search' to every sub-agent `mcps` list in the
+    Add the server to every sub-agent `mcps` list in the
     oh-my-opencode-slim config, skipping agents with a wildcard ["*"].
-    Rewrites as plain JSON (same trade-off as install.ps1 ConvertTo-Json).
+    Legacy mcps entries are migrated in place. Rewrites as plain JSON
+    (same trade-off as install.ps1 ConvertTo-Json).
     """
     try:
         with open(path, "r", encoding="utf-8") as fh:
@@ -213,6 +239,12 @@ def patch_omo_config(path: str, dry_run: bool) -> bool:
                 continue  # orchestrator with wildcard
             if SERVER_NAME in mcps:
                 print(f"  preset '{preset_name}' / {agent_name}: already has '{SERVER_NAME}'")
+                continue
+            if any(legacy in mcps for legacy in LEGACY_NAMES):
+                mcps[:] = [x for x in mcps if x not in LEGACY_NAMES]
+                mcps.append(SERVER_NAME)
+                changed = True
+                print(f"  preset '{preset_name}' / {agent_name}: migrated '{SERVER_NAME}' in mcps")
                 continue
             mcps.append(SERVER_NAME)
             changed = True
