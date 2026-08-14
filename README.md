@@ -1,9 +1,12 @@
 # Search millions of files. Instantly.
 
+![Instant File Search — local filesystem to AI agent](docs/images/instant-file-search-banner.png)
+
 ![](demo.gif)
 
 Search every file on your computer. All 3 million of them. In under a second.
 
+![Indexed search versus recursive file discovery](docs/images/speed-comparison.png)
 
 ## Start Here
 
@@ -15,6 +18,8 @@ Windows, MacOS and Linux all do it in different ways but they all have a list of
 ### How it works
 
 What instant-file-search-MCP-server does is let your agent cheat by maintaining its own list of your files so it doesn't have to tediously search every time you ask it to find something. 
+
+![Instant File Search architecture](docs/images/architecture-diagram.png)
 
 First, it catches up by sneaking a peak at the current one your computer already has, then starting from what's already there, uses that to maintain its own super fast copy. When you delete, move or rename something its list is updated so it doesn't get out of date. That's it. That's the trick. 
 
@@ -76,6 +81,8 @@ sudo bash scripts/install-macos.sh
 ```
 
 On macOS, grant Full Disk Access to the installed indexer in System Settings, then restart the launched service. See the platform-specific build guides below for the details and current limitations.
+
+![Five MCP tools at a glance](docs/images/five-tool-capabilities.png)
 
 ## What This Unlocks for AI Agents
 
