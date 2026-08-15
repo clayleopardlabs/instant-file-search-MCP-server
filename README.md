@@ -219,7 +219,7 @@ in RAM saving mode.
 | Find a module name | 36 ms | 92 ms |
 
 
-As you can see, aside from the first index build which only happens once there's no real reason to use the super duper fast mode. Unless... you're going to be running literally hundreds of thousands of searches. And since every search is millions of files in milliseconds, you'd basically only want the super duper fast mode if you're the NSA.
+As you can see, aside from the first index build which only happens once there's no real reason to use the super duper fast mode. Unless... you're going to be running literally hundreds of thousands of searches. And since every search is millions of files in milliseconds, you'd basically only want the super duper fast mode if you're the NSA. Or you have an old, slow harddrive:
 
 ### Old hard drives and huge file collections
 
