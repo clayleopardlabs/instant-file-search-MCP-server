@@ -210,8 +210,10 @@ settings unless you want to.
 
 ### Speed and RAM usage
 
-Here is what we saw with 100,000 test files on Windows. Memory mode uses more
-RAM. Disk mode uses much less RAM, but some searches take longer.
+Here is what we saw with 100,000 test files on Windows. Disk mode used about
+eight times less RAM, 10 MiB instead of 81 MiB. Finding one filename took about
+three times longer, 26 ms instead of 8 ms. Broad searches can still be faster
+on disk, as the `*.rs` search below shows.
 
 | What we measured | Memory mode | Disk mode |
 |------------------|------------:|----------:|
