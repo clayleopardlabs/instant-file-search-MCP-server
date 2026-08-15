@@ -1,7 +1,7 @@
 //! In-memory file index shared between the scanner, USN watcher, and query engine.
 
-use std::collections::VecDeque;
 use std::collections::HashMap;
+use std::collections::VecDeque;
 use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::PathBuf;
@@ -9,6 +9,8 @@ use std::sync::{Arc, Mutex, RwLock};
 
 use serde::{Deserialize, Serialize};
 
+use crate::disk::DiskIndex;
+use crate::query::{AggregateOptions, AggregateResult, QueryOptions, QueryResult};
 use crate::types::IndexedFile;
 
 /// One recorded change event (populated from USN, fanotify, or FSEvents).
@@ -28,6 +30,7 @@ pub struct ChangeEvent {
 #[derive(Default)]
 pub struct FileIndex {
     inner: RwLock<Inner>,
+    disk: Option<DiskIndex>,
     change_log: Mutex<Option<BufWriter<File>>>,
 }
 
@@ -51,7 +54,12 @@ impl FileIndex {
     pub fn new() -> Self {
         let (changes, change_log) = open_change_log();
         Self {
-            inner: RwLock::new(Inner { entries: HashMap::new(), refs: HashMap::new(), changes }),
+            inner: RwLock::new(Inner {
+                entries: HashMap::new(),
+                refs: HashMap::new(),
+                changes,
+            }),
+            disk: None,
             change_log: Mutex::new(change_log),
         }
     }
@@ -66,12 +74,100 @@ impl FileIndex {
                 refs: HashMap::new(),
                 changes: VecDeque::new(),
             }),
-            change_log: Mutex::new(None),
+             disk: None,
+             change_log: Mutex::new(None),
         }
+    }
+
+    /// Select the storage backend. `memory` remains the default for backward
+    /// compatibility; `disk` keeps the live metadata in SQLite instead.
+    pub fn from_env() -> anyhow::Result<Self> {
+        let mode = std::env::var("INSTANT_FS_INDEX_MODE").unwrap_or_else(|_| "memory".into());
+        if mode.eq_ignore_ascii_case("memory") {
+            return Ok(Self::new());
+        }
+        if !mode.eq_ignore_ascii_case("disk") {
+            anyhow::bail!("INSTANT_FS_INDEX_MODE must be 'memory' or 'disk', got {mode:?}");
+        }
+        let path = index_path();
+        let (changes, change_log) = open_change_log();
+        Ok(Self {
+            inner: RwLock::new(Inner {
+                entries: HashMap::new(),
+                refs: HashMap::new(),
+                changes,
+            }),
+            disk: Some(DiskIndex::open(path)?),
+            change_log: Mutex::new(change_log),
+        })
+    }
+
+    /// Empty storage intended for controlled local benchmarks. It neither
+    /// loads nor writes the user's change journal or configured live index.
+    pub fn for_benchmark(mode: &str, disk_path: PathBuf) -> anyhow::Result<Self> {
+        let disk = match mode {
+            "memory" => None,
+            "disk" => Some(DiskIndex::open(disk_path)?),
+            _ => anyhow::bail!("benchmark mode must be 'memory' or 'disk'"),
+        };
+        Ok(Self {
+            inner: RwLock::new(Inner::default()),
+            disk,
+            change_log: Mutex::new(None),
+        })
+    }
+
+    pub fn storage_mode(&self) -> &'static str {
+        if self.disk.is_some() {
+            "disk"
+        } else {
+            "memory"
+        }
+    }
+    pub fn disk_path(&self) -> Option<&std::path::Path> {
+        self.disk.as_ref().map(DiskIndex::path)
+    }
+
+    /// Persist watcher positions after a fresh scan. Checkpoints exist only
+    /// for the disk backend because memory mode intentionally starts empty.
+    pub fn replace_checkpoints(&self, checkpoints: &[(String, u64, i64)]) {
+        if let Some(disk) = &self.disk {
+            if let Err(e) = disk.replace_checkpoints(checkpoints) {
+                tracing::error!("disk checkpoint save failed: {e:#}");
+            }
+        }
+    }
+
+    /// Save one watcher position after the corresponding index updates have
+    /// committed. Replaying an older cursor is safe; advancing first is not.
+    pub fn advance_checkpoint(&self, volume: &str, journal_id: u64, cursor: i64) {
+        if let Some(disk) = &self.disk {
+            if let Err(e) = disk.advance_checkpoint(volume, journal_id, cursor) {
+                tracing::error!("disk checkpoint advance failed: {e:#}");
+            }
+        }
+    }
+
+    pub fn checkpoints(&self) -> Option<Vec<(String, u64, i64)>> {
+        self.disk
+            .as_ref()
+            .and_then(|disk| match disk.checkpoints() {
+                Ok(checkpoints) => Some(checkpoints),
+                Err(e) => {
+                    tracing::error!("disk checkpoint load failed: {e:#}");
+                    None
+                }
+            })
     }
 
     /// Replace the entire index (initial scan).
     pub fn replace(&self, entries: Vec<IndexedFile>) -> usize {
+        if let Some(disk) = &self.disk {
+            return disk.replace(entries).unwrap_or_else(|e| {
+                tracing::error!("disk replace failed: {e:#}");
+                0
+            });
+        }
         let mut inner = self.inner.write().unwrap();
         let n = entries.len();
         inner.entries.clear();
@@ -87,6 +183,12 @@ impl FileIndex {
 
     /// Remove all entries under a volume prefix, then insert the fresh scan.
     pub fn replace_volume(&self, prefix: &str, entries: Vec<IndexedFile>) -> usize {
+        if let Some(disk) = &self.disk {
+            return disk.replace_volume(prefix, entries).unwrap_or_else(|e| {
+                tracing::error!("disk volume replace failed: {e:#}");
+                0
+            });
+        }
         let mut inner = self.inner.write().unwrap();
         let doomed: Vec<String> = inner
             .entries
@@ -124,6 +226,12 @@ impl FileIndex {
     /// size delta up to every ancestor directory so `size:` filters stay in
     /// sync with the tree.
     pub fn upsert(&self, entry: IndexedFile) {
+        if let Some(disk) = &self.disk {
+            if let Err(e) = disk.upsert(entry) {
+                tracing::error!("disk upsert failed: {e:#}");
+            }
+            return;
+        }
         let mut inner = self.inner.write().unwrap();
         let old = inner.entries.get(&entry.path).cloned();
         let old_size = old.as_ref().map(|e| e.size).unwrap_or(0);
@@ -151,12 +259,22 @@ impl FileIndex {
         let path = entry.path.clone();
         inner.entries.insert(path.clone(), entry);
         adjust_ancestors(&mut inner, &path, delta);
-        tracing::debug!("upsert: entries={} refs={}", inner.entries.len(), inner.refs.len());
+        tracing::debug!(
+            "upsert: entries={} refs={}",
+            inner.entries.len(),
+            inner.refs.len()
+        );
     }
 
     /// Remove an entry by full path (file delete). Directory deletes go
     /// through `remove_prefix`.
     pub fn remove(&self, path: &str) {
+        if let Some(disk) = &self.disk {
+            if let Err(e) = disk.remove(path) {
+                tracing::error!("disk remove failed: {e:#}");
+            }
+            return;
+        }
         let mut inner = self.inner.write().unwrap();
         if let Some(old) = inner.entries.remove(path) {
             inner.refs.remove(&(volume_of(path), old.file_ref));
@@ -208,7 +326,12 @@ impl FileIndex {
     /// Like [`recent_changes`](Self::recent_changes) but also filters by a
     /// comma-separated `reasons` list. Accepted values (case-insensitive):
     /// created, modified, renamed, deleted. `None`/empty returns everything.
-    pub fn recent_changes_filtered(&self, since: i64, limit: usize, reasons: Option<&str>) -> Vec<ChangeEvent> {
+    pub fn recent_changes_filtered(
+        &self,
+        since: i64,
+        limit: usize,
+        reasons: Option<&str>,
+    ) -> Vec<ChangeEvent> {
         let wants = |reason: &str| -> bool {
             let Some(list) = reasons else { return true };
             if list.trim().is_empty() {
@@ -242,6 +365,12 @@ impl FileIndex {
     /// subtree vanishes at once, so only the ancestors of `prefix` need their
     /// recursive total reduced by the subtree's size.
     pub fn remove_prefix(&self, prefix: &str) {
+        if let Some(disk) = &self.disk {
+            if let Err(e) = disk.remove_prefix(prefix) {
+                tracing::error!("disk prefix remove failed: {e:#}");
+            }
+            return;
+        }
         let mut inner = self.inner.write().unwrap();
         let root_total = inner.entries.get(prefix).map(|e| e.size).unwrap_or(0);
         let doomed: Vec<String> = inner
@@ -263,6 +392,12 @@ impl FileIndex {
     /// The subtree keeps its internal sizes, so only the ancestors of the old
     /// and new roots change: old loses the subtree total, new gains it.
     pub fn rename_prefix(&self, old_prefix: &str, new_prefix: &str) {
+        if let Some(disk) = &self.disk {
+            if let Err(e) = disk.rename_prefix(old_prefix, new_prefix) {
+                tracing::error!("disk prefix rename failed: {e:#}");
+            }
+            return;
+        }
         let mut inner = self.inner.write().unwrap();
         let root_total = inner.entries.get(old_prefix).map(|e| e.size).unwrap_or(0);
         let doomed: Vec<(String, IndexedFile)> = inner
@@ -277,7 +412,9 @@ impl FileIndex {
             inner.entries.remove(&old_path);
             inner.refs.remove(&(volume_of(&old_path), e.file_ref));
             inner.entries.insert(new_path.clone(), e.clone());
-            inner.refs.insert((volume_of(&new_path), e.file_ref), new_path);
+            inner
+                .refs
+                .insert((volume_of(&new_path), e.file_ref), new_path);
         }
         adjust_ancestors(&mut inner, old_prefix, -(root_total as i64));
         adjust_ancestors(&mut inner, new_prefix, root_total as i64);
@@ -292,6 +429,9 @@ impl FileIndex {
     /// `volume_of` on an indexed path yields `C:`. Without this, every USN
     /// parent lookup misses the refs map and falls back to a bare-root path.
     pub fn path_by_ref(&self, volume: &str, file_ref: u64) -> Option<String> {
+         if let Some(disk) = &self.disk {
+             return disk.path_by_ref(volume, file_ref);
+         }
         let vol = if cfg!(windows) {
             volume.trim_end_matches('\\')
         } else {
@@ -306,6 +446,9 @@ impl FileIndex {
     }
 
     pub fn len(&self) -> usize {
+        if let Some(disk) = &self.disk {
+            return disk.len();
+        }
         self.inner.read().unwrap().entries.len()
     }
 
@@ -323,6 +466,42 @@ impl FileIndex {
         let inner = self.inner.read().unwrap();
         f(&inner.entries)
     }
+
+    pub fn search(&self, opts: &QueryOptions) -> QueryResult {
+        if let Some(disk) = &self.disk {
+            return disk.search(opts);
+        }
+        self.with_entries(|entries| crate::query::search(entries, opts))
+    }
+
+    pub fn aggregate(&self, opts: &AggregateOptions) -> AggregateResult {
+        if let Some(disk) = &self.disk {
+            return disk.aggregate(opts);
+        }
+        self.with_entries(|entries| crate::query::aggregate(entries, opts))
+    }
+}
+
+fn index_path() -> PathBuf {
+    if let Some(path) = std::env::var_os("INSTANT_FS_INDEX_PATH") {
+        return PathBuf::from(path);
+    }
+    #[cfg(target_os = "linux")]
+    {
+        return PathBuf::from("/var/lib/instant-file-search/index.sqlite3");
+    }
+    #[cfg(target_os = "macos")]
+    {
+        return PathBuf::from("/Library/Application Support/instant-file-search/index.sqlite3");
+    }
+    #[cfg(windows)]
+    {
+        return std::env::var_os("PROGRAMDATA")
+            .map(|p| PathBuf::from(p).join("ClayLeopardLabs/instant-file-search/index.sqlite3"))
+            .unwrap_or_else(|| PathBuf::from("instant-file-search-index.sqlite3"));
+    }
+    #[allow(unreachable_code)]
+    PathBuf::from("instant-file-search-index.sqlite3")
 }
 
 fn change_log_path() -> Option<PathBuf> {
@@ -336,7 +515,8 @@ fn change_log_path() -> Option<PathBuf> {
     #[cfg(target_os = "macos")]
     {
         return std::env::var_os("HOME").map(|home| {
-            PathBuf::from(home).join("Library/Application Support/instant-file-search/changes.jsonl")
+            PathBuf::from(home)
+                .join("Library/Application Support/instant-file-search/changes.jsonl")
         });
     }
     #[cfg(windows)]
@@ -437,6 +617,7 @@ mod tests {
     fn test_index() -> FileIndex {
         FileIndex {
             inner: RwLock::new(Inner::default()),
+            disk: None,
             change_log: Mutex::new(None),
         }
     }
@@ -480,18 +661,18 @@ mod tests {
         ix.record_change(100, "CREATE", r"C:\a.txt", false);
         ix.record_change(200, "RENAME", r"C:\b.txt", false);
         ix.record_change(300, "DELETE", r"C:\a.txt", false);
-              let log = ix.recent_changes(0, 0);
-              assert_eq!(log.len(), 3);
-              assert_eq!(log[0].reason, "DELETE");
-              assert_eq!(log[2].reason, "CREATE");
-              // since filter: strictly newer than 100 -> last two, newest first
-              let filtered = ix.recent_changes(100, 0);
-              assert_eq!(filtered.len(), 2);
-              assert_eq!(filtered[0].timestamp, 300);
-              // limit caps from the newest end
-              let capped = ix.recent_changes(0, 2);
-              assert_eq!(capped.len(), 2);
-              assert_eq!(capped[0].timestamp, 300);
+        let log = ix.recent_changes(0, 0);
+        assert_eq!(log.len(), 3);
+        assert_eq!(log[0].reason, "DELETE");
+        assert_eq!(log[2].reason, "CREATE");
+        // since filter: strictly newer than 100 -> last two, newest first
+        let filtered = ix.recent_changes(100, 0);
+        assert_eq!(filtered.len(), 2);
+        assert_eq!(filtered[0].timestamp, 300);
+        // limit caps from the newest end
+        let capped = ix.recent_changes(0, 2);
+        assert_eq!(capped.len(), 2);
+        assert_eq!(capped[0].timestamp, 300);
     }
 
     #[test]
@@ -620,15 +801,27 @@ mod tests {
         let mut e = efile(r"D:\Windows\servicing\x.cat", 0);
         e.file_ref = 0x1001;
         ix.replace(vec![d, e]);
-        assert_eq!(ix.path_by_ref(r"C:", 0x1001), Some(r"C:\Users\sophi".to_string()));
-        assert_eq!(ix.path_by_ref(r"D:", 0x1001), Some(r"D:\Windows\servicing\x.cat".to_string()));
+        assert_eq!(
+            ix.path_by_ref(r"C:", 0x1001),
+            Some(r"C:\Users\sophi".to_string())
+        );
+        assert_eq!(
+            ix.path_by_ref(r"D:", 0x1001),
+            Some(r"D:\Windows\servicing\x.cat".to_string())
+        );
         // Unscoped/unknown volume must NOT resolve to the other volume's path.
         assert_eq!(ix.path_by_ref(r"E:", 0x1001), None);
         // The USN watcher passes volume strings WITH a trailing backslash
         // (discover_ntfs_volumes yields "C:\"); the normalized lookup must
         // resolve them to the same entries as the bare "C:" form.
-        assert_eq!(ix.path_by_ref(r"C:\", 0x1001), Some(r"C:\Users\sophi".to_string()));
-        assert_eq!(ix.path_by_ref(r"D:\", 0x1001), Some(r"D:\Windows\servicing\x.cat".to_string()));
+        assert_eq!(
+            ix.path_by_ref(r"C:\", 0x1001),
+            Some(r"C:\Users\sophi".to_string())
+        );
+        assert_eq!(
+            ix.path_by_ref(r"D:\", 0x1001),
+            Some(r"D:\Windows\servicing\x.cat".to_string())
+        );
     }
 
     #[cfg(not(windows))]
@@ -642,7 +835,10 @@ mod tests {
         d.file_ref = 0x1001;
         ix.replace(vec![d]);
         let vol = volume_of("/Users/test");
-        assert_eq!(ix.path_by_ref(&vol, 0x1001), Some("/Users/test".to_string()));
+        assert_eq!(
+            ix.path_by_ref(&vol, 0x1001),
+            Some("/Users/test".to_string())
+        );
         // A different record number on the same volume must not resolve.
         assert_eq!(ix.path_by_ref(&vol, 0x2002), None);
     }

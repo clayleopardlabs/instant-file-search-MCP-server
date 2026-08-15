@@ -31,28 +31,42 @@ pub struct Response<'a> {
 
 pub fn handle(state: &IndexerState, req: Request) -> Response<'static> {
     match req.method.as_str() {
-        "ping" => Response { ok: true, data: Some(serde_json::json!({"pong": true})), error: None },
-        "status" => {
-            Response {
-                ok: true,
-                data: Some(serde_json::json!({
-                    "version": crate::APP_VERSION,
-                    "commit": crate::BUILD_COMMIT,
-                    "indexed": state.index.len(),
-                    "volumes": state.volumes.iter().map(|v| v.clone()).collect::<Vec<_>>(),
-                })),
-                error: None,
-            }
-        }
+        "ping" => Response {
+            ok: true,
+            data: Some(serde_json::json!({"pong": true})),
+            error: None,
+        },
+        "status" => Response {
+            ok: true,
+            data: Some(serde_json::json!({
+                "version": crate::APP_VERSION,
+                "commit": crate::BUILD_COMMIT,
+                "indexed": state.index.len(),
+                "volumes": state.volumes.iter().map(|v| v.clone()).collect::<Vec<_>>(),
+                "storage_mode": state.index.storage_mode(),
+                "index_path": state.index.disk_path().map(|p| p.display().to_string()),
+            })),
+            error: None,
+        },
         "count" | "search" => {
             let mut opts: QueryOptions = match serde_json::from_value(req.params) {
                 Ok(o) => o,
-                Err(_) => return Response { ok: false, data: None, error: Some("bad params") },
+                Err(_) => {
+                    return Response {
+                        ok: false,
+                        data: None,
+                        error: Some("bad params"),
+                    }
+                }
             };
             apply_content_filter(state, &mut opts);
-            let result = state.index.with_entries(|entries| query::search(entries, &opts));
+            let result = state.index.search(&opts);
             if req.method == "count" {
-                Response { ok: true, data: Some(serde_json::json!({"total": result.total})), error: None }
+                Response {
+                    ok: true,
+                    data: Some(serde_json::json!({"total": result.total})),
+                    error: None,
+                }
             } else {
                 let entries: Vec<_> = result
                     .entries
@@ -80,7 +94,13 @@ pub fn handle(state: &IndexerState, req: Request) -> Response<'static> {
         "aggregate" => {
             let mut opts: query::AggregateOptions = match serde_json::from_value(req.params) {
                 Ok(o) => o,
-                Err(_) => return Response { ok: false, data: None, error: Some("bad params") },
+                Err(_) => {
+                    return Response {
+                        ok: false,
+                        data: None,
+                        error: Some("bad params"),
+                    }
+                }
             };
             let mut qopts = QueryOptions {
                 query: opts.query.clone(),
@@ -92,10 +112,12 @@ pub fn handle(state: &IndexerState, req: Request) -> Response<'static> {
             apply_content_filter(state, &mut qopts);
             opts.query = qopts.query;
             opts.content_paths = qopts.content_paths;
-            let result = state
-                .index
-                .with_entries(|entries| query::aggregate(entries, &opts));
-            Response { ok: true, data: Some(serde_json::json!(result)), error: None }
+            let result = state.index.aggregate(&opts);
+            Response {
+                ok: true,
+                data: Some(serde_json::json!(result)),
+                error: None,
+            }
         }
         "recent_changes" => {
             #[derive(serde::Deserialize)]
@@ -107,19 +129,40 @@ pub fn handle(state: &IndexerState, req: Request) -> Response<'static> {
             }
             impl Default for RecentParams {
                 fn default() -> Self {
-                    Self { since: 0, limit: 100, reasons: None }
+                    Self {
+                        since: 0,
+                        limit: 100,
+                        reasons: None,
+                    }
                 }
             }
             let p: RecentParams = match serde_json::from_value(req.params) {
                 Ok(o) => o,
-                Err(_) => return Response { ok: false, data: None, error: Some("bad params") },
+                Err(_) => {
+                    return Response {
+                        ok: false,
+                        data: None,
+                        error: Some("bad params"),
+                    }
+                }
             };
-            let changes = state.index.recent_changes_filtered(p.since, p.limit, p.reasons.as_deref());
-            Response { ok: true, data: Some(serde_json::json!({"changes": changes})), error: None }
+            let changes =
+                state
+                    .index
+                    .recent_changes_filtered(p.since, p.limit, p.reasons.as_deref());
+            Response {
+                ok: true,
+                data: Some(serde_json::json!({"changes": changes})),
+                error: None,
+            }
         }
         other => {
             tracing::warn!("unknown method {other}");
-            Response { ok: false, data: None, error: Some("unknown method") }
+            Response {
+                ok: false,
+                data: None,
+                error: Some("unknown method"),
+            }
         }
     }
 }
@@ -222,6 +265,11 @@ pub fn extract_content_terms(query: &str) -> (String, Vec<String>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
+
+    use crate::content::ContentStore;
+    use crate::index::FileIndex;
+    use crate::types::IndexedFile;
 
     fn extract(q: &str) -> (String, Vec<String>) {
         extract_content_terms(q)
@@ -278,5 +326,75 @@ mod tests {
         let (rest, needles) = extract("content:needle rest here");
         assert_eq!(rest_words(&rest), vec!["rest", "here"]);
         assert_eq!(needles, vec!["needle"]);
+    }
+
+    #[test]
+    fn disk_backend_serves_every_protocol_method() {
+        let path = std::env::temp_dir().join(format!(
+            "instant-file-search-protocol-test-{}-{}.sqlite3",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let index = Arc::new(FileIndex::for_benchmark("disk", path.clone()).unwrap());
+        index.replace(vec![IndexedFile::new(
+            r"C:\work\alpha.rs".into(),
+            42,
+            1,
+            2,
+            3,
+            false,
+            1,
+        )]);
+        index.record_change(10, "CREATE", r"C:\work\alpha.rs", false);
+        let state = crate::IndexerState {
+            index: index.clone(),
+            content: Arc::new(ContentStore::disabled()),
+            volumes: vec!["C:\\".into()],
+        };
+        for request in [
+            Request {
+                method: "ping".into(),
+                params: serde_json::Value::Null,
+            },
+            Request {
+                method: "status".into(),
+                params: serde_json::Value::Null,
+            },
+            Request {
+                method: "search".into(),
+                params: serde_json::json!({"query":"alpha","max_results":100}),
+            },
+            Request {
+                method: "count".into(),
+                params: serde_json::json!({"query":"alpha"}),
+            },
+            Request {
+                method: "aggregate".into(),
+                params: serde_json::json!({"query":"*.rs"}),
+            },
+            Request {
+                method: "recent_changes".into(),
+                params: serde_json::json!({"since":0,"limit":10}),
+            },
+        ] {
+            let response = handle(&state, request);
+            assert!(response.ok, "protocol method failed");
+        }
+        let status = handle(
+            &state,
+            Request {
+                method: "status".into(),
+                params: serde_json::Value::Null,
+            },
+        );
+        assert_eq!(status.data.unwrap()["storage_mode"], "disk");
+        drop(state);
+        drop(index);
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(path.with_extension("sqlite3-wal"));
+        let _ = std::fs::remove_file(path.with_extension("sqlite3-shm"));
     }
 }

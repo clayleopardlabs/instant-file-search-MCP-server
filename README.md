@@ -167,7 +167,6 @@ You agent gets 5 new tools:
 | `recent_changes` | Investigate what was created, modified, renamed, or deleted, newest first |
 | `aggregate_files` | Answer roll-up questions like largest files, file counts by type, or total size |
 
-
 You could ask it very specific questions like, 
 
 - "Find the project's README file."
@@ -181,6 +180,49 @@ You could ask it very specific questions like,
 - "Give me the project's shape before reading the code."
 
 ...but 99% of the time my agents use it automatically. When they're working on a codebase and need to know where that library is or when they're trying to find some config file on my computer, etc. Or this past week when I was doing a reinstall of Windows and needed to backup my Witcher 3 save files.
+
+By default, searches are answered in milliseconds straight from memory. Nothing leaves your machine.
+
+### Choose a storage mode
+
+The indexer has two modes. Memory mode is the default.
+
+| Mode | Good for | Cost |
+|------|----------|------|
+| `memory` | Fast searches and users with plenty of RAM | Keeps the full file index in RAM. The optional `content:` cache can use up to 256 MiB more. |
+| `disk` | Computers where RAM is limited, including local AI systems | Uses much less process RAM, but searches and the first scan take longer. `content:` searches are unavailable. |
+
+To use disk mode, set `INSTANT_FS_INDEX_MODE=disk` for the indexer service.
+`search_status` reports the active `storage_mode` and database path. The default
+database location is `%PROGRAMDATA%\ClayLeopardLabs\instant-file-search\index.sqlite3`
+on Windows, `/Library/Application Support/instant-file-search/index.sqlite3`
+on macOS, and `/var/lib/instant-file-search/index.sqlite3` on Linux. Override it
+with `INSTANT_FS_INDEX_PATH`.
+
+The database is durable. In disk mode, Windows and macOS normally resume after
+a restart by replaying filesystem changes from the saved checkpoint. They do a
+full scan only on the first run, when the checkpoint is missing, or when the
+operating system says the saved change history is no longer available. Linux
+still scans after a restart because its watcher has no persistent history.
+
+### Measured memory and speed
+
+We created the same 500,000 synthetic file records in a fresh release-build
+process for each mode. The test measures the process working set after the index
+is built, then runs the same three searches. It does not include the optional
+content cache or operating system file cache.
+
+| Operation | Memory mode | Disk mode |
+|-----------|------------:|----------:|
+| Process RAM after indexing | 500 MiB | 10 MiB |
+| Build index | 954 ms | 8.71 s |
+| Search for one filename | 68 ms | 417 ms |
+| Search for `*.rs` | 844 ms | 1.82 s |
+| Search for a module name | 62 ms | 420 ms |
+
+For a repeatable comparison, build the release indexer and run
+`instant-file-search-indexer benchmark memory 500000` and
+`instant-file-search-indexer benchmark disk 500000`.
 
 ### Search query filters
 

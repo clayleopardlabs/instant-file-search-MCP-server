@@ -25,13 +25,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{bail, Context, Result};
 use objc2_core_foundation::{
-    CFArray, CFDictionary, CFNumber, CFRunLoop, CFString, CFType, CFRetained,
-    kCFRunLoopDefaultMode,
+    kCFRunLoopDefaultMode, CFArray, CFDictionary, CFNumber, CFRetained, CFRunLoop, CFString, CFType,
 };
 use objc2_core_services::{
-    ConstFSEventStreamRef, FSEventStreamContext, FSEventStreamCreate, FSEventStreamCreateFlags,
-    FSEventStreamEventFlags, FSEventStreamEventId, FSEventStreamRef, FSEventStreamInvalidate,
-    FSEventStreamScheduleWithRunLoop, FSEventStreamStart, FSEventsGetLastEventIdForDeviceBeforeTime,
     kFSEventStreamCreateFlagFileEvents, kFSEventStreamCreateFlagIgnoreSelf,
     kFSEventStreamCreateFlagNoDefer, kFSEventStreamCreateFlagUseExtendedData,
     kFSEventStreamCreateFlagWatchRoot, kFSEventStreamEventFlagEventIdsWrapped,
@@ -42,7 +38,10 @@ use objc2_core_services::{
     kFSEventStreamEventFlagItemRenamed, kFSEventStreamEventFlagItemXattrMod,
     kFSEventStreamEventFlagKernelDropped, kFSEventStreamEventFlagMustScanSubDirs,
     kFSEventStreamEventFlagRootChanged, kFSEventStreamEventFlagUserDropped,
-    kFSEventStreamEventIdSinceNow,
+    kFSEventStreamEventIdSinceNow, ConstFSEventStreamRef, FSEventStreamContext,
+    FSEventStreamCreate, FSEventStreamCreateFlags, FSEventStreamEventFlags, FSEventStreamEventId,
+    FSEventStreamInvalidate, FSEventStreamRef, FSEventStreamScheduleWithRunLoop,
+    FSEventStreamStart, FSEventsGetLastEventIdForDeviceBeforeTime,
 };
 
 use crate::content::ContentStore;
@@ -188,7 +187,8 @@ fn start_stream(
         bail!("fsevents: FSEventStreamCreate failed for {volume}");
     }
     Ok(stream)
-}/// FSEvents callback. With `UseExtendedData`, `event_paths` is a CFArray of
+}
+/// FSEvents callback. With `UseExtendedData`, `event_paths` is a CFArray of
 /// CFDictionary objects, each carrying `path` (CFString) and `fileID`
 /// (CFNumber) keys. `event_flags`/`event_ids` are parallel arrays of length
 /// `num_events`.
@@ -198,11 +198,12 @@ unsafe extern "C-unwind" fn on_fsevent(
     num_events: usize,
     event_paths: NonNull<c_void>,
     event_flags: NonNull<FSEventStreamEventFlags>,
-    _event_ids: NonNull<FSEventStreamEventId>,
+    event_ids: NonNull<FSEventStreamEventId>,
 ) {
     let state = unsafe { &*(info as *const WatcherState) };
     let paths = unsafe { &*(event_paths.as_ptr() as *const CFArray<CFType>) };
     let flags = unsafe { std::slice::from_raw_parts(event_flags.as_ptr(), num_events) };
+    let ids = unsafe { std::slice::from_raw_parts(event_ids.as_ptr(), num_events) };
 
     for i in 0..num_events {
         let flag = flags[i];
@@ -217,6 +218,10 @@ unsafe extern "C-unwind" fn on_fsevent(
             .and_then(|n| n.as_i64());
         let Some(path) = path else { continue };
         apply_event(state, flag, &path, file_id);
+        // FSEvents IDs are the restart cursor. Mutations are synchronous, so
+        // persist the cursor only after this event has been applied.
+        let volume = crate::platform::volume_of(&path);
+        state.index.advance_checkpoint(&volume, ids[i], 0);
     }
 }
 
@@ -227,15 +232,22 @@ fn apply_event(state: &WatcherState, flag: u32, path: &str, file_id: Option<i64>
     let is_dir = flag & kFSEventStreamEventFlagItemIsDir != 0;
 
     // Overflow / resync signals → full re-scan.
-    if flag & (kFSEventStreamEventFlagMustScanSubDirs
-        | kFSEventStreamEventFlagUserDropped
-        | kFSEventStreamEventFlagKernelDropped
-        | kFSEventStreamEventFlagEventIdsWrapped
-        | kFSEventStreamEventFlagRootChanged) != 0
+    if flag
+        & (kFSEventStreamEventFlagMustScanSubDirs
+            | kFSEventStreamEventFlagUserDropped
+            | kFSEventStreamEventFlagKernelDropped
+            | kFSEventStreamEventFlagEventIdsWrapped
+            | kFSEventStreamEventFlagRootChanged)
+        != 0
     {
         tracing::warn!("fsevents: overflow flags {flag:#x} on {path}; full re-scan");
+        // Capture before scanning so a restart can replay changes that land
+        // during the re-scan window.
+        let tails = journal_tails(&state.volumes);
         if let Err(e) = crate::scan::build_index(&state.volumes, &state.index) {
             tracing::warn!("fsevents: overflow re-scan failed: {e:#}");
+        } else {
+            state.index.replace_checkpoints(&tails);
         }
         return;
     }
@@ -280,7 +292,9 @@ fn apply_event(state: &WatcherState, flag: u32, path: &str, file_id: Option<i64>
     }
 
     // Everything else: created / modified / inode-meta / finder-info / owner / xattr / cloned.
-    state.index.record_change(now, event_reason(flag), path, is_dir);
+    state
+        .index
+        .record_change(now, event_reason(flag), path, is_dir);
     upsert_or_remove(state, path, is_dir);
 }
 
@@ -322,8 +336,10 @@ fn upsert_or_remove(state: &WatcherState, path: &str, is_dir: bool) {
 /// index's timestamp convention.
 fn now_filetime() -> i64 {
     match SystemTime::now().duration_since(UNIX_EPOCH) {
-        Ok(d) => (d.as_secs() as i64 + FILETIME_EPOCH_OFFSET) * 10_000_000
-            + (d.subsec_nanos() as i64 / 100),
+        Ok(d) => {
+            (d.as_secs() as i64 + FILETIME_EPOCH_OFFSET) * 10_000_000
+                + (d.subsec_nanos() as i64 / 100)
+        }
         Err(e) => (e.duration().as_secs() as i64 + FILETIME_EPOCH_OFFSET) * 10_000_000,
     }
 }
@@ -343,8 +359,8 @@ mod tests {
 
     #[test]
     fn overflow_flags_are_distinct_from_ordinary_events() {
-        let overflow = kFSEventStreamEventFlagMustScanSubDirs
-            | kFSEventStreamEventFlagKernelDropped;
+        let overflow =
+            kFSEventStreamEventFlagMustScanSubDirs | kFSEventStreamEventFlagKernelDropped;
         assert_ne!(overflow & kFSEventStreamEventFlagMustScanSubDirs, 0);
         assert_eq!(event_reason(overflow), "WRITE");
     }

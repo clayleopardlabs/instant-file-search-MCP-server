@@ -29,9 +29,16 @@ filesystem map. Runs as the Windows service `instant-file-search-indexer`
   from `$DATA` (resident: value length; nonresident: valid-data-length at
   attribute header +48) — the `$FILE_NAME` attribute's metadata goes stale on
   NTFS (only refreshed on rename). Full-volume scan: ~2.4M files in ~15s.
-- **In-memory index:** path-keyed entries with precomputed lowercase name/path
-  fields for allocation-free case-insensitive matching, plus a record-number →
-  path map so journal events can resolve parent paths.
+- **Storage modes:** the default in-memory mode holds path-keyed entries with
+  precomputed lowercase name/path fields plus a record-number → path map for
+  allocation-free matching. Set `INSTANT_FS_INDEX_MODE=disk` to store source
+  metadata in a local SQLite database instead. Disk mode streams entries into
+  the same matcher and resolves record numbers through a database index, so it
+  has a substantially lower steady-state heap footprint at the cost of disk IO.
+  On Windows it stores the USN journal ID and cursor after each applied batch;
+  on macOS it stores the FSEvents ID after each applied event. A restart replays
+  from the saved checkpoint when the operating system still has that history,
+  and falls back to a full scan if the checkpoint is missing or invalid.
 - **USN Change Journal watcher:** after the initial scan, incremental updates
   (create / rename / delete / close) come from the journal. Starts from the
   journal tail captured before the scan (the scan is already a full snapshot).

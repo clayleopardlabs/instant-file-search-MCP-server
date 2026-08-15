@@ -27,19 +27,104 @@ pub const TOTAL_BUDGET: usize = 256 * 1024 * 1024;
 
 /// Text-like extensions eligible for content indexing (lowercase, no dot).
 const TEXT_EXTS: &[&str] = &[
-    "md", "markdown", "txt", "rst", "log", "json", "jsonl", "yaml", "yml", "toml", "ini", "cfg",
-    "conf", "config", "env", "properties", "xml", "html", "htm", "css", "csv", "tsv", "sql",
-    "rs", "py", "pyw", "js", "jsx", "ts", "tsx", "mjs", "cjs", "c", "h", "cpp", "cc", "cxx",
-    "hpp", "hh", "hxx", "cs", "java", "kt", "kts", "go", "rb", "php", "sh", "bat", "cmd", "ps1",
-    "swift", "m", "mm", "r", "scala", "clj", "cljs", "lua", "pl", "pm", "tcl", "v", "vhdl",
-    "asm", "s", "gradle", "groovy", "dockerfile", "makefile", "cmake", "gitignore", "gitattributes",
-    "editorconfig", "eslintrc", "prettierrc", "babelrc", "tsconfig", "package", "lock",
+    "md",
+    "markdown",
+    "txt",
+    "rst",
+    "log",
+    "json",
+    "jsonl",
+    "yaml",
+    "yml",
+    "toml",
+    "ini",
+    "cfg",
+    "conf",
+    "config",
+    "env",
+    "properties",
+    "xml",
+    "html",
+    "htm",
+    "css",
+    "csv",
+    "tsv",
+    "sql",
+    "rs",
+    "py",
+    "pyw",
+    "js",
+    "jsx",
+    "ts",
+    "tsx",
+    "mjs",
+    "cjs",
+    "c",
+    "h",
+    "cpp",
+    "cc",
+    "cxx",
+    "hpp",
+    "hh",
+    "hxx",
+    "cs",
+    "java",
+    "kt",
+    "kts",
+    "go",
+    "rb",
+    "php",
+    "sh",
+    "bat",
+    "cmd",
+    "ps1",
+    "swift",
+    "m",
+    "mm",
+    "r",
+    "scala",
+    "clj",
+    "cljs",
+    "lua",
+    "pl",
+    "pm",
+    "tcl",
+    "v",
+    "vhdl",
+    "asm",
+    "s",
+    "gradle",
+    "groovy",
+    "dockerfile",
+    "makefile",
+    "cmake",
+    "gitignore",
+    "gitattributes",
+    "editorconfig",
+    "eslintrc",
+    "prettierrc",
+    "babelrc",
+    "tsconfig",
+    "package",
+    "lock",
 ];
 
 /// No-extension names eligible for content indexing (lowercase).
 const TEXT_NAMES: &[&str] = &[
-    "readme", "makefile", "dockerfile", "license", "copying", "notice", "changelog", "authors",
-    "contributing", "gemfile", "rakefile", "requirements", "rust-toolchain", "cargo-config",
+    "readme",
+    "makefile",
+    "dockerfile",
+    "license",
+    "copying",
+    "notice",
+    "changelog",
+    "authors",
+    "contributing",
+    "gemfile",
+    "rakefile",
+    "requirements",
+    "rust-toolchain",
+    "cargo-config",
 ];
 
 fn ext_of(path: &str) -> &str {
@@ -69,17 +154,35 @@ fn is_text_file(path: &str) -> bool {
 }
 
 /// Thread-safe bounded content store.
-#[derive(Default)]
 pub struct ContentStore {
     /// Lowercased full path -> lowercased content bytes.
     inner: RwLock<HashMap<String, Vec<u8>>>,
     total: AtomicUsize,
     indexed: AtomicUsize,
+    enabled: bool,
 }
 
 impl ContentStore {
     pub fn new() -> Self {
-        Self::default()
+        Self {
+            inner: RwLock::new(HashMap::new()),
+            total: AtomicUsize::new(0),
+            indexed: AtomicUsize::new(0),
+            enabled: true,
+        }
+    }
+
+    pub fn disabled() -> Self {
+        Self {
+            inner: RwLock::new(HashMap::new()),
+            total: AtomicUsize::new(0),
+            indexed: AtomicUsize::new(0),
+            enabled: false,
+        }
+    }
+
+    pub fn is_enabled(&self) -> bool {
+        self.enabled
     }
 
     /// Number of files currently indexed.
@@ -108,6 +211,9 @@ impl ContentStore {
     /// Keys are canonical (NFC + Unicode-lower on macOS) so they match
     /// `IndexedFile::lower_path` exactly.
     pub fn insert(&self, path: &str, data: &[u8]) {
+        if !self.enabled {
+            return;
+        }
         if data.is_empty() {
             return;
         }
@@ -131,6 +237,9 @@ impl ContentStore {
 
     /// Drop a path from the store (delete / old-name rename).
     pub fn remove(&self, path: &str) {
+        if !self.enabled {
+            return;
+        }
         let mut guard = self.inner.write().unwrap();
         if let Some(o) = guard.remove(&crate::platform::canonical_key(path)) {
             self.total.fetch_sub(o.len(), Ordering::Relaxed);
@@ -149,9 +258,9 @@ impl ContentStore {
         guard
             .iter()
             .filter(|(_, data)| {
-                needles.iter().all(|n| {
-                    !n.is_empty() && find_ci(data, n.as_bytes()).is_some()
-                })
+                needles
+                    .iter()
+                    .all(|n| !n.is_empty() && find_ci(data, n.as_bytes()).is_some())
             })
             .map(|(p, _)| p.clone())
             .collect()
@@ -209,6 +318,12 @@ fn default_excluded(lower_path: &str) -> bool {
     })
 }
 
+impl Default for ContentStore {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -229,7 +344,10 @@ mod tests {
     #[test]
     fn insert_and_match() {
         let store = ContentStore::new();
-        store.insert(r"C:\a\hello.rs", b"fn main() { println!(\"HELLO WORLD\"); }");
+        store.insert(
+            r"C:\a\hello.rs",
+            b"fn main() { println!(\"HELLO WORLD\"); }",
+        );
         store.insert(r"C:\a\other.md", b"nothing here");
         assert_eq!(store.len(), 2);
 
@@ -264,7 +382,11 @@ mod tests {
         store.insert(r"C:\a\big.txt", &vec![b'a'; TOTAL_BUDGET]);
         assert_eq!(store.len(), 1);
         store.insert(r"C:\a\small.txt", b"hello");
-        assert_eq!(store.len(), 1, "budget-exhausted store must refuse new files");
+        assert_eq!(
+            store.len(),
+            1,
+            "budget-exhausted store must refuse new files"
+        );
         assert!(store.matching_paths(&["hello".into()]).is_empty());
     }
 }

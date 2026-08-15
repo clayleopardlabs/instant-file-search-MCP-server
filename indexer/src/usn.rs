@@ -10,17 +10,17 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
+use windows::core::PCWSTR;
 use windows::Win32::Foundation::{CloseHandle, HANDLE};
 use windows::Win32::Storage::FileSystem::{
     CreateFileW, FILE_FLAG_OVERLAPPED, FILE_GENERIC_READ, FILE_SHARE_DELETE, FILE_SHARE_READ,
     FILE_SHARE_WRITE, OPEN_EXISTING,
 };
-use windows::Win32::System::IO::DeviceIoControl;
 use windows::Win32::System::Ioctl::{
     FSCTL_QUERY_USN_JOURNAL, FSCTL_READ_USN_JOURNAL, READ_USN_JOURNAL_DATA_V0, USN_JOURNAL_DATA_V0,
     USN_RECORD_V2,
 };
-use windows::core::PCWSTR;
+use windows::Win32::System::IO::DeviceIoControl;
 
 use crate::index::FileIndex;
 use crate::types::IndexedFile;
@@ -50,7 +50,12 @@ pub fn journal_tails(volumes: &[String]) -> Vec<(String, u64, i64)> {
     tails
 }
 
-pub fn watch_all(volumes: &[String], index: &Arc<FileIndex>, content: &Arc<crate::content::ContentStore>, tails: &[(String, u64, i64)]) -> Result<()> {
+pub fn watch_all(
+    volumes: &[String],
+    index: &Arc<FileIndex>,
+    content: &Arc<crate::content::ContentStore>,
+    tails: &[(String, u64, i64)],
+) -> Result<()> {
     let mut handles = Vec::new();
     for v in volumes {
         let idx = index.clone();
@@ -109,7 +114,12 @@ fn query_journal(handle: HANDLE) -> Result<USN_JOURNAL_DATA_V0> {
     Ok(out)
 }
 
-fn watch_one(volume: &str, index: &Arc<FileIndex>, content: &Arc<crate::content::ContentStore>, start: (u64, i64)) -> Result<()> {
+fn watch_one(
+    volume: &str,
+    index: &Arc<FileIndex>,
+    content: &Arc<crate::content::ContentStore>,
+    start: (u64, i64),
+) -> Result<()> {
     let handle = open_volume(volume)?;
     let journal = query_journal(handle)?;
     let mut journal_id = start.0;
@@ -118,7 +128,11 @@ fn watch_one(volume: &str, index: &Arc<FileIndex>, content: &Arc<crate::content:
     // record arrives next. For directories we re-prefix the whole subtree
     // (NTFS emits no per-child rename records).
     let mut pending_renames: HashMap<u64, String> = HashMap::new();
-    tracing::info!("USN journal on {}: id={journal_id} first={}", volume, journal.FirstUsn);
+    tracing::info!(
+        "USN journal on {}: id={journal_id} first={}",
+        volume,
+        journal.FirstUsn
+    );
 
     let mut buf = vec![0u8; 1 << 20];
     loop {
@@ -150,7 +164,10 @@ fn watch_one(volume: &str, index: &Arc<FileIndex>, content: &Arc<crate::content:
             // from FirstUsn races the truncation loop (a 32MB journal can wrap
             // again mid-replay and swallow fresh records). A full volume re-scan
             // is authoritative and fast (~14s for 2.4M files).
-            tracing::warn!("FSCTL_READ_USN_JOURNAL on {} failed: {e}; rescanning", volume);
+            tracing::warn!(
+                "FSCTL_READ_USN_JOURNAL on {} failed: {e}; rescanning",
+                volume
+            );
             std::thread::sleep(Duration::from_secs(1));
             if let Ok(j) = query_journal(handle) {
                 journal_id = j.UsnJournalID;
@@ -159,6 +176,7 @@ fn watch_one(volume: &str, index: &Arc<FileIndex>, content: &Arc<crate::content:
                         let n = index.replace_volume(&format!("{volume}\\"), entries);
                         tracing::info!("rescan {}: {n} entries; journal id={journal_id}", volume);
                         next_usn = j.NextUsn;
+                        index.advance_checkpoint(volume, journal_id, next_usn);
                     }
                     Err(re) => {
                         tracing::warn!("rescan {} failed: {re:#}", volume);
@@ -176,7 +194,16 @@ fn watch_one(volume: &str, index: &Arc<FileIndex>, content: &Arc<crate::content:
         // (per MSDN "Walking a Buffer of Change Journal Records")
         if returned > 8 {
             next_usn = i64::from_le_bytes(buf[0..8].try_into().unwrap());
-            apply_records(volume, index, content, &buf[8..returned as usize], &mut pending_renames);
+            apply_records(
+                volume,
+                index,
+                content,
+                &buf[8..returned as usize],
+                &mut pending_renames,
+            );
+            // All mutations above have committed before the durable cursor is
+            // advanced. A crash before this call simply replays this batch.
+            index.advance_checkpoint(volume, journal_id, next_usn);
         }
         tracing::info!("USN {}: returned={} next={}", volume, returned, next_usn);
     }
@@ -211,12 +238,20 @@ fn apply_records(
                     let reason = rec.Reason;
                     let file_ref = rec.FileReferenceNumber & 0x0000_FFFF_FFFF_FFFF;
                     let is_dir = rec.FileAttributes & FILE_ATTRIBUTE_DIRECTORY != 0;
-                    let path = if let Some(p) = resolve_by_ref(index, volume, rec.ParentFileReferenceNumber) {
+                    let path = if let Some(p) =
+                        resolve_by_ref(index, volume, rec.ParentFileReferenceNumber)
+                    {
                         format!("{p}\\{name}")
                     } else {
                         format!("{}\\{name}", volume.trim_end_matches('\\'))
                     };
-                    tracing::debug!("USN {}: name={} reason=0x{:X} path={}", volume, name, reason, path);
+                    tracing::debug!(
+                        "USN {}: name={} reason=0x{:X} path={}",
+                        volume,
+                        name,
+                        reason,
+                        path
+                    );
                     if reason & USN_REASON_DELETE != 0 {
                         // DELETE takes precedence: a trailing CLOSE record in
                         // the same delete sequence must not re-add the file.
@@ -253,7 +288,9 @@ fn apply_records(
                                 index.rename_prefix(&old_path, &path);
                                 tracing::info!(
                                     "USN {}: RENAME dir {} -> {} (ref {file_ref})",
-                                    volume, old_path, path
+                                    volume,
+                                    old_path,
+                                    path
                                 );
                             }
                         }
@@ -280,7 +317,12 @@ fn apply_records(
 /// USN records carry no file size; stat on CLOSE/CREATE so size filters stay
 /// correct for changed files. If the file is gone (deleted before its CLOSE
 /// record, renamed away, or a delete we missed), don't re-add it.
-fn upsert_or_remove(index: &Arc<FileIndex>, content: &Arc<crate::content::ContentStore>, path: &str, rec: &USN_RECORD_V2) {
+fn upsert_or_remove(
+    index: &Arc<FileIndex>,
+    content: &Arc<crate::content::ContentStore>,
+    path: &str,
+    rec: &USN_RECORD_V2,
+) {
     let mut entry = IndexedFile::new(
         path.to_string(),
         0,
@@ -300,8 +342,11 @@ fn upsert_or_remove(index: &Arc<FileIndex>, content: &Arc<crate::content::Conten
         const FILETIME_EPOCH: i64 = 116_444_736_000_000_000;
         let to_filetime = |t: std::time::SystemTime| -> i64 {
             match t.duration_since(std::time::UNIX_EPOCH) {
-                Ok(d) => FILETIME_EPOCH + (d.as_secs() as i64) * 10_000_000
-                    + (d.subsec_nanos() as i64 / 100),
+                Ok(d) => {
+                    FILETIME_EPOCH
+                        + (d.as_secs() as i64) * 10_000_000
+                        + (d.subsec_nanos() as i64 / 100)
+                }
                 Err(e) => FILETIME_EPOCH - (e.duration().as_secs() as i64) * 10_000_000,
             }
         };
@@ -309,9 +354,7 @@ fn upsert_or_remove(index: &Arc<FileIndex>, content: &Arc<crate::content::Conten
         entry.created = to_filetime(md.created().unwrap_or(std::time::UNIX_EPOCH));
         entry.modified = to_filetime(md.modified().unwrap_or(std::time::UNIX_EPOCH));
         entry.accessed = to_filetime(md.accessed().unwrap_or(std::time::UNIX_EPOCH));
-        if !entry.is_dir
-            && crate::content::ContentStore::should_index(path, entry.size)
-        {
+        if !entry.is_dir && crate::content::ContentStore::should_index(path, entry.size) {
             if let Ok(data) = std::fs::read(path) {
                 let keep = data.len().min(crate::content::MAX_FILE_BYTES as usize);
                 content.insert(path, &data[..keep]);

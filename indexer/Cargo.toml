@@ -14,6 +14,9 @@ anyhow = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 unicode-normalization = "0.1"
+# The disk-backed index is opt-in. `bundled` keeps the mode self-contained on
+# Windows, Linux, and macOS instead of relying on a system SQLite install.
+rusqlite = { version = "0.37", features = ["bundled"] }
 
 [target.'cfg(windows)'.dependencies]
 ntfs = "0.4"
@@ -28,6 +31,7 @@ windows = { version = "0.62", features = [
     "Win32_System_Ioctl",
     "Win32_System_Memory",
     "Win32_System_SystemInformation",
+    "Win32_System_ProcessStatus",
 ] }
 windows-service = "0.8"
 

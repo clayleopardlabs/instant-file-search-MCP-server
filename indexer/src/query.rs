@@ -91,9 +91,21 @@ pub struct AggregateExt {
 #[derive(Debug, Clone)]
 pub enum Token {
     /// Positive term (name wildcard or bare text).
-    Include { pattern: String, whole_word: bool, case_sensitive: bool, anchored_start: bool, anchored_end: bool },
+    Include {
+        pattern: String,
+        whole_word: bool,
+        case_sensitive: bool,
+        anchored_start: bool,
+        anchored_end: bool,
+    },
     /// Negative term (`!pattern`).
-    Exclude { pattern: String, whole_word: bool, case_sensitive: bool, anchored_start: bool, anchored_end: bool },
+    Exclude {
+        pattern: String,
+        whole_word: bool,
+        case_sensitive: bool,
+        anchored_start: bool,
+        anchored_end: bool,
+    },
     /// Regex term (`regex:...` or regex flag).
     Regex { pattern: String, negate: bool },
     /// Or-group: list of terms where any must match.
@@ -109,7 +121,11 @@ pub enum Token {
     /// `frn:` file-reference-number filter (same operators as size:).
     Frn(SizeFilter),
     /// `dm:`, `dc:`, `da:` date filter (unix seconds).
-    Date { kind: DateKind, op: DateOp, value: i64 },
+    Date {
+        kind: DateKind,
+        op: DateOp,
+        value: i64,
+    },
     /// `folder:` / `file:` type filter.
     TypeFilter(TypeFilter),
     /// `attrib:` NTFS attribute filter (mask of required FILE_ATTRIBUTE bits).
@@ -174,7 +190,14 @@ fn parse_size_parts(s: &str, metric: bool) -> Option<(u64, u64)> {
     } else if let Some(n) = s.strip_suffix("mb") {
         (n, if metric { 1000 * 1000 } else { 1024 * 1024 })
     } else if let Some(n) = s.strip_suffix("gb") {
-        (n, if metric { 1000 * 1000 * 1000 } else { 1024 * 1024 * 1024 })
+        (
+            n,
+            if metric {
+                1000 * 1000 * 1000
+            } else {
+                1024 * 1024 * 1024
+            },
+        )
     } else if let Some(n) = s.strip_suffix("kib") {
         (n, 1024)
     } else if let Some(n) = s.strip_suffix("mib") {
@@ -234,7 +257,10 @@ fn parse_date(s: &str) -> Option<i64> {
 
 fn chrono_now() -> i64 {
     use std::time::{SystemTime, UNIX_EPOCH};
-    let utc = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
+    let utc = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
     utc + local_offset_secs()
 }
 
@@ -245,9 +271,7 @@ fn chrono_now() -> i64 {
 #[cfg(windows)]
 fn local_offset_secs() -> i64 {
     use std::sync::OnceLock;
-    use windows::Win32::System::SystemInformation::{
-        GetLocalTime, GetSystemTimeAsFileTime,
-    };
+    use windows::Win32::System::SystemInformation::{GetLocalTime, GetSystemTimeAsFileTime};
     static CACHE: OnceLock<i64> = OnceLock::new();
     *CACHE.get_or_init(|| {
         let lt = unsafe { GetLocalTime() };
@@ -320,7 +344,10 @@ fn days_in_month(y: i64, m: i64) -> i64 {
 pub fn tokenize(query: &str, opts: &QueryOptions) -> Vec<Token> {
     // Everything regex mode: the entire search string is one regex.
     if opts.regex && !query.is_empty() {
-        return vec![Token::Regex { pattern: query.to_string(), negate: false }];
+        return vec![Token::Regex {
+            pattern: query.to_string(),
+            negate: false,
+        }];
     }
     let mut tokens: Vec<Token> = Vec::new();
     let mut group: Vec<Token> = Vec::new();
@@ -374,24 +401,54 @@ pub fn tokenize(query: &str, opts: &QueryOptions) -> Vec<Token> {
         let token = if term.starts_with("regex:") {
             // NFC-normalize (form only, case preserved) so the compiled pattern
             // matches canonical target bytes on macOS; case is the engine flag.
-            Token::Regex { pattern: crate::platform::nfc_normalize(term[6..].trim()), negate }
+            Token::Regex {
+                pattern: crate::platform::nfc_normalize(term[6..].trim()),
+                negate,
+            }
         } else if term.starts_with("case:") {
             // `case:term` — case-sensitive term. NFC-normalize the form so
             // byte-exact comparison against an NFC-normalized name works.
             let pat = crate::platform::nfc_normalize(term[5..].trim());
             if negate {
-                Token::Exclude { pattern: pat, whole_word: opts.match_whole_word, case_sensitive: true, anchored_start: false, anchored_end: false }
+                Token::Exclude {
+                    pattern: pat,
+                    whole_word: opts.match_whole_word,
+                    case_sensitive: true,
+                    anchored_start: false,
+                    anchored_end: false,
+                }
             } else {
-                Token::Include { pattern: pat, whole_word: opts.match_whole_word, case_sensitive: true, anchored_start: false, anchored_end: false }
+                Token::Include {
+                    pattern: pat,
+                    whole_word: opts.match_whole_word,
+                    case_sensitive: true,
+                    anchored_start: false,
+                    anchored_end: false,
+                }
             }
         } else if term.starts_with("ww:") || term.starts_with("wholeword:") {
             // `ww:term` / `wholeword:term` — whole-word term (Everything
             // modifier; also forced globally by the match_whole_word param).
-            let pat = crate::platform::pattern_key(term[term.find(':').unwrap() + 1..].trim(), opts.match_case);
+            let pat = crate::platform::pattern_key(
+                term[term.find(':').unwrap() + 1..].trim(),
+                opts.match_case,
+            );
             if negate {
-                Token::Exclude { pattern: pat, whole_word: true, case_sensitive: false, anchored_start: false, anchored_end: false }
+                Token::Exclude {
+                    pattern: pat,
+                    whole_word: true,
+                    case_sensitive: false,
+                    anchored_start: false,
+                    anchored_end: false,
+                }
             } else {
-                Token::Include { pattern: pat, whole_word: true, case_sensitive: false, anchored_start: false, anchored_end: false }
+                Token::Include {
+                    pattern: pat,
+                    whole_word: true,
+                    case_sensitive: false,
+                    anchored_start: false,
+                    anchored_end: false,
+                }
             }
         } else if term.starts_with("path:") {
             let p = term[5..].trim().trim_matches('"');
@@ -418,7 +475,10 @@ pub fn tokenize(query: &str, opts: &QueryOptions) -> Vec<Token> {
                 rest = &rest[1..];
             }
             match parse_attrib_mask(rest) {
-                Some(mask) => Token::Attrib { mask, negate: negate ^ inner },
+                Some(mask) => Token::Attrib {
+                    mask,
+                    negate: negate ^ inner,
+                },
                 None => Token::Never,
             }
         } else if term.starts_with("folder:") {
@@ -434,12 +494,30 @@ pub fn tokenize(query: &str, opts: &QueryOptions) -> Vec<Token> {
                 "system" => Token::Attrib { mask: 0x4, negate },
                 "readonly" | "read_only" | "read-only" => Token::Attrib { mask: 0x1, negate },
                 "archive" => Token::Attrib { mask: 0x20, negate },
-                "temporary" => Token::Attrib { mask: 0x100, negate },
-                "compressed" => Token::Attrib { mask: 0x800, negate },
-                "encrypted" => Token::Attrib { mask: 0x4000, negate },
-                "offline" => Token::Attrib { mask: 0x1000, negate },
-                "reparse" | "reparse_point" => Token::Attrib { mask: 0x400, negate },
-                "not_content_indexed" | "not-content-indexed" | "nci" => Token::Attrib { mask: 0x2000, negate },
+                "temporary" => Token::Attrib {
+                    mask: 0x100,
+                    negate,
+                },
+                "compressed" => Token::Attrib {
+                    mask: 0x800,
+                    negate,
+                },
+                "encrypted" => Token::Attrib {
+                    mask: 0x4000,
+                    negate,
+                },
+                "offline" => Token::Attrib {
+                    mask: 0x1000,
+                    negate,
+                },
+                "reparse" | "reparse_point" => Token::Attrib {
+                    mask: 0x400,
+                    negate,
+                },
+                "not_content_indexed" | "not-content-indexed" | "nci" => Token::Attrib {
+                    mask: 0x2000,
+                    negate,
+                },
                 "normal" => Token::Attrib { mask: 0x80, negate },
                 _ => Token::Never,
             }
@@ -460,44 +538,106 @@ pub fn tokenize(query: &str, opts: &QueryOptions) -> Vec<Token> {
             }
         } else if lower.starts_with("dm:") {
             match parse_date_filter(&term[3..]) {
-                Some((op, v)) => Token::Date { kind: DateKind::Modified, op, value: v },
+                Some((op, v)) => Token::Date {
+                    kind: DateKind::Modified,
+                    op,
+                    value: v,
+                },
                 None => Token::Never,
             }
         } else if lower.starts_with("dc:") {
             match parse_date_filter(&term[3..]) {
-                Some((op, v)) => Token::Date { kind: DateKind::Created, op, value: v },
+                Some((op, v)) => Token::Date {
+                    kind: DateKind::Created,
+                    op,
+                    value: v,
+                },
                 None => Token::Never,
             }
         } else if lower.starts_with("da:") {
             match parse_date_filter(&term[3..]) {
-                Some((op, v)) => Token::Date { kind: DateKind::Accessed, op, value: v },
+                Some((op, v)) => Token::Date {
+                    kind: DateKind::Accessed,
+                    op,
+                    value: v,
+                },
                 None => Token::Never,
             }
         } else if term.starts_with("!<") && term.ends_with('>') {
-            Token::Exclude { pattern: crate::platform::pattern_key(&term[2..term.len() - 1], opts.match_case), whole_word: false, case_sensitive: false, anchored_start: false, anchored_end: false }
+            Token::Exclude {
+                pattern: crate::platform::pattern_key(&term[2..term.len() - 1], opts.match_case),
+                whole_word: false,
+                case_sensitive: false,
+                anchored_start: false,
+                anchored_end: false,
+            }
         } else if crate::platform::is_absolute_path(term) {
             let norm = crate::platform::canonical_key(&crate::platform::normalize_path(term));
             Token::BarePath(crate::platform::trim_trailing_sep(&norm).to_string())
         } else if lower.starts_with("start-with:") || lower.starts_with("prefix:") {
-            let pat = if lower.starts_with("start-with:") { &term[10..] } else { &term[7..] };
-            Token::Include { pattern: crate::platform::pattern_key(pat.trim(), opts.match_case), whole_word: false, case_sensitive: false, anchored_start: true, anchored_end: false }
+            let pat = if lower.starts_with("start-with:") {
+                &term[10..]
+            } else {
+                &term[7..]
+            };
+            Token::Include {
+                pattern: crate::platform::pattern_key(pat.trim(), opts.match_case),
+                whole_word: false,
+                case_sensitive: false,
+                anchored_start: true,
+                anchored_end: false,
+            }
         } else if lower.starts_with("end-with:") || lower.starts_with("suffix:") {
-            let pat = if lower.starts_with("end-with:") { &term[9..] } else { &term[7..] };
-            Token::Include { pattern: crate::platform::pattern_key(pat.trim(), opts.match_case), whole_word: false, case_sensitive: false, anchored_start: false, anchored_end: true }
+            let pat = if lower.starts_with("end-with:") {
+                &term[9..]
+            } else {
+                &term[7..]
+            };
+            Token::Include {
+                pattern: crate::platform::pattern_key(pat.trim(), opts.match_case),
+                whole_word: false,
+                case_sensitive: false,
+                anchored_start: false,
+                anchored_end: true,
+            }
         } else if negate {
             let mut pat = term;
             let mut anchored_start = false;
             let mut anchored_end = false;
-            if pat.starts_with('^') { anchored_start = true; pat = &pat[1..]; }
-            if pat.ends_with('$') && !pat.is_empty() { anchored_end = true; pat = &pat[..pat.len()-1]; }
-            Token::Exclude { pattern: crate::platform::pattern_key(pat.trim(), opts.match_case), whole_word: opts.match_whole_word, case_sensitive: false, anchored_start, anchored_end }
+            if pat.starts_with('^') {
+                anchored_start = true;
+                pat = &pat[1..];
+            }
+            if pat.ends_with('$') && !pat.is_empty() {
+                anchored_end = true;
+                pat = &pat[..pat.len() - 1];
+            }
+            Token::Exclude {
+                pattern: crate::platform::pattern_key(pat.trim(), opts.match_case),
+                whole_word: opts.match_whole_word,
+                case_sensitive: false,
+                anchored_start,
+                anchored_end,
+            }
         } else {
             let mut pat = term;
             let mut anchored_start = false;
             let mut anchored_end = false;
-            if pat.starts_with('^') { anchored_start = true; pat = &pat[1..]; }
-            if pat.ends_with('$') && !pat.is_empty() { anchored_end = true; pat = &pat[..pat.len()-1]; }
-            Token::Include { pattern: crate::platform::pattern_key(pat.trim(), opts.match_case), whole_word: opts.match_whole_word, case_sensitive: false, anchored_start, anchored_end }
+            if pat.starts_with('^') {
+                anchored_start = true;
+                pat = &pat[1..];
+            }
+            if pat.ends_with('$') && !pat.is_empty() {
+                anchored_end = true;
+                pat = &pat[..pat.len() - 1];
+            }
+            Token::Include {
+                pattern: crate::platform::pattern_key(pat.trim(), opts.match_case),
+                whole_word: opts.match_whole_word,
+                case_sensitive: false,
+                anchored_start,
+                anchored_end,
+            }
         };
         group.push(token);
     }
@@ -588,11 +728,41 @@ fn parse_size_filter(s: &str, metric: bool) -> Option<SizeFilter> {
     // Everything size constants (JEDEC units by default; metric: switches to decimal).
     match s.to_ascii_lowercase().as_str() {
         "tiny" => return Some(SizeFilter::Less(if metric { 1000 } else { 1024 })),
-        "small" => return Some(SizeFilter::Less(if metric { 1_000_000 } else { 1024 * 1024 })),
-        "medium" => return Some(SizeFilter::Less(if metric { 1_000_000_000 } else { 1024 * 1024 * 1024 })),
-        "large" => return Some(SizeFilter::Greater(if metric { 1_000_000_000 } else { 1024 * 1024 * 1024 })),
-        "huge" => return Some(SizeFilter::Greater(if metric { 4_000_000_000 } else { 4 * 1024 * 1024 * 1024 })),
-        "gigantic" => return Some(SizeFilter::Greater(if metric { 16_000_000_000 } else { 16 * 1024 * 1024 * 1024 })),
+        "small" => {
+            return Some(SizeFilter::Less(if metric {
+                1_000_000
+            } else {
+                1024 * 1024
+            }))
+        }
+        "medium" => {
+            return Some(SizeFilter::Less(if metric {
+                1_000_000_000
+            } else {
+                1024 * 1024 * 1024
+            }))
+        }
+        "large" => {
+            return Some(SizeFilter::Greater(if metric {
+                1_000_000_000
+            } else {
+                1024 * 1024 * 1024
+            }))
+        }
+        "huge" => {
+            return Some(SizeFilter::Greater(if metric {
+                4_000_000_000
+            } else {
+                4 * 1024 * 1024 * 1024
+            }))
+        }
+        "gigantic" => {
+            return Some(SizeFilter::Greater(if metric {
+                16_000_000_000
+            } else {
+                16 * 1024 * 1024 * 1024
+            }))
+        }
         "empty" => return Some(SizeFilter::Equal(0)),
         _ => {}
     }
@@ -624,7 +794,10 @@ fn parse_size_filter(s: &str, metric: bool) -> Option<SizeFilter> {
     // exact match (`size:100` = exactly 100 bytes).
     if let Some((v, mult)) = parse_size_parts(s, metric) {
         if mult > 1 {
-            return Some(SizeFilter::Range { min: v, max: v + mult - 1 });
+            return Some(SizeFilter::Range {
+                min: v,
+                max: v + mult - 1,
+            });
         }
         return Some(SizeFilter::Equal(v));
     }
@@ -641,7 +814,9 @@ fn parse_date_filter(s: &str) -> Option<(DateOp, i64)> {
     }
     if let Some(r) = s.split_once("..") {
         return Some((
-            DateOp::Range { end: parse_date(r.1)? },
+            DateOp::Range {
+                end: parse_date(r.1)?,
+            },
             parse_date(r.0)?,
         ));
     }
@@ -691,7 +866,12 @@ fn parse_relative_span_at(s: &str, now: i64) -> Option<(i64, i64)> {
     let trailing = |span: i64| Some((today - span, today));
 
     // lastNdays / pastNdays / prevNdays / previousNdays (numeric body).
-    for (prefix, roll) in [("last", true), ("past", true), ("prev", false), ("previous", false)] {
+    for (prefix, roll) in [
+        ("last", true),
+        ("past", true),
+        ("prev", false),
+        ("previous", false),
+    ] {
         if let Some(body) = s.strip_prefix(prefix) {
             for unit in ["days", "weeks", "months", "years"] {
                 if let Some(num) = body.strip_suffix(unit) {
@@ -712,7 +892,12 @@ fn parse_relative_span_at(s: &str, now: i64) -> Option<(i64, i64)> {
     // Everything: `last2hours` = [now - 2h, now]; `prev2hours` = trailing
     // window ending at today's start. Sub-day units use a clean rolling
     // window (no +86400 buffer, which would corrupt a 2-hour span).
-    for (prefix, roll) in [("last", true), ("past", true), ("prev", false), ("previous", false)] {
+    for (prefix, roll) in [
+        ("last", true),
+        ("past", true),
+        ("prev", false),
+        ("previous", false),
+    ] {
         if let Some(body) = s.strip_prefix(prefix) {
             for unit in ["hours", "minutes", "mins", "seconds", "secs"] {
                 if let Some(num) = body.strip_suffix(unit) {
@@ -846,7 +1031,8 @@ fn contains_ci(haystack: &str, needle: &str) -> bool {
     if n.len() > h.len() {
         return false;
     }
-    h.windows(n.len()).any(|w| w.iter().zip(n).all(|(a, b)| eq_ci(*a, *b)))
+    h.windows(n.len())
+        .any(|w| w.iter().zip(n).all(|(a, b)| eq_ci(*a, *b)))
 }
 
 fn starts_with_ci(s: &str, prefix: &str) -> bool {
@@ -982,7 +1168,8 @@ fn class_hit(ranges: &[(u8, u8)], c: u8) -> bool {
 }
 
 fn class_hit_ci(ranges: &[(u8, u8)], c: u8) -> bool {
-    class_hit(ranges, c) || (c.is_ascii_alphabetic() && class_hit(ranges, c.to_ascii_lowercase()))
+    class_hit(ranges, c)
+        || (c.is_ascii_alphabetic() && class_hit(ranges, c.to_ascii_lowercase()))
         || (c.is_ascii_alphabetic() && class_hit(ranges, c.to_ascii_uppercase()))
 }
 
@@ -1017,7 +1204,9 @@ fn wc_rec(
                 ok
             }
             Wc::Q => ti < t.len() && t[ti] != b'\\' && wc_rec(wcs, t, wi + 1, ti + 1, memo),
-            Wc::Digit => ti < t.len() && t[ti].is_ascii_digit() && wc_rec(wcs, t, wi + 1, ti + 1, memo),
+            Wc::Digit => {
+                ti < t.len() && t[ti].is_ascii_digit() && wc_rec(wcs, t, wi + 1, ti + 1, memo)
+            }
             Wc::OneOf { set, negate } => {
                 let hit = ti < t.len() && class_hit(set, t[ti]);
                 if hit != *negate && ti < t.len() {
@@ -1060,7 +1249,9 @@ fn wc_rec_ci(
                 ok
             }
             Wc::Q => ti < t.len() && t[ti] != b'\\' && wc_rec_ci(wcs, t, wi + 1, ti + 1, memo),
-            Wc::Digit => ti < t.len() && t[ti].is_ascii_digit() && wc_rec_ci(wcs, t, wi + 1, ti + 1, memo),
+            Wc::Digit => {
+                ti < t.len() && t[ti].is_ascii_digit() && wc_rec_ci(wcs, t, wi + 1, ti + 1, memo)
+            }
             Wc::OneOf { set, negate } => {
                 let hit = ti < t.len() && class_hit_ci(set, t[ti]);
                 if hit != *negate && ti < t.len() {
@@ -1119,23 +1310,51 @@ fn token_matches(
     };
 
     match token {
-        Token::Include { pattern, whole_word, case_sensitive, anchored_start, anchored_end } => {
+        Token::Include {
+            pattern,
+            whole_word,
+            case_sensitive,
+            anchored_start,
+            anchored_end,
+        } => {
             let cs = opts.match_case || *case_sensitive;
             let target = tgt(cs);
             if *anchored_start && *anchored_end {
                 // Exact match.
-                if cs { target == pattern.as_str() } else { target.eq_ignore_ascii_case(pattern) }
+                if cs {
+                    target == pattern.as_str()
+                } else {
+                    target.eq_ignore_ascii_case(pattern)
+                }
             } else if *anchored_start {
-                if cs { target.starts_with(pattern.as_str()) } else { target.to_ascii_lowercase().starts_with(&pattern.to_ascii_lowercase()) }
+                if cs {
+                    target.starts_with(pattern.as_str())
+                } else {
+                    target
+                        .to_ascii_lowercase()
+                        .starts_with(&pattern.to_ascii_lowercase())
+                }
             } else if *anchored_end {
-                if cs { target.ends_with(pattern.as_str()) } else { target.to_ascii_lowercase().ends_with(&pattern.to_ascii_lowercase()) }
+                if cs {
+                    target.ends_with(pattern.as_str())
+                } else {
+                    target
+                        .to_ascii_lowercase()
+                        .ends_with(&pattern.to_ascii_lowercase())
+                }
             } else if *whole_word {
                 whole_word_match(&target, pattern, cs)
             } else {
                 wildcard_match(pattern, &target, cs)
             }
         }
-        Token::Exclude { pattern, whole_word, case_sensitive, anchored_start, anchored_end } => {
+        Token::Exclude {
+            pattern,
+            whole_word,
+            case_sensitive,
+            anchored_start,
+            anchored_end,
+        } => {
             // Match against the whole path for `!<dir>` and against the
             // name for plain `!term`.
             let cs = opts.match_case || *case_sensitive;
@@ -1147,13 +1366,29 @@ fn token_matches(
                 }
             } else if *anchored_start && *anchored_end {
                 let target = tgt(cs);
-                if cs { target == pattern.as_str() } else { target.eq_ignore_ascii_case(pattern) }
+                if cs {
+                    target == pattern.as_str()
+                } else {
+                    target.eq_ignore_ascii_case(pattern)
+                }
             } else if *anchored_start {
                 let target = tgt(cs);
-                if cs { target.starts_with(pattern.as_str()) } else { target.to_ascii_lowercase().starts_with(&pattern.to_ascii_lowercase()) }
+                if cs {
+                    target.starts_with(pattern.as_str())
+                } else {
+                    target
+                        .to_ascii_lowercase()
+                        .starts_with(&pattern.to_ascii_lowercase())
+                }
             } else if *anchored_end {
                 let target = tgt(cs);
-                if cs { target.ends_with(pattern.as_str()) } else { target.to_ascii_lowercase().ends_with(&pattern.to_ascii_lowercase()) }
+                if cs {
+                    target.ends_with(pattern.as_str())
+                } else {
+                    target
+                        .to_ascii_lowercase()
+                        .ends_with(&pattern.to_ascii_lowercase())
+                }
             } else if *whole_word {
                 let target = tgt(cs);
                 whole_word_match(&target, pattern, cs)
@@ -1176,7 +1411,9 @@ fn token_matches(
                 hit
             }
         }
-        Token::Or(group) => group.iter().all(|t| token_matches(entry, t, compiled, opts)),
+        Token::Or(group) => group
+            .iter()
+            .all(|t| token_matches(entry, t, compiled, opts)),
         Token::Path(p) | Token::BarePath(p) => {
             // `p` is already canonical + native-separator at tokenize; the
             // stored lower_path is canonical too, so byte-wise compare works.
@@ -1215,7 +1452,11 @@ fn token_matches(
             } else {
                 entry.attributes & mask == *mask
             };
-            if *negate { !hit } else { hit }
+            if *negate {
+                !hit
+            } else {
+                hit
+            }
         }
         Token::Never => false,
     }
@@ -1232,7 +1473,9 @@ fn file_matches(
     if tokens.is_empty() {
         return true;
     }
-    tokens.iter().any(|t| token_matches(entry, t, compiled, opts))
+    tokens
+        .iter()
+        .any(|t| token_matches(entry, t, compiled, opts))
 }
 
 fn size_match(f: &SizeFilter, size: u64) -> bool {
@@ -1311,74 +1554,111 @@ fn filter_matches<'a>(
     entries: &'a HashMap<String, IndexedFile>,
     opts: &QueryOptions,
 ) -> Vec<&'a IndexedFile> {
-    let tokens = tokenize(&opts.query, opts);
-    let scope_raw = opts.path.as_deref().unwrap_or("");
-    let scope = crate::platform::normalize_path(scope_raw);
-    let scope_lower = crate::platform::trim_trailing_sep(&crate::platform::canonical_key(&scope)).to_string();
-    let exclude_parts: Vec<String> = opts
-        .exclude_path
-        .as_deref()
-        .unwrap_or("")
-        .split(';')
-        .map(|p| {
-            let norm = crate::platform::normalize_path(p.trim());
-            crate::platform::trim_trailing_sep(&crate::platform::canonical_key(&norm)).to_string()
-        })
-        .filter(|p| !p.is_empty())
-        .collect();
-    let mut compiled: HashMap<String, (regex::Regex, bool)> = HashMap::new();
-    for t in &tokens {
-        if let Token::Regex { pattern, negate } = t {
-            if let Ok(re) = regex::RegexBuilder::new(pattern)
-                .case_insensitive(!opts.match_case)
-                .build()
-            {
-                compiled.insert(pattern.clone(), (re, *negate));
+    let filter = EntryFilter::new(opts);
+    entries
+        .values()
+        .filter(|entry| filter.matches(entry))
+        .collect()
+}
+
+/// Compiled once per request and reused while a disk-backed index streams rows
+/// from SQLite.  Keeping this separate from `HashMap` is what lets disk mode
+/// avoid reconstructing the full index for every query.
+struct EntryFilter<'a> {
+    opts: &'a QueryOptions,
+    tokens: Vec<Token>,
+    scope_lower: String,
+    exclude_parts: Vec<String>,
+    compiled: HashMap<String, (regex::Regex, bool)>,
+}
+
+impl<'a> EntryFilter<'a> {
+    fn new(opts: &'a QueryOptions) -> Self {
+        let tokens = tokenize(&opts.query, opts);
+        let scope_raw = opts.path.as_deref().unwrap_or("");
+        let scope = crate::platform::normalize_path(scope_raw);
+        let scope_lower =
+            crate::platform::trim_trailing_sep(&crate::platform::canonical_key(&scope)).to_string();
+        let exclude_parts: Vec<String> = opts
+            .exclude_path
+            .as_deref()
+            .unwrap_or("")
+            .split(';')
+            .map(|p| {
+                let norm = crate::platform::normalize_path(p.trim());
+                crate::platform::trim_trailing_sep(&crate::platform::canonical_key(&norm))
+                    .to_string()
+            })
+            .filter(|p| !p.is_empty())
+            .collect();
+        let mut compiled: HashMap<String, (regex::Regex, bool)> = HashMap::new();
+        for t in &tokens {
+            if let Token::Regex { pattern, negate } = t {
+                if let Ok(re) = regex::RegexBuilder::new(pattern)
+                    .case_insensitive(!opts.match_case)
+                    .build()
+                {
+                    compiled.insert(pattern.clone(), (re, *negate));
+                }
             }
+        }
+
+        Self {
+            opts,
+            tokens,
+            scope_lower,
+            exclude_parts,
+            compiled,
         }
     }
 
-    let mut matched: Vec<&IndexedFile> = Vec::new();
-    for entry in entries.values() {
-        if !opts.include_all && entry.excluded {
-            continue;
+    fn matches(&self, entry: &IndexedFile) -> bool {
+        if !self.opts.include_all && entry.excluded {
+            return false;
         }
-        if !scope_lower.is_empty() {
+        if !self.scope_lower.is_empty() {
             let lp = entry.lower_path.as_str();
-            if starts_with_ci(lp, &scope_lower) {
-                let ok = lp.len() == scope_lower.len()
-                    || matches!(lp.as_bytes().get(scope_lower.len()), Some(b'\\') | Some(b'/') | Some(b':'));
+            if starts_with_ci(lp, &self.scope_lower) {
+                let ok = lp.len() == self.scope_lower.len()
+                    || matches!(
+                        lp.as_bytes().get(self.scope_lower.len()),
+                        Some(b'\\') | Some(b'/') | Some(b':')
+                    );
                 if !ok {
-                    continue;
+                    return false;
                 }
             } else {
-                continue;
+                return false;
             }
         }
-        if !exclude_parts.is_empty() {
+        if !self.exclude_parts.is_empty() {
             let lp = entry.lower_path.as_bytes();
             let mut excluded = false;
-            for p in &exclude_parts {
+            for p in &self.exclude_parts {
                 if path_excluded(lp, p.as_bytes()) {
                     excluded = true;
                     break;
                 }
             }
             if excluded {
-                continue;
+                return false;
             }
         }
-        if let Some(content_paths) = &opts.content_paths {
-            if !content_paths.iter().any(|cp| cp.as_bytes() == entry.lower_path.as_bytes()) {
-                continue;
+        if let Some(content_paths) = &self.opts.content_paths {
+            if !content_paths
+                .iter()
+                .any(|cp| cp.as_bytes() == entry.lower_path.as_bytes())
+            {
+                return false;
             }
         }
-        if !opts.query.is_empty() && !file_matches(entry, &tokens, &compiled, opts) {
-            continue;
+        if !self.opts.query.is_empty()
+            && !file_matches(entry, &self.tokens, &self.compiled, self.opts)
+        {
+            return false;
         }
-        matched.push(entry);
+        true
     }
-    matched
 }
 
 pub fn search(entries: &HashMap<String, IndexedFile>, opts: &QueryOptions) -> QueryResult {
@@ -1386,7 +1666,11 @@ pub fn search(entries: &HashMap<String, IndexedFile>, opts: &QueryOptions) -> Qu
     // Sort: default by name (case-insensitive), then full path.
     // For large result sets only the first max_results (+offset) are ever
     // returned, so use partial selection instead of a full sort.
-    let want = opts.offset.saturating_add(if opts.max_results == 0 { usize::MAX } else { opts.max_results });
+    let want = opts.offset.saturating_add(if opts.max_results == 0 {
+        usize::MAX
+    } else {
+        opts.max_results
+    });
     let sort_key: Box<dyn Fn(&&IndexedFile, &&IndexedFile) -> std::cmp::Ordering> =
         match opts.sort.as_deref() {
             Some("name") | None => Box::new(|a, b| {
@@ -1400,28 +1684,44 @@ pub fn search(entries: &HashMap<String, IndexedFile>, opts: &QueryOptions) -> Qu
             Some("path") => Box::new(|a, b| cmp_ci(a.path.as_bytes(), b.path.as_bytes())),
             Some("path_desc") => Box::new(|a, b| cmp_ci(b.path.as_bytes(), a.path.as_bytes())),
             Some("size") => Box::new(|a, b| {
-                b.size.cmp(&a.size).then_with(|| cmp_ci(a.path.as_bytes(), b.path.as_bytes()))
+                b.size
+                    .cmp(&a.size)
+                    .then_with(|| cmp_ci(a.path.as_bytes(), b.path.as_bytes()))
             }),
             Some("size_asc") => Box::new(|a, b| {
-                a.size.cmp(&b.size).then_with(|| cmp_ci(a.path.as_bytes(), b.path.as_bytes()))
+                a.size
+                    .cmp(&b.size)
+                    .then_with(|| cmp_ci(a.path.as_bytes(), b.path.as_bytes()))
             }),
             Some("date_modified") => Box::new(|a, b| {
-                b.modified.cmp(&a.modified).then_with(|| cmp_ci(a.path.as_bytes(), b.path.as_bytes()))
+                b.modified
+                    .cmp(&a.modified)
+                    .then_with(|| cmp_ci(a.path.as_bytes(), b.path.as_bytes()))
             }),
             Some("date_modified_asc") => Box::new(|a, b| {
-                a.modified.cmp(&b.modified).then_with(|| cmp_ci(a.path.as_bytes(), b.path.as_bytes()))
+                a.modified
+                    .cmp(&b.modified)
+                    .then_with(|| cmp_ci(a.path.as_bytes(), b.path.as_bytes()))
             }),
             Some("date_created") => Box::new(|a, b| {
-                b.created.cmp(&a.created).then_with(|| cmp_ci(a.path.as_bytes(), b.path.as_bytes()))
+                b.created
+                    .cmp(&a.created)
+                    .then_with(|| cmp_ci(a.path.as_bytes(), b.path.as_bytes()))
             }),
             Some("date_created_asc") => Box::new(|a, b| {
-                a.created.cmp(&b.created).then_with(|| cmp_ci(a.path.as_bytes(), b.path.as_bytes()))
+                a.created
+                    .cmp(&b.created)
+                    .then_with(|| cmp_ci(a.path.as_bytes(), b.path.as_bytes()))
             }),
             Some("date_accessed") => Box::new(|a, b| {
-                b.accessed.cmp(&a.accessed).then_with(|| cmp_ci(a.path.as_bytes(), b.path.as_bytes()))
+                b.accessed
+                    .cmp(&a.accessed)
+                    .then_with(|| cmp_ci(a.path.as_bytes(), b.path.as_bytes()))
             }),
             Some("date_accessed_asc") => Box::new(|a, b| {
-                a.accessed.cmp(&b.accessed).then_with(|| cmp_ci(a.path.as_bytes(), b.path.as_bytes()))
+                a.accessed
+                    .cmp(&b.accessed)
+                    .then_with(|| cmp_ci(a.path.as_bytes(), b.path.as_bytes()))
             }),
             Some("extension") => Box::new(|a, b| {
                 a.extension
@@ -1449,11 +1749,118 @@ pub fn search(entries: &HashMap<String, IndexedFile>, opts: &QueryOptions) -> Qu
     let slice = matched
         .iter()
         .skip(opts.offset)
-        .take(if opts.max_results == 0 { usize::MAX } else { opts.max_results })
+        .take(if opts.max_results == 0 {
+            usize::MAX
+        } else {
+            opts.max_results
+        })
         .map(|e| (*e).clone())
         .collect();
 
-    QueryResult { total, entries: slice }
+    QueryResult {
+        total,
+        entries: slice,
+    }
+}
+
+/// Search a source that yields entries one at a time.  Used by the disk index:
+/// it retains at most `offset + max_results` rows (unless the caller explicitly
+/// asks for unlimited results), rather than materializing the database.
+pub fn search_iter(
+    entries: impl IntoIterator<Item = IndexedFile>,
+    opts: &QueryOptions,
+) -> QueryResult {
+    let filter = EntryFilter::new(opts);
+    let want = opts.offset.saturating_add(if opts.max_results == 0 {
+        usize::MAX
+    } else {
+        opts.max_results
+    });
+    let mut total = 0usize;
+    let mut kept = Vec::new();
+    for entry in entries {
+        if !filter.matches(&entry) {
+            continue;
+        }
+        total = total.saturating_add(1);
+        if want == usize::MAX || kept.len() < want {
+            kept.push(entry);
+            continue;
+        }
+        let mut worst = 0usize;
+        for i in 1..kept.len() {
+            if entry_order(&kept[worst], &kept[i], opts).is_lt() {
+                worst = i;
+            }
+        }
+        if entry_order(&entry, &kept[worst], opts).is_lt() {
+            kept[worst] = entry;
+        }
+    }
+    kept.sort_by(|a, b| entry_order(a, b, opts));
+    let entries = kept
+        .into_iter()
+        .skip(opts.offset)
+        .take(if opts.max_results == 0 {
+            usize::MAX
+        } else {
+            opts.max_results
+        })
+        .collect();
+    QueryResult { total, entries }
+}
+
+fn entry_order(a: &IndexedFile, b: &IndexedFile, opts: &QueryOptions) -> std::cmp::Ordering {
+    match opts.sort.as_deref() {
+        Some("name") | None => cmp_ci(a.name.as_bytes(), b.name.as_bytes())
+            .then_with(|| cmp_ci(a.path.as_bytes(), b.path.as_bytes())),
+        Some("name_desc") => cmp_ci(b.name.as_bytes(), a.name.as_bytes())
+            .then_with(|| cmp_ci(a.path.as_bytes(), b.path.as_bytes())),
+        Some("path") => cmp_ci(a.path.as_bytes(), b.path.as_bytes()),
+        Some("path_desc") => cmp_ci(b.path.as_bytes(), a.path.as_bytes()),
+        Some("size") => b
+            .size
+            .cmp(&a.size)
+            .then_with(|| cmp_ci(a.path.as_bytes(), b.path.as_bytes())),
+        Some("size_asc") => a
+            .size
+            .cmp(&b.size)
+            .then_with(|| cmp_ci(a.path.as_bytes(), b.path.as_bytes())),
+        Some("date_modified") => b
+            .modified
+            .cmp(&a.modified)
+            .then_with(|| cmp_ci(a.path.as_bytes(), b.path.as_bytes())),
+        Some("date_modified_asc") => a
+            .modified
+            .cmp(&b.modified)
+            .then_with(|| cmp_ci(a.path.as_bytes(), b.path.as_bytes())),
+        Some("date_created") => b
+            .created
+            .cmp(&a.created)
+            .then_with(|| cmp_ci(a.path.as_bytes(), b.path.as_bytes())),
+        Some("date_created_asc") => a
+            .created
+            .cmp(&b.created)
+            .then_with(|| cmp_ci(a.path.as_bytes(), b.path.as_bytes())),
+        Some("date_accessed") => b
+            .accessed
+            .cmp(&a.accessed)
+            .then_with(|| cmp_ci(a.path.as_bytes(), b.path.as_bytes())),
+        Some("date_accessed_asc") => a
+            .accessed
+            .cmp(&b.accessed)
+            .then_with(|| cmp_ci(a.path.as_bytes(), b.path.as_bytes())),
+        Some("extension") => a
+            .extension
+            .cmp(&b.extension)
+            .then_with(|| cmp_ci(a.name.as_bytes(), b.name.as_bytes())),
+        Some("extension_desc") => b
+            .extension
+            .cmp(&a.extension)
+            .then_with(|| cmp_ci(a.name.as_bytes(), b.name.as_bytes())),
+        _ => cmp_ci(a.name.as_bytes(), b.name.as_bytes())
+            .then_with(|| cmp_ci(a.path.as_bytes(), b.path.as_bytes())),
+    }
 }
 
 /// Aggregation query: runs the same filter as [`search`] but returns summary
@@ -1490,11 +1897,7 @@ pub fn aggregate(
         }
         total_size = total_size.saturating_add(e.size);
         if !e.is_dir {
-            let ext = e
-                .extension
-                .as_deref()
-                .unwrap_or("")
-                .to_ascii_lowercase();
+            let ext = e.extension.as_deref().unwrap_or("").to_ascii_lowercase();
             let slot = by_ext.entry(ext.clone()).or_insert_with(|| AggregateExt {
                 extension: ext,
                 count: 0,
@@ -1523,6 +1926,84 @@ pub fn aggregate(
 
     AggregateResult {
         total: matched.len(),
+        files,
+        folders,
+        total_size,
+        largest,
+        by_extension,
+    }
+}
+
+/// Streaming equivalent of [`aggregate`], used when the entries live on disk.
+pub fn aggregate_iter(
+    entries: impl IntoIterator<Item = IndexedFile>,
+    opts: &AggregateOptions,
+) -> AggregateResult {
+    let qopts = QueryOptions {
+        query: opts.query.clone(),
+        path: opts.path.clone(),
+        exclude_path: opts.exclude_path.clone(),
+        include_all: opts.include_all,
+        match_path: opts.match_path,
+        regex: opts.regex,
+        match_case: opts.match_case,
+        match_whole_word: opts.match_whole_word,
+        ..Default::default()
+    };
+    let filter = EntryFilter::new(&qopts);
+    let top = if opts.top == 0 { 20 } else { opts.top };
+    let mut total = 0usize;
+    let mut files = 0usize;
+    let mut folders = 0usize;
+    let mut total_size = 0u64;
+    let mut by_ext: HashMap<String, AggregateExt> = HashMap::new();
+    let mut largest: Vec<AggregateLargest> = Vec::new();
+    for e in entries {
+        if !filter.matches(&e) {
+            continue;
+        }
+        total += 1;
+        total_size = total_size.saturating_add(e.size);
+        if e.is_dir {
+            folders += 1;
+        } else {
+            files += 1;
+            let ext = e.extension.as_deref().unwrap_or("").to_ascii_lowercase();
+            let slot = by_ext.entry(ext.clone()).or_insert_with(|| AggregateExt {
+                extension: ext,
+                count: 0,
+                size: 0,
+            });
+            slot.count += 1;
+            slot.size = slot.size.saturating_add(e.size);
+        }
+        largest.push(AggregateLargest {
+            path: e.path,
+            size: e.size,
+            is_dir: e.is_dir,
+        });
+        if largest.len() > top {
+            let mut smallest = 0usize;
+            for i in 1..largest.len() {
+                if largest[i].size < largest[smallest].size
+                    || (largest[i].size == largest[smallest].size
+                        && largest[i].path > largest[smallest].path)
+                {
+                    smallest = i;
+                }
+            }
+            largest.swap_remove(smallest);
+        }
+    }
+    largest.sort_by(|a, b| b.size.cmp(&a.size).then_with(|| a.path.cmp(&b.path)));
+    let mut by_extension: Vec<AggregateExt> = by_ext.into_values().collect();
+    by_extension.sort_by(|a, b| {
+        b.count
+            .cmp(&a.count)
+            .then_with(|| a.extension.cmp(&b.extension))
+    });
+    AggregateResult {
+        total,
         files,
         folders,
         total_size,
@@ -1565,19 +2046,52 @@ mod tests {
 
     fn run(query: &str) -> Vec<String> {
         let map: HashMap<String, IndexedFile> = HashMap::from([
-            (".gitignore".to_string(), entry(r"B:\p\.gitignore", false, 1_700_000_000)),
-            (".env".to_string(), entry(r"B:\p\.env", false, 1_700_000_000)),
-            ("AGENTS.md".to_string(), entry(r"B:\p\AGENTS.md", false, aug1_noon())),
-            ("demo.gif".to_string(), entry(r"B:\p\demo.gif", false, aug1_noon())),
-            ("readme.md".to_string(), entry(r"B:\p\readme.md", false, aug1_noon())),
+            (
+                ".gitignore".to_string(),
+                entry(r"B:\p\.gitignore", false, 1_700_000_000),
+            ),
+            (
+                ".env".to_string(),
+                entry(r"B:\p\.env", false, 1_700_000_000),
+            ),
+            (
+                "AGENTS.md".to_string(),
+                entry(r"B:\p\AGENTS.md", false, aug1_noon()),
+            ),
+            (
+                "demo.gif".to_string(),
+                entry(r"B:\p\demo.gif", false, aug1_noon()),
+            ),
+            (
+                "readme.md".to_string(),
+                entry(r"B:\p\readme.md", false, aug1_noon()),
+            ),
             ("docs".to_string(), entry(r"B:\p\docs", true, aug1_noon())),
-            ("target".to_string(), entry(r"B:\p\target\debug\x.o", false, 1_700_000_000)),
-            ("roottarget".to_string(), entry(r"C:\target\root.o", false, 1_700_000_000)),
-            ("rootrecycle".to_string(), entry(r"C:\$Recycle.Bin\gone.txt", false, 1_700_000_000)),
-            ("projectsfoo".to_string(), entry(r"B:\pfoo\sibling.txt", false, 1_700_000_000)),
-            ("CaseFile.txt".to_string(), entry(r"B:\p\CaseFile.txt", false, 1_700_000_000)),
+            (
+                "target".to_string(),
+                entry(r"B:\p\target\debug\x.o", false, 1_700_000_000),
+            ),
+            (
+                "roottarget".to_string(),
+                entry(r"C:\target\root.o", false, 1_700_000_000),
+            ),
+            (
+                "rootrecycle".to_string(),
+                entry(r"C:\$Recycle.Bin\gone.txt", false, 1_700_000_000),
+            ),
+            (
+                "projectsfoo".to_string(),
+                entry(r"B:\pfoo\sibling.txt", false, 1_700_000_000),
+            ),
+            (
+                "CaseFile.txt".to_string(),
+                entry(r"B:\p\CaseFile.txt", false, 1_700_000_000),
+            ),
         ]);
-        let opts = QueryOptions { query: query.to_string(), ..Default::default() };
+        let opts = QueryOptions {
+            query: query.to_string(),
+            ..Default::default()
+        };
         let r = search(&map, &opts);
         let mut paths: Vec<String> = r.entries.iter().map(|e| e.name.clone()).collect();
         paths.sort();
@@ -1620,7 +2134,10 @@ mod tests {
             ("sysfile".to_string(), sysfile),
             ("docs".to_string(), docs),
         ]);
-        let opts = |q: &str| QueryOptions { query: q.to_string(), ..Default::default() };
+        let opts = |q: &str| QueryOptions {
+            query: q.to_string(),
+            ..Default::default()
+        };
         let got = |q: &str| {
             let r = search(&map, &opts(q));
             let mut v: Vec<String> = r.entries.iter().map(|e| e.name.clone()).collect();
@@ -1641,10 +2158,14 @@ mod tests {
     fn invalid_filter_tokens_match_nothing() {
         // One entry so the assertions are meaningful: an empty index would
         // pass trivially.
-        let map: HashMap<String, IndexedFile> = HashMap::from([
-            ("readme.md".to_string(), entry(r"B:\p\readme.md", false, 1_700_000_000)),
-        ]);
-        let opts = |q: &str| QueryOptions { query: q.to_string(), ..Default::default() };
+        let map: HashMap<String, IndexedFile> = HashMap::from([(
+            "readme.md".to_string(),
+            entry(r"B:\p\readme.md", false, 1_700_000_000),
+        )]);
+        let opts = |q: &str| QueryOptions {
+            query: q.to_string(),
+            ..Default::default()
+        };
         let got = |q: &str| {
             let r = search(&map, &opts(q));
             let mut v: Vec<String> = r.entries.iter().map(|e| e.name.clone()).collect();
@@ -1695,33 +2216,93 @@ mod tests {
         let opts = QueryOptions::default();
 
         // ^ anchors to start of filename.
-        let tok = Token::Include { pattern: "main".into(), whole_word: false, case_sensitive: false, anchored_start: true, anchored_end: false };
+        let tok = Token::Include {
+            pattern: "main".into(),
+            whole_word: false,
+            case_sensitive: false,
+            anchored_start: true,
+            anchored_end: false,
+        };
         assert!(token_matches(&entry, &tok, &compiled, &opts));
-        let tok = Token::Include { pattern: "main.rs".into(), whole_word: false, case_sensitive: false, anchored_start: true, anchored_end: false };
+        let tok = Token::Include {
+            pattern: "main.rs".into(),
+            whole_word: false,
+            case_sensitive: false,
+            anchored_start: true,
+            anchored_end: false,
+        };
         assert!(token_matches(&entry, &tok, &compiled, &opts));
         // Should not match if pattern is not at start.
-        let tok = Token::Include { pattern: ".rs".into(), whole_word: false, case_sensitive: false, anchored_start: true, anchored_end: false };
+        let tok = Token::Include {
+            pattern: ".rs".into(),
+            whole_word: false,
+            case_sensitive: false,
+            anchored_start: true,
+            anchored_end: false,
+        };
         assert!(!token_matches(&entry, &tok, &compiled, &opts));
 
         // $ anchors to end of filename.
-        let tok = Token::Include { pattern: ".rs".into(), whole_word: false, case_sensitive: false, anchored_start: false, anchored_end: true };
+        let tok = Token::Include {
+            pattern: ".rs".into(),
+            whole_word: false,
+            case_sensitive: false,
+            anchored_start: false,
+            anchored_end: true,
+        };
         assert!(token_matches(&entry, &tok, &compiled, &opts));
-        let tok = Token::Include { pattern: "main.rs".into(), whole_word: false, case_sensitive: false, anchored_start: false, anchored_end: true };
+        let tok = Token::Include {
+            pattern: "main.rs".into(),
+            whole_word: false,
+            case_sensitive: false,
+            anchored_start: false,
+            anchored_end: true,
+        };
         assert!(token_matches(&entry, &tok, &compiled, &opts));
         // Should not match if pattern is not at end.
-        let tok = Token::Include { pattern: "main.".into(), whole_word: false, case_sensitive: false, anchored_start: false, anchored_end: true };
+        let tok = Token::Include {
+            pattern: "main.".into(),
+            whole_word: false,
+            case_sensitive: false,
+            anchored_start: false,
+            anchored_end: true,
+        };
         assert!(!token_matches(&entry, &tok, &compiled, &opts));
 
         // ^$ combined = exact match.
-        let tok = Token::Include { pattern: "main.rs".into(), whole_word: false, case_sensitive: false, anchored_start: true, anchored_end: true };
+        let tok = Token::Include {
+            pattern: "main.rs".into(),
+            whole_word: false,
+            case_sensitive: false,
+            anchored_start: true,
+            anchored_end: true,
+        };
         assert!(token_matches(&entry, &tok, &compiled, &opts));
-        let tok = Token::Include { pattern: "Main.rs".into(), whole_word: false, case_sensitive: true, anchored_start: true, anchored_end: true };
+        let tok = Token::Include {
+            pattern: "Main.rs".into(),
+            whole_word: false,
+            case_sensitive: true,
+            anchored_start: true,
+            anchored_end: true,
+        };
         assert!(!token_matches(&entry, &tok, &compiled, &opts));
 
         // Exclude anchors work too.
-        let tok = Token::Exclude { pattern: ".rs".into(), whole_word: false, case_sensitive: false, anchored_start: false, anchored_end: true };
+        let tok = Token::Exclude {
+            pattern: ".rs".into(),
+            whole_word: false,
+            case_sensitive: false,
+            anchored_start: false,
+            anchored_end: true,
+        };
         assert!(!token_matches(&entry, &tok, &compiled, &opts)); // ends with .rs -> excluded
-        let tok = Token::Exclude { pattern: "main".into(), whole_word: false, case_sensitive: false, anchored_start: true, anchored_end: false };
+        let tok = Token::Exclude {
+            pattern: "main".into(),
+            whole_word: false,
+            case_sensitive: false,
+            anchored_start: true,
+            anchored_end: false,
+        };
         assert!(!token_matches(&entry, &tok, &compiled, &opts)); // starts with main -> excluded
     }
 
@@ -1753,8 +2334,14 @@ mod tests {
             ..Default::default()
         };
         let map: HashMap<String, IndexedFile> = HashMap::from([
-            ("roottarget".to_string(), entry(r"C:\target\root.o", false, 1_700_000_000)),
-            ("rootrecycle".to_string(), entry(r"C:\$Recycle.Bin\gone.txt", false, 1_700_000_000)),
+            (
+                "roottarget".to_string(),
+                entry(r"C:\target\root.o", false, 1_700_000_000),
+            ),
+            (
+                "rootrecycle".to_string(),
+                entry(r"C:\$Recycle.Bin\gone.txt", false, 1_700_000_000),
+            ),
         ]);
         let r = search(&map, &opts);
         assert_eq!(r.entries.len(), 1);
@@ -1765,10 +2352,19 @@ mod tests {
     fn default_excludes_drive_root() {
         // Regression: `$Recycle.Bin` at the drive root must be excluded by
         // default (its name sits directly after the drive colon).
-        let opts = QueryOptions { query: "*".to_string(), ..Default::default() };
+        let opts = QueryOptions {
+            query: "*".to_string(),
+            ..Default::default()
+        };
         let map: HashMap<String, IndexedFile> = HashMap::from([
-            ("roottarget".to_string(), entry(r"C:\target\root.o", false, 1_700_000_000)),
-            ("rootrecycle".to_string(), entry(r"C:\$Recycle.Bin\gone.txt", false, 1_700_000_000)),
+            (
+                "roottarget".to_string(),
+                entry(r"C:\target\root.o", false, 1_700_000_000),
+            ),
+            (
+                "rootrecycle".to_string(),
+                entry(r"C:\$Recycle.Bin\gone.txt", false, 1_700_000_000),
+            ),
         ]);
         let r = search(&map, &opts);
         assert_eq!(r.entries.len(), 1);
@@ -1841,10 +2437,19 @@ mod tests {
         // Regression: Everything's default size standard is JEDEC (kb=1024,
         // mb=1024^2, gb=1024^3); the native engine used decimal 1000-based
         // units, so `size:1mb` missed files of exactly 1 MiB.
-        let opts = QueryOptions { query: "size:1mb".to_string(), ..Default::default() };
+        let opts = QueryOptions {
+            query: "size:1mb".to_string(),
+            ..Default::default()
+        };
         let map: HashMap<String, IndexedFile> = HashMap::from([
-            ("exact".to_string(), entry(r"B:\p\exact.bin", false, 1_700_000_000)),
-            ("decimal".to_string(), entry(r"B:\p\decimal.bin", false, 1_700_000_000)),
+            (
+                "exact".to_string(),
+                entry(r"B:\p\exact.bin", false, 1_700_000_000),
+            ),
+            (
+                "decimal".to_string(),
+                entry(r"B:\p\decimal.bin", false, 1_700_000_000),
+            ),
         ]);
         let mut exact = map["exact"].clone();
         exact.size = 1024 * 1024;
@@ -1858,7 +2463,10 @@ mod tests {
         assert_eq!(r.entries.len(), 1);
         assert_eq!(r.entries[0].path, r"B:\p\exact.bin");
         // Plain byte values are unaffected.
-        let opts = QueryOptions { query: "size:1000000".to_string(), ..Default::default() };
+        let opts = QueryOptions {
+            query: "size:1000000".to_string(),
+            ..Default::default()
+        };
         let r = search(&map, &opts);
         assert_eq!(r.entries.len(), 1);
         assert_eq!(r.entries[0].path, r"B:\p\decimal.bin");
@@ -1873,24 +2481,30 @@ mod tests {
         one_mb.size = 1024 * 1024;
         let mut two_mb = entry(r"B:\p\two.bin", false, 1_700_000_000);
         two_mb.size = 2 * 1024 * 1024;
-        let map = HashMap::from([
-            ("one".to_string(), one_mb),
-            ("two".to_string(), two_mb),
-        ]);
-        let r = search(&map, &QueryOptions {
-            query: "size:>=1mb".to_string(),
-            ..Default::default()
-        });
+        let map = HashMap::from([("one".to_string(), one_mb), ("two".to_string(), two_mb)]);
+        let r = search(
+            &map,
+            &QueryOptions {
+                query: "size:>=1mb".to_string(),
+                ..Default::default()
+            },
+        );
         assert_eq!(r.entries.len(), 2, ">=1mb must include both");
-        let r = search(&map, &QueryOptions {
-            query: "size:>1mb".to_string(),
-            ..Default::default()
-        });
+        let r = search(
+            &map,
+            &QueryOptions {
+                query: "size:>1mb".to_string(),
+                ..Default::default()
+            },
+        );
         assert_eq!(r.entries.len(), 1, ">1mb must exclude exactly-1mb");
-        let r = search(&map, &QueryOptions {
-            query: "size:<=1mb".to_string(),
-            ..Default::default()
-        });
+        let r = search(
+            &map,
+            &QueryOptions {
+                query: "size:<=1mb".to_string(),
+                ..Default::default()
+            },
+        );
         assert_eq!(r.entries.len(), 1, "<=1mb must include only 1mb");
     }
 
@@ -1903,25 +2517,31 @@ mod tests {
         at.size = 1024; // 1kb, the low edge
         let mut over = entry(r"B:\p\over.bin", false, 1_700_000_000);
         over.size = 2048; // 2kb, just past the 1kb range
-        let map = HashMap::from([
-            ("at".to_string(), at),
-            ("over".to_string(), over),
-        ]);
-        let r = search(&map, &QueryOptions {
-            query: "size:1kb".to_string(),
-            ..Default::default()
-        });
+        let map = HashMap::from([("at".to_string(), at), ("over".to_string(), over)]);
+        let r = search(
+            &map,
+            &QueryOptions {
+                query: "size:1kb".to_string(),
+                ..Default::default()
+            },
+        );
         assert_eq!(r.entries.len(), 1, "size:1kb must be 1024..2047");
         assert_eq!(r.entries[0].path, r"B:\p\at.bin");
-        let r = search(&map, &QueryOptions {
-            query: "size:1024".to_string(),
-            ..Default::default()
-        });
+        let r = search(
+            &map,
+            &QueryOptions {
+                query: "size:1024".to_string(),
+                ..Default::default()
+            },
+        );
         assert_eq!(r.entries.len(), 1, "size:1024 exact");
-        let r = search(&map, &QueryOptions {
-            query: "size:1024..2048".to_string(),
-            ..Default::default()
-        });
+        let r = search(
+            &map,
+            &QueryOptions {
+                query: "size:1024..2048".to_string(),
+                ..Default::default()
+            },
+        );
         assert_eq!(r.entries.len(), 2, "explicit range 1024..2048");
     }
 
@@ -1945,7 +2565,13 @@ mod tests {
             mk("twentyg", 20 * 1024 * 1024 * 1024),
         ]);
         let got = |q: &str| {
-            let r = search(&map, &QueryOptions { query: q.to_string(), ..Default::default() });
+            let r = search(
+                &map,
+                &QueryOptions {
+                    query: q.to_string(),
+                    ..Default::default()
+                },
+            );
             let mut v: Vec<String> = r.entries.iter().map(|e| e.name.clone()).collect();
             v.sort();
             v
@@ -1966,7 +2592,10 @@ mod tests {
         // `dm:prevweek` is the calendar week. Also `dm:lastmonth` is rolling
         // 31 days, `dm:prevmonth` is the calendar month.
         use std::time::{SystemTime, UNIX_EPOCH};
-        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64;
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
         let entry_mod = |path: &str, ts: i64| {
             let mut e = entry(path, false, ts);
             e.modified = ft(ts);
@@ -2034,9 +2663,24 @@ mod tests {
         let today = start_of_day(now);
         let cases = [
             ("last7days", now - 2 * 3600, true, "rolling: earlier today"),
-            ("prev7days", now - 2 * 3600, false, "trailing: earlier today >= today_start"),
-            ("last7days", today - 2 * 86400, true, "rolling: 2d before today"),
-            ("prev7days", today - 2 * 86400, true, "trailing: 2d before today"),
+            (
+                "prev7days",
+                now - 2 * 3600,
+                false,
+                "trailing: earlier today >= today_start",
+            ),
+            (
+                "last7days",
+                today - 2 * 86400,
+                true,
+                "rolling: 2d before today",
+            ),
+            (
+                "prev7days",
+                today - 2 * 86400,
+                true,
+                "trailing: 2d before today",
+            ),
             ("last7days", now - 30 * 86400, false, "rolling: 30d ago"),
             ("prev7days", now - 30 * 86400, false, "trailing: 30d ago"),
         ];
@@ -2066,7 +2710,10 @@ mod tests {
         let (s, e) = parse_relative_span_at("aug", now).unwrap();
         assert_eq!((s, e), (unix_from_ymd(y, 8, 1), unix_from_ymd(y, 9, 1)));
         let (s, e) = parse_relative_span_at("dec", now).unwrap();
-        assert_eq!((s, e), (unix_from_ymd(y, 12, 1), unix_from_ymd(y + 1, 1, 1)));
+        assert_eq!(
+            (s, e),
+            (unix_from_ymd(y, 12, 1), unix_from_ymd(y + 1, 1, 1))
+        );
 
         // Day names: current week's day (Sunday-start).
         let (s, e) = parse_relative_span_at("sunday", now).unwrap();
@@ -2096,7 +2743,10 @@ mod tests {
         // Regression: `dm:last7days` / `dm:7days` are ranges (last 7 days),
         // not a single day 7 days ago; `dm:thisweek` spans the current week.
         use std::time::{SystemTime, UNIX_EPOCH};
-        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64;
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
         let entry_mod = |path: &str, ts: i64| {
             let mut e = entry(path, false, ts);
             e.modified = ft(ts);
@@ -2104,17 +2754,32 @@ mod tests {
         };
         let map: HashMap<String, IndexedFile> = HashMap::from([
             ("today".to_string(), entry_mod(r"B:\p\today.txt", now)),
-            ("2days".to_string(), entry_mod(r"B:\p\two.txt", now - 2 * 86400)),
-            ("10days".to_string(), entry_mod(r"B:\p\ten.txt", now - 10 * 86400)),
+            (
+                "2days".to_string(),
+                entry_mod(r"B:\p\two.txt", now - 2 * 86400),
+            ),
+            (
+                "10days".to_string(),
+                entry_mod(r"B:\p\ten.txt", now - 10 * 86400),
+            ),
         ]);
-        let opts = QueryOptions { query: "dm:last7days".to_string(), ..Default::default() };
+        let opts = QueryOptions {
+            query: "dm:last7days".to_string(),
+            ..Default::default()
+        };
         let r = search(&map, &opts);
         let paths: Vec<&str> = r.entries.iter().map(|e| e.path.as_str()).collect();
         assert_eq!(paths, vec![r"B:\p\today.txt", r"B:\p\two.txt"]);
-        let opts = QueryOptions { query: "dm:7days".to_string(), ..Default::default() };
+        let opts = QueryOptions {
+            query: "dm:7days".to_string(),
+            ..Default::default()
+        };
         let r = search(&map, &opts);
         assert_eq!(r.entries.len(), 2);
-        let opts = QueryOptions { query: "dm:yesterday".to_string(), ..Default::default() };
+        let opts = QueryOptions {
+            query: "dm:yesterday".to_string(),
+            ..Default::default()
+        };
         let r = search(&map, &opts);
         assert_eq!(r.entries.len(), 0);
     }
@@ -2133,10 +2798,16 @@ mod tests {
         let before = aug1 - local_offset_secs() - 60;
         let after = aug1 - local_offset_secs() + 60;
         let map: HashMap<String, IndexedFile> = HashMap::from([
-            ("before".to_string(), entry(r"B:\p\before.txt", false, before)),
+            (
+                "before".to_string(),
+                entry(r"B:\p\before.txt", false, before),
+            ),
             ("after".to_string(), entry(r"B:\p\after.txt", false, after)),
         ]);
-        let opts = QueryOptions { query: "dm:2026-08-01".to_string(), ..Default::default() };
+        let opts = QueryOptions {
+            query: "dm:2026-08-01".to_string(),
+            ..Default::default()
+        };
         let r = search(&map, &opts);
         let paths: Vec<&str> = r.entries.iter().map(|e| e.path.as_str()).collect();
         assert_eq!(paths, vec![r"B:\p\after.txt"]);
@@ -2171,8 +2842,11 @@ mod tests {
         assert_eq!(a.files, 4);
         assert_eq!(a.folders, 0);
         assert_eq!(a.total_size, 9_500);
-        let largest: Vec<(u64, &str)> =
-            a.largest.iter().map(|l| (l.size, l.path.as_str())).collect();
+        let largest: Vec<(u64, &str)> = a
+            .largest
+            .iter()
+            .map(|l| (l.size, l.path.as_str()))
+            .collect();
         assert_eq!(
             largest,
             vec![
