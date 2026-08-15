@@ -202,13 +202,7 @@ By default, searches are answered in milliseconds straight from memory. Nothing 
 
 There are two options:
 
-| Option | What it means |
-|--------|---------------|
-| Super duper fast mode | Keeps the file list in RAM. This is the fastest option, but uses more RAM. |
-| RAM saving mode | Keeps the file list on your drive. This uses far less RAM, which is useful when you run local AI models. |
-
-The automatic installer sets this up for you. You don't need to touch any
-settings unless you want to.
+![Super duper fast mode and RAM saving mode](docs/images/storage-mode-options.png)
 
 ### Speed and RAM usage
 
