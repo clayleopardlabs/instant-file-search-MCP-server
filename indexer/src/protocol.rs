@@ -46,6 +46,7 @@ pub fn handle(state: &IndexerState, req: Request) -> Response<'static> {
                 "storage_mode": state.index.storage_mode(),
                 "index_path": state.index.disk_path().map(|p| p.display().to_string()),
                 "disk_health": state.index.disk_health(),
+                "content": state.content.status_json(),
             })),
             error: None,
         },
@@ -113,6 +114,7 @@ pub fn handle(state: &IndexerState, req: Request) -> Response<'static> {
             apply_content_filter(state, &mut qopts);
             opts.query = qopts.query;
             opts.content_paths = qopts.content_paths;
+            opts.content_needles = qopts.content_needles;
             let result = state.index.aggregate(&opts);
             Response {
                 ok: true,
@@ -178,12 +180,14 @@ fn apply_content_filter(state: &IndexerState, opts: &mut QueryOptions) {
         opts.content_paths = None;
         return;
     }
-    let paths = state.content.matching_paths(&needles);
-    opts.content_paths = if paths.is_empty() {
-        Some(Vec::new())
+    if state.content.is_disk() {
+        opts.content_paths = None;
+        opts.content_needles = Some(needles);
     } else {
-        Some(paths)
-    };
+        let paths = state.content.matching_paths(&needles);
+        opts.content_needles = None;
+        opts.content_paths = if paths.is_empty() { Some(Vec::new()) } else { Some(paths) };
+    }
 }
 
 /// Pull every `content:"..."` (or `content:word`) term out of a query string,
@@ -350,9 +354,11 @@ mod tests {
             1,
         )]);
         index.record_change(10, "CREATE", r"C:\work\alpha.rs", false);
+        let content = Arc::new(ContentStore::disk(index.disk_backend().unwrap()));
+        content.insert(r"C:\work\alpha.rs", b"durable protocol content");
         let state = crate::IndexerState {
             index: index.clone(),
-            content: Arc::new(ContentStore::disabled()),
+            content,
             volumes: vec!["C:\\".into()],
         };
         for request in [
@@ -371,6 +377,10 @@ mod tests {
             Request {
                 method: "count".into(),
                 params: serde_json::json!({"query":"alpha"}),
+            },
+            Request {
+                method: "search".into(),
+                params: serde_json::json!({"query":"content:protocol"}),
             },
             Request {
                 method: "aggregate".into(),
@@ -397,6 +407,7 @@ mod tests {
             status_data["disk_health"]["schema_version"],
             crate::disk::SCHEMA_VERSION
         );
+        assert_eq!(status_data["content"]["storage_mode"], "disk");
         drop(state);
         drop(index);
         let _ = std::fs::remove_file(&path);

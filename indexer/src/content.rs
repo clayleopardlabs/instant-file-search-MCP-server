@@ -16,7 +16,9 @@
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::RwLock;
+use std::sync::Arc;
 
+use crate::disk::DiskIndex;
 use crate::query::DEFAULT_EXCLUDES;
 
 /// Per-file size cap. Only files at or below this are content-indexed, and only
@@ -160,6 +162,7 @@ pub struct ContentStore {
     total: AtomicUsize,
     indexed: AtomicUsize,
     enabled: bool,
+    disk: Option<Arc<DiskIndex>>,
 }
 
 impl ContentStore {
@@ -169,6 +172,7 @@ impl ContentStore {
             total: AtomicUsize::new(0),
             indexed: AtomicUsize::new(0),
             enabled: true,
+            disk: None,
         }
     }
 
@@ -178,7 +182,32 @@ impl ContentStore {
             total: AtomicUsize::new(0),
             indexed: AtomicUsize::new(0),
             enabled: false,
+            disk: None,
         }
+    }
+
+    pub fn disk(index: Arc<DiskIndex>) -> Self {
+        Self {
+            inner: RwLock::new(HashMap::new()),
+            total: AtomicUsize::new(0),
+            indexed: AtomicUsize::new(0),
+            enabled: true,
+            disk: Some(index),
+        }
+    }
+
+    pub fn is_disk(&self) -> bool {
+        self.disk.is_some()
+    }
+
+    pub fn status_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "storage_mode": if self.is_disk() { "disk" } else if self.is_enabled() { "memory" } else { "off" },
+            "enabled": self.is_enabled(),
+            "files": self.len(),
+            "bytes": self.total_bytes(),
+            "budget_bytes": if self.is_disk() { crate::disk::DISK_CONTENT_BUDGET_DEFAULT } else { TOTAL_BUDGET },
+        })
     }
 
     pub fn is_enabled(&self) -> bool {
@@ -187,11 +216,17 @@ impl ContentStore {
 
     /// Number of files currently indexed.
     pub fn len(&self) -> usize {
+        if let Some(disk) = &self.disk {
+            return disk.content_stats().map(|(count, _)| count).unwrap_or(0);
+        }
         self.indexed.load(Ordering::Relaxed)
     }
 
     /// Total retained content bytes.
     pub fn total_bytes(&self) -> usize {
+        if let Some(disk) = &self.disk {
+            return disk.content_stats().map(|(_, bytes)| bytes).unwrap_or(0);
+        }
         self.total.load(Ordering::Relaxed)
     }
 
@@ -217,6 +252,12 @@ impl ContentStore {
         if data.is_empty() {
             return;
         }
+        if let Some(disk) = &self.disk {
+            if let Err(error) = disk.content_insert(path, data) {
+                tracing::warn!("disk content insert failed for {path}: {error:#}");
+            }
+            return;
+        }
         let mut guard = self.inner.write().unwrap();
         let budget_left = TOTAL_BUDGET.saturating_sub(self.total.load(Ordering::Relaxed));
         if budget_left == 0 {
@@ -240,6 +281,12 @@ impl ContentStore {
         if !self.enabled {
             return;
         }
+        if let Some(disk) = &self.disk {
+            if let Err(error) = disk.content_remove(path) {
+                tracing::warn!("disk content removal failed for {path}: {error:#}");
+            }
+            return;
+        }
         let mut guard = self.inner.write().unwrap();
         if let Some(o) = guard.remove(&crate::platform::canonical_key(path)) {
             self.total.fetch_sub(o.len(), Ordering::Relaxed);
@@ -251,6 +298,9 @@ impl ContentStore {
     /// (case-insensitive). Empty needles match nothing.
     pub fn matching_paths(&self, needles: &[String]) -> Vec<String> {
         if needles.is_empty() {
+            return Vec::new();
+        }
+        if self.disk.is_some() {
             return Vec::new();
         }
         let needles: Vec<String> = needles.iter().map(|n| n.to_ascii_lowercase()).collect();
@@ -271,6 +321,9 @@ impl ContentStore {
         let needle = needle.to_ascii_lowercase();
         if needle.is_empty() {
             return false;
+        }
+        if let Some(disk) = &self.disk {
+            return disk.content_contains(path, &needle).unwrap_or(false);
         }
         let guard = self.inner.read().unwrap();
         match guard.get(&crate::platform::canonical_key(path)) {

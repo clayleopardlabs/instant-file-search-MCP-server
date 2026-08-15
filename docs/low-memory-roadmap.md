@@ -37,7 +37,9 @@ their current behavior unless the user explicitly changes a setting.
   fanotify has no persistent event history.
 - `INSTANT_FS_CONTENT_INDEX` currently accepts true-like values and controls a
   bounded 256 MiB in-memory content cache.
-- Disk metadata mode currently disables content indexing.
+- Disk metadata mode leaves content indexing off by default. Set
+  `INSTANT_FS_CONTENT_INDEX=disk` to persist a bounded content index in the
+  same SQLite database.
 - The disk query engine streams rows from SQLite and applies the shared Rust
   filter engine. This protects query parity but scans too many rows for common
   filters.
@@ -624,7 +626,7 @@ All work is complete only when:
 
 - [x] Milestone 1 committed and pushed
 - [x] Milestone 2 committed and pushed
-- [ ] Milestone 3 committed and pushed
-- [ ] Milestone 4 committed and pushed
+- [x] Milestone 3 committed and pushed
+- [x] Milestone 4 committed and pushed
 - [ ] Milestone 5 committed and pushed
 - [ ] Milestone 6 committed and pushed

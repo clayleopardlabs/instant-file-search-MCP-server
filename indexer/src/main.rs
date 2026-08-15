@@ -204,13 +204,23 @@ fn serve_with_stop(stop: Arc<std::sync::atomic::AtomicBool>) -> Result<()> {
         tracing::info!("watcher checkpoint on {}: id={id} cursor={cursor}", v);
     }
 
-    // Disk mode's contract is low, predictable RAM use. Content indexing is
-    // intentionally unavailable there: building it would require enumerating
-    // the full database and could reserve another 256 MiB.
-    let content = Arc::new(if index.storage_mode() == "memory" && content_enabled() {
-        ContentStore::new()
-    } else {
-        ContentStore::disabled()
+    let requested_content = content_mode()?;
+    let content = Arc::new(match requested_content {
+        ContentMode::Off => ContentStore::disabled(),
+        ContentMode::Memory => ContentStore::new(),
+        ContentMode::Disk => {
+            let backend = index
+                .disk_backend()
+                .context("disk content mode requires INSTANT_FS_INDEX_MODE=disk")?;
+            ContentStore::disk(backend)
+        }
+        ContentMode::Auto => {
+            if index.storage_mode() == "memory" {
+                ContentStore::new()
+            } else {
+                ContentStore::disabled()
+            }
+        }
     });
     let state = IndexerState {
         index: index.clone(),
@@ -221,34 +231,48 @@ fn serve_with_stop(stop: Arc<std::sync::atomic::AtomicBool>) -> Result<()> {
     // Background content-indexing pass. Snapshot eligible (path, size) pairs
     // quickly under the lock, then read files OUTSIDE the lock so queries are
     // never blocked during the content build.
-    if index.storage_mode() == "memory" && content.is_enabled() {
+    if content.is_enabled() {
         let fill_index = index.clone();
         let fill_content = content.clone();
         std::thread::spawn(move || {
             let started = std::time::Instant::now();
-            let mut candidates = Vec::new();
-            fill_index.with_entries(|entries| {
-                for (path, entry) in entries {
-                    if entry.is_dir {
-                        continue;
-                    }
-                    if ContentStore::should_index(path, entry.size) {
-                        candidates.push((path.clone(), entry.size));
-                    }
-                }
-            });
             let mut count = 0usize;
-            for (path, _size) in candidates {
-                if fill_content.total_bytes() >= content::TOTAL_BUDGET {
-                    break;
+            if fill_index.storage_mode() == "disk" {
+                let mut after = String::new();
+                loop {
+                    let candidates = fill_index.content_candidates(&after, 512);
+                    if candidates.is_empty() {
+                        break;
+                    }
+                    for (path, size) in candidates {
+                        after = path.clone();
+                        if !ContentStore::should_index(&path, size) {
+                            continue;
+                        }
+                        if let Ok(data) = std::fs::read(&path) {
+                            fill_content.insert(&path, &data);
+                            count += 1;
+                        }
+                    }
                 }
-                match std::fs::read(&path) {
-                    Ok(data) => {
+            } else {
+                let mut candidates = Vec::new();
+                fill_index.with_entries(|entries| {
+                    for (path, entry) in entries {
+                        if !entry.is_dir && ContentStore::should_index(path, entry.size) {
+                            candidates.push((path.clone(), entry.size));
+                        }
+                    }
+                });
+                for (path, _size) in candidates {
+                    if fill_content.total_bytes() >= content::TOTAL_BUDGET {
+                        break;
+                    }
+                    if let Ok(data) = std::fs::read(&path) {
                         let keep = data.len().min(content::MAX_FILE_BYTES as usize);
                         fill_content.insert(&path, &data[..keep]);
                         count += 1;
                     }
-                    Err(_) => {}
                 }
             }
             tracing::info!(
@@ -321,11 +345,24 @@ mod tests {
     }
 }
 
-/// The optional 256 MiB content cache can be disabled in memory mode.
-fn content_enabled() -> bool {
-    match std::env::var("INSTANT_FS_CONTENT_INDEX") {
-        Ok(v) => matches!(v.as_str(), "1" | "true" | "on"),
-        Err(_) => true,
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ContentMode {
+    Auto,
+    Off,
+    Memory,
+    Disk,
+}
+
+fn content_mode() -> Result<ContentMode> {
+    let value = std::env::var("INSTANT_FS_CONTENT_INDEX").unwrap_or_else(|_| "auto".into());
+    match value.trim().to_ascii_lowercase().as_str() {
+        "auto" => Ok(ContentMode::Auto),
+        "1" | "true" | "on" | "memory" => Ok(ContentMode::Memory),
+        "0" | "false" | "off" => Ok(ContentMode::Off),
+        "disk" => Ok(ContentMode::Disk),
+        other => anyhow::bail!(
+            "INSTANT_FS_CONTENT_INDEX must be auto, off, memory, or disk, got {other:?}"
+        ),
     }
 }
 

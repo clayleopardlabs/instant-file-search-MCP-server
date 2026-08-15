@@ -1,4 +1,4 @@
-![Instant File Search — local filesystem to AI agent](docs/images/instant-file-search-banner.png)
+![Instant File Search - local filesystem to AI agent](docs/images/instant-file-search-banner.png)
 
 
 
@@ -189,8 +189,8 @@ The indexer has two modes. Memory mode is the default.
 
 | Mode | Good for | Cost |
 |------|----------|------|
-| `memory` | Fast searches and users with plenty of RAM | Keeps the full file index in RAM. The optional `content:` cache can use up to 256 MiB more. |
-| `disk` | Computers where RAM is limited, including local AI systems | Uses much less process RAM, but searches and the first scan take longer. `content:` searches are unavailable. |
+| `memory` | Fastest searches and users with plenty of RAM | Keeps the full file index in RAM. The optional `content:` cache can use up to 256 MiB more. |
+| `disk` | Computers where RAM is limited, including local AI systems | Keeps file metadata in SQLite on disk. It uses much less process RAM, but searches and the first scan take longer. |
 
 To use disk mode, set `INSTANT_FS_INDEX_MODE=disk` for the indexer service.
 `search_status` reports the active `storage_mode` and database path. The default
@@ -198,6 +198,15 @@ database location is `%PROGRAMDATA%\ClayLeopardLabs\instant-file-search\index.sq
 on Windows, `/Library/Application Support/instant-file-search/index.sqlite3`
 on macOS, and `/var/lib/instant-file-search/index.sqlite3` on Linux. Override it
 with `INSTANT_FS_INDEX_PATH`.
+
+Content search has its own setting. `INSTANT_FS_CONTENT_INDEX=memory` keeps a
+small content cache in RAM. `INSTANT_FS_CONTENT_INDEX=disk` keeps the content
+index in the SQLite database and works with disk metadata mode. This saves RAM
+but uses more disk space and makes the first content build take longer.
+`INSTANT_FS_CONTENT_INDEX=off` disables content search. The default `auto`
+setting uses memory content with memory metadata and disables content indexing
+with disk metadata. The disk content budget is 2 GB by default and can be
+changed with `INSTANT_FS_CONTENT_DISK_BUDGET` in bytes.
 
 The database is durable. In disk mode, Windows and macOS normally resume after
 a restart by replaying filesystem changes from the saved checkpoint. They do a

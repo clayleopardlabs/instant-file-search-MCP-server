@@ -55,7 +55,7 @@ Everything-compatible tokens the native engine supports. Full parity detail live
 | `case:` | `case:Foo` | Case-sensitive term |
 | `wholeword:` / `ww:` | `ww:foo` | Whole-word match (also available as the `match_whole_word` MCP param, whole-query) |
 | `" "` | `"exact phrase"` | Exact phrase |
-| `content:` | `content:"fn main"` | Match file contents (bounded 256MB store — targeted searches, not exhaustive counts) |
+| `content:` | `content:"fn main"` | Match file contents. Memory mode uses a bounded 256 MB cache. Disk mode can persist content in SQLite with a configurable budget. |
 
 ### Filters
 

@@ -30,7 +30,7 @@ pub struct ChangeEvent {
 #[derive(Default)]
 pub struct FileIndex {
     inner: RwLock<Inner>,
-    disk: Option<DiskIndex>,
+    disk: Option<Arc<DiskIndex>>,
     change_log: Mutex<Option<BufWriter<File>>>,
 }
 
@@ -97,7 +97,7 @@ impl FileIndex {
                 refs: HashMap::new(),
                 changes,
             }),
-            disk: Some(DiskIndex::open(path)?),
+            disk: Some(Arc::new(DiskIndex::open(path)?)),
             change_log: Mutex::new(change_log),
         })
     }
@@ -107,7 +107,7 @@ impl FileIndex {
     pub fn for_benchmark(mode: &str, disk_path: PathBuf) -> anyhow::Result<Self> {
         let disk = match mode {
             "memory" => None,
-            "disk" => Some(DiskIndex::open(disk_path)?),
+            "disk" => Some(Arc::new(DiskIndex::open(disk_path)?)),
             _ => anyhow::bail!("benchmark mode must be 'memory' or 'disk'"),
         };
         Ok(Self {
@@ -125,11 +125,15 @@ impl FileIndex {
         }
     }
     pub fn disk_path(&self) -> Option<&std::path::Path> {
-        self.disk.as_ref().map(DiskIndex::path)
+        self.disk.as_ref().map(|disk| disk.path())
+    }
+
+    pub fn disk_backend(&self) -> Option<Arc<DiskIndex>> {
+        self.disk.clone()
     }
 
     pub fn disk_health(&self) -> Option<DiskHealth> {
-        self.disk.as_ref().map(DiskIndex::health)
+        self.disk.as_ref().map(|disk| disk.health())
     }
 
     pub fn optimize_storage(&self) {
@@ -499,6 +503,13 @@ impl FileIndex {
             return disk.aggregate(opts);
         }
         self.with_entries(|entries| crate::query::aggregate(entries, opts))
+    }
+
+    pub fn content_candidates(&self, after: &str, limit: usize) -> Vec<(String, u64)> {
+        self.disk
+            .as_ref()
+            .and_then(|disk| disk.content_candidates(after, limit).ok())
+            .unwrap_or_default()
     }
 }
 

@@ -22,7 +22,8 @@ pub struct DiskIndex {
     recovery_reason: Option<String>,
 }
 
-pub const SCHEMA_VERSION: i64 = 2;
+pub const SCHEMA_VERSION: i64 = 4;
+pub const DISK_CONTENT_BUDGET_DEFAULT: usize = 2 * 1024 * 1024 * 1024;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct DiskHealth {
@@ -100,6 +101,92 @@ impl DiskIndex {
         let conn = self.conn.lock().unwrap();
         conn.execute_batch("PRAGMA optimize; PRAGMA wal_checkpoint(TRUNCATE);")?;
         Ok(())
+    }
+
+    pub fn content_insert(&self, path: &str, data: &[u8]) -> Result<bool> {
+        if data.is_empty() {
+            return Ok(false);
+        }
+        let key = crate::platform::canonical_key(path);
+        let data = data[..data.len().min(crate::content::MAX_FILE_BYTES as usize)].to_ascii_lowercase();
+        let budget = disk_content_budget();
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        tx.execute("DELETE FROM file_contents WHERE path=?1", params![key])?;
+        let used: usize = tx
+            .query_row("SELECT COALESCE(SUM(byte_count), 0) FROM file_contents", [], |r| {
+                r.get::<_, i64>(0)
+            })?
+            .max(0) as usize;
+        if used.saturating_add(data.len()) > budget {
+            tx.commit()?;
+            return Ok(false);
+        }
+        let source_modified: i64 = tx
+            .query_row(
+                "SELECT modified FROM files WHERE path_key=?1",
+                params![key],
+                |r| r.get(0),
+            )
+            .unwrap_or(0);
+        let indexed_at = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
+        tx.execute(
+            "INSERT INTO file_contents(path,body,byte_count,indexed_at,source_modified) VALUES(?1,?2,?3,?4,?5)",
+            params![key, data, data.len() as i64, indexed_at, source_modified],
+        )?;
+        tx.commit()?;
+        Ok(true)
+    }
+
+    pub fn content_remove(&self, path: &str) -> Result<()> {
+        let key = crate::platform::canonical_key(path);
+        let conn = self.conn.lock().unwrap();
+        conn.execute("DELETE FROM file_contents WHERE path=?1", params![key])?;
+        Ok(())
+    }
+
+    pub fn content_stats(&self) -> Result<(usize, usize)> {
+        let conn = self.conn.lock().unwrap();
+        Ok(conn.query_row(
+            "SELECT COUNT(*), COALESCE(SUM(byte_count), 0) FROM file_contents",
+            [],
+            |r| Ok((r.get::<_, i64>(0)? as usize, r.get::<_, i64>(1)?.max(0) as usize)),
+        )?)
+    }
+
+    pub fn content_contains(&self, path: &str, needle: &str) -> Result<bool> {
+        let key = crate::platform::canonical_key(path);
+        let needle = needle.to_ascii_lowercase().into_bytes();
+        if needle.is_empty() {
+            return Ok(false);
+        }
+        let conn = self.conn.lock().unwrap();
+        Ok(conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM file_contents WHERE path=?1 AND instr(CAST(body AS TEXT), ?2) > 0)",
+                params![key, String::from_utf8_lossy(&needle).to_string()],
+                |r| r.get::<_, i64>(0),
+            )?
+            != 0)
+    }
+
+    pub fn content_candidates(&self, after: &str, limit: usize) -> Result<Vec<(String, u64)>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT files.path,files.size FROM files
+             LEFT JOIN file_contents fc ON fc.path=files.path_key AND fc.source_modified=files.modified
+             WHERE files.path > ?1 AND files.is_dir=0 AND files.size > 0 AND files.size <= ?2 AND files.excluded=0
+               AND fc.path IS NULL
+             ORDER BY files.path LIMIT ?3",
+        )?;
+        let rows = stmt.query_map(
+            params![after, crate::content::MAX_FILE_BYTES as i64, limit as i64],
+            |row| Ok((row.get(0)?, row.get::<_, i64>(1)? as u64)),
+        )?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
     /// Replace the complete set of durable watcher checkpoints after a full
@@ -387,12 +474,19 @@ fn open_and_migrate(path: &Path) -> Result<Connection> {
                 journal_id INTEGER NOT NULL,
                 cursor INTEGER NOT NULL
              );
+             CREATE TABLE IF NOT EXISTS file_contents (
+                path TEXT PRIMARY KEY NOT NULL,
+                body BLOB NOT NULL,
+                byte_count INTEGER NOT NULL,
+                indexed_at INTEGER NOT NULL,
+                source_modified INTEGER NOT NULL DEFAULT 0
+             );
              SELECT 1;",
         )?;
         ensure_derived_columns(&tx)?;
         create_derived_indexes(&tx)?;
         populate_derived_columns(&tx)?;
-        tx.execute_batch("PRAGMA user_version = 2;")?;
+        tx.execute_batch("PRAGMA user_version = 4;")?;
         tx.commit()?;
     } else if current == 1 {
         let tx = conn.unchecked_transaction()?;
@@ -411,7 +505,34 @@ fn open_and_migrate(path: &Path) -> Result<Connection> {
                  WHEN instr(substr(own_name, instr(own_name, '.') + 1), '.') != 0 THEN NULL
                  ELSE lower(substr(own_name, instr(own_name, '.') + 1))
                END;
-             PRAGMA user_version = 2;",
+             CREATE TABLE IF NOT EXISTS file_contents (
+                path TEXT PRIMARY KEY NOT NULL,
+                body BLOB NOT NULL,
+                byte_count INTEGER NOT NULL,
+                indexed_at INTEGER NOT NULL,
+                source_modified INTEGER NOT NULL DEFAULT 0
+             );
+             PRAGMA user_version = 4;",
+        )?;
+        tx.commit()?;
+    } else if current == 2 {
+        let tx = conn.unchecked_transaction()?;
+        tx.execute_batch(
+            "CREATE TABLE IF NOT EXISTS file_contents (
+                path TEXT PRIMARY KEY NOT NULL,
+                body BLOB NOT NULL,
+                byte_count INTEGER NOT NULL,
+                indexed_at INTEGER NOT NULL,
+                source_modified INTEGER NOT NULL DEFAULT 0
+             );
+             PRAGMA user_version = 4;",
+        )?;
+        tx.commit()?;
+    } else if current == 3 {
+        let tx = conn.unchecked_transaction()?;
+        tx.execute_batch(
+            "ALTER TABLE file_contents ADD COLUMN source_modified INTEGER NOT NULL DEFAULT 0;
+             PRAGMA user_version = 4;",
         )?;
         tx.commit()?;
     }
@@ -461,6 +582,14 @@ fn quarantine_database(path: &Path) -> Result<PathBuf> {
 
 fn sidecar_bytes(path: &Path) -> u64 {
     std::fs::metadata(path).map(|metadata| metadata.len()).unwrap_or(0)
+}
+
+fn disk_content_budget() -> usize {
+    std::env::var("INSTANT_FS_CONTENT_DISK_BUDGET")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(DISK_CONTENT_BUDGET_DEFAULT)
 }
 
 fn ensure_derived_columns(tx: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
@@ -557,6 +686,16 @@ fn candidate_plan(opts: &QueryOptions) -> CandidatePlan {
         }
     }
 
+    if let Some(needles) = &opts.content_needles {
+        for needle in needles.iter().filter(|needle| !needle.is_empty()) {
+            clauses.push(
+                "EXISTS (SELECT 1 FROM file_contents fc WHERE fc.path=files.path_key AND instr(CAST(fc.body AS TEXT), ?) > 0)"
+                    .to_string(),
+            );
+            params.push(rusqlite::types::Value::Text(needle.to_ascii_lowercase()));
+        }
+    }
+
     CandidatePlan {
         where_sql: if clauses.is_empty() {
             String::new()
@@ -578,6 +717,7 @@ fn candidate_plan_for_aggregate(opts: &AggregateOptions) -> CandidatePlan {
         match_case: opts.match_case,
         match_whole_word: opts.match_whole_word,
         content_paths: opts.content_paths.clone(),
+        content_needles: opts.content_needles.clone(),
         ..Default::default()
     })
 }
@@ -947,6 +1087,35 @@ mod tests {
             serde_json::to_value(query::aggregate(&memory, &aggregate)).unwrap()
         );
         drop(disk);
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(path.with_extension("sqlite3-wal"));
+        let _ = std::fs::remove_file(path.with_extension("sqlite3-shm"));
+    }
+
+    #[test]
+    fn content_rows_persist_and_filter_disk_queries() {
+        let path = test_path();
+        let _ = std::fs::remove_file(&path);
+        let index = DiskIndex::open(path.clone()).unwrap();
+        let entry = IndexedFile::new(r"C:\work\alpha.rs".into(), 42, 1, 2, 3, false, 1);
+        index.replace(vec![entry]).unwrap();
+        assert!(index.content_insert(r"C:\work\alpha.rs", b"Hello durable content").unwrap());
+        assert_eq!(index.content_stats().unwrap(), (1, 21));
+        assert!(index.content_candidates("", 10).unwrap().is_empty());
+        let result = index.search(&QueryOptions {
+            query: "*".into(),
+            content_needles: Some(vec!["DURABLE".into()]),
+            max_results: 10,
+            ..Default::default()
+        });
+        assert_eq!(result.total, 1);
+        drop(index);
+        let reopened = DiskIndex::open(path.clone()).unwrap();
+        assert_eq!(reopened.content_stats().unwrap(), (1, 21));
+        assert!(reopened.content_contains(r"C:\WORK\ALPHA.RS", "hello").unwrap());
+        reopened.content_remove(r"C:\work\alpha.rs").unwrap();
+        assert_eq!(reopened.content_stats().unwrap(), (0, 0));
+        drop(reopened);
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_file(path.with_extension("sqlite3-wal"));
         let _ = std::fs::remove_file(path.with_extension("sqlite3-shm"));
