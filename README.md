@@ -208,6 +208,19 @@ get started.
 The automatic installer sets this up for you. You don't need to touch any
 settings unless you want to.
 
+### Speed and RAM usage
+
+Here is what we saw with 100,000 test files on Windows. Memory mode uses more
+RAM. Disk mode uses much less RAM, but some searches take longer.
+
+| What we measured | Memory mode | Disk mode |
+|------------------|------------:|----------:|
+| RAM used after indexing | 81 MiB | 10 MiB |
+| Time to build the index | 169 ms | 1.20 s |
+| Find one filename | 8 ms | 26 ms |
+| Find `*.rs` files | 145 ms | 86 ms |
+| Find a module name | 7 ms | 25 ms |
+
 ### Search query filters
 
 Your agent has endless options for narrowing down a search:
