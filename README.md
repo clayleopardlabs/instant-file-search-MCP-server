@@ -200,53 +200,13 @@ By default, searches are answered in milliseconds straight from memory. Nothing 
 
 ### Choose a storage mode
 
-The indexer has two modes. Memory mode is the default.
+Instant File Search has two storage options. Memory mode is the usual choice
+and gives you the fastest searches. Disk mode uses much less RAM, which is
+handy on computers that run local AI models. It can take a little longer to
+get started.
 
-| Mode | Good for | Cost |
-|------|----------|------|
-| `memory` | Fastest searches and users with plenty of RAM | Keeps the full file index in RAM. The optional `content:` cache can use up to 256 MiB more. |
-| `disk` | Computers where RAM is limited, including local AI systems | Keeps file metadata in SQLite on disk. It uses much less process RAM, but searches and the first scan take longer. |
-
-To use disk mode, set `INSTANT_FS_INDEX_MODE=disk` for the indexer service.
-`search_status` reports the active `storage_mode` and database path. The default
-database location is `%PROGRAMDATA%\ClayLeopardLabs\instant-file-search\index.sqlite3`
-on Windows, `/Library/Application Support/instant-file-search/index.sqlite3`
-on macOS, and `/var/lib/instant-file-search/index.sqlite3` on Linux. Override it
-with `INSTANT_FS_INDEX_PATH`.
-
-Content search has its own setting. `INSTANT_FS_CONTENT_INDEX=memory` keeps a
-small content cache in RAM. `INSTANT_FS_CONTENT_INDEX=disk` keeps the content
-index in the SQLite database and works with disk metadata mode. This saves RAM
-but uses more disk space and makes the first content build take longer.
-`INSTANT_FS_CONTENT_INDEX=off` disables content search. The default `auto`
-setting uses memory content with memory metadata and disables content indexing
-with disk metadata. The disk content budget is 2 GB by default and can be
-changed with `INSTANT_FS_CONTENT_DISK_BUDGET` in bytes.
-
-The database is durable. In disk mode, Windows and macOS normally resume after
-a restart by replaying filesystem changes from the saved checkpoint. They do a
-full scan only on the first run, when the checkpoint is missing, or when the
-operating system says the saved change history is no longer available. Linux
-still scans after a restart because its watcher has no persistent history.
-
-### Measured memory and speed
-
-We created the same 100,000 synthetic file records in a fresh Windows x64
-release-build process for each mode. The test measures process RSS after the
-index is built, then runs the same six searches five times. It does not include
-the optional content cache or the operating system file cache.
-
-| Operation | Memory mode | Disk mode |
-|-----------|------------:|----------:|
-| Process RAM after indexing | 81 MiB | 10 MiB |
-| Build index | 169 ms | 1.20 s |
-| Search for one filename, p50 | 8 ms | 26 ms |
-| Search for `*.rs`, p50 | 145 ms | 86 ms |
-| Search for a module name, p50 | 7 ms | 25 ms |
-
-For a repeatable comparison, build the release indexer and run
-`instant-file-search-indexer benchmark memory 500000` and
-`instant-file-search-indexer benchmark synthetic --mode disk --entries 100000 --runs 5 --json`.
+The automatic installer sets this up for you. You don't need to touch any
+settings unless you want to.
 
 ### Search query filters
 
