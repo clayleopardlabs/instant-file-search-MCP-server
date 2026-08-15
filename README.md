@@ -200,28 +200,30 @@ By default, searches are answered in milliseconds straight from memory. Nothing 
 
 ### Choose a storage mode
 
-Instant File Search has two storage options. Memory mode is the usual choice
-and gives you the fastest searches. Disk mode uses much less RAM, which is
-handy on computers that run local AI models. It can take a little longer to
-get started.
+There are two options:
+
+| Option | What it means |
+|--------|---------------|
+| Super duper fast mode | Keeps the file list in RAM. This is the fastest option, but uses more RAM. |
+| RAM saving mode | Keeps the file list on your drive. This uses far less RAM, which is useful when you run local AI models. |
 
 The automatic installer sets this up for you. You don't need to touch any
 settings unless you want to.
 
 ### Speed and RAM usage
 
-Here is what we saw with 100,000 test files on Windows. Disk mode used about
-eight times less RAM, 10 MiB instead of 81 MiB. Finding one filename took about
-three times longer, 26 ms instead of 8 ms. Broad searches can still be faster
-on disk, as the `*.rs` search below shows.
+Here is what we saw with 500,000 test files on Windows. RAM saving mode used
+about 49 times less RAM, 10 MiB instead of 488 MiB. Finding one filename took
+about twice as long, 87 ms instead of 38 ms. Some broad searches were faster
+in RAM saving mode.
 
-| What we measured | Memory mode | Disk mode |
+| What we measured | Super duper fast mode | RAM saving mode |
 |------------------|------------:|----------:|
-| RAM used after indexing | 81 MiB | 10 MiB |
-| Time to build the index | 169 ms | 1.20 s |
-| Find one filename | 8 ms | 26 ms |
-| Find `*.rs` files | 145 ms | 86 ms |
-| Find a module name | 7 ms | 25 ms |
+| RAM used after indexing | 488 MiB | 10 MiB |
+| Time to build the index | 735 ms | 6.84 s |
+| Find one filename | 38 ms | 87 ms |
+| Find `*.rs` files | 515 ms | 340 ms |
+| Find a module name | 36 ms | 92 ms |
 
 ### Search query filters
 
