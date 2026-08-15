@@ -915,7 +915,10 @@ if (`$existing) {
   if (`$LASTEXITCODE -ne 0) { throw "sc.exe create failed for service `$serviceName." }
 }
 `$environment = @("INSTANT_FS_INDEX_MODE=`$indexMode", "INSTANT_FS_CONTENT_INDEX=`$contentMode")
-New-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Services\`$serviceName" -Name Environment -PropertyType MultiString -Value `$environment -Force | Out-Null
+`$serviceKey = "HKLM:\SYSTEM\CurrentControlSet\Services\`$serviceName"
+`$oldEnvironment = @((Get-ItemProperty -Path `$serviceKey -Name Environment -ErrorAction SilentlyContinue).Environment)
+`$preserved = @(`$oldEnvironment | Where-Object { `$_ -and `$_ -notmatch '^INSTANT_FS_(INDEX_MODE|CONTENT_INDEX)=' })
+New-ItemProperty -Path `$serviceKey -Name Environment -PropertyType MultiString -Value (@(`$preserved + `$environment)) -Force | Out-Null
 Start-Service -Name `$serviceName
 `$started = Get-Service -Name `$serviceName
 `$started.WaitForStatus([System.ServiceProcess.ServiceControllerStatus]::Running, [TimeSpan]::FromSeconds(120))

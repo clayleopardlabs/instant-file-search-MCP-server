@@ -112,16 +112,25 @@ impl DiskIndex {
         let budget = disk_content_budget();
         let mut conn = self.conn.lock().unwrap();
         let tx = conn.transaction()?;
-        tx.execute("DELETE FROM file_contents WHERE path=?1", params![key])?;
+        let old_bytes: usize = tx
+            .query_row(
+                "SELECT byte_count FROM file_contents WHERE path=?1",
+                params![key],
+                |r| r.get::<_, i64>(0),
+            )
+            .optional()?
+            .unwrap_or(0)
+            .max(0) as usize;
         let used: usize = tx
             .query_row("SELECT COALESCE(SUM(byte_count), 0) FROM file_contents", [], |r| {
                 r.get::<_, i64>(0)
             })?
             .max(0) as usize;
-        if used.saturating_add(data.len()) > budget {
+        if used.saturating_sub(old_bytes).saturating_add(data.len()) > budget {
             tx.commit()?;
             return Ok(false);
         }
+        tx.execute("DELETE FROM file_contents WHERE path=?1", params![key])?;
         let source_modified: i64 = tx
             .query_row(
                 "SELECT modified FROM files WHERE path_key=?1",
@@ -155,6 +164,10 @@ impl DiskIndex {
             [],
             |r| Ok((r.get::<_, i64>(0)? as usize, r.get::<_, i64>(1)?.max(0) as usize)),
         )?)
+    }
+
+    pub fn content_budget(&self) -> usize {
+        disk_content_budget()
     }
 
     pub fn content_contains(&self, path: &str, needle: &str) -> Result<bool> {

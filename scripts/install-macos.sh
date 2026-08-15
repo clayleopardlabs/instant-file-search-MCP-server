@@ -114,6 +114,7 @@ if [ "$DRY_RUN" -eq 0 ]; then
     install -o root -g wheel -m 0644 "$PLIST_SRC" "/Library/LaunchDaemons/$PLIST_NAME"
     /usr/libexec/PlistBuddy -c "Set :EnvironmentVariables:INSTANT_FS_INDEX_MODE $INDEX_MODE" "/Library/LaunchDaemons/$PLIST_NAME"
     /usr/libexec/PlistBuddy -c "Set :EnvironmentVariables:INSTANT_FS_CONTENT_INDEX $CONTENT_MODE" "/Library/LaunchDaemons/$PLIST_NAME"
+    plutil -lint "/Library/LaunchDaemons/$PLIST_NAME" >/dev/null
     # Remove any previous instance so bootstrap is idempotent.
     launchctl bootout "system/com.clayleopardlabs.instant-file-search" 2>/dev/null || true
     launchctl bootstrap system "/Library/LaunchDaemons/$PLIST_NAME"

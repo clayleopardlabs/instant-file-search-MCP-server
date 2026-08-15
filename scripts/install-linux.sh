@@ -99,7 +99,10 @@ action "write /etc/instant-file-search/indexer.env (index=$INDEX_MODE content=$C
 if [ "$DRY_RUN" -eq 0 ]; then
     [ -f "$UNIT_SRC" ] || { echo "error: unit file missing: $UNIT_SRC" >&2; exit 1; }
     install -d -m 0755 "$(dirname "$ENV_FILE")"
-    printf 'INSTANT_FS_INDEX_MODE=%s\nINSTANT_FS_CONTENT_INDEX=%s\n' "$INDEX_MODE" "$CONTENT_MODE" > "$ENV_FILE"
+    ENV_TMP="${ENV_FILE}.tmp.$$"
+    printf 'INSTANT_FS_INDEX_MODE=%s\nINSTANT_FS_CONTENT_INDEX=%s\n' "$INDEX_MODE" "$CONTENT_MODE" > "$ENV_TMP"
+    chmod 0644 "$ENV_TMP"
+    mv -f "$ENV_TMP" "$ENV_FILE"
     chmod 0644 "$ENV_FILE"
     cp "$UNIT_SRC" "/etc/systemd/system/$UNIT_NAME"
     systemctl daemon-reload

@@ -206,7 +206,7 @@ impl ContentStore {
             "enabled": self.is_enabled(),
             "files": self.len(),
             "bytes": self.total_bytes(),
-            "budget_bytes": if self.is_disk() { crate::disk::DISK_CONTENT_BUDGET_DEFAULT } else { TOTAL_BUDGET },
+            "budget_bytes": if let Some(disk) = &self.disk { disk.content_budget() } else { TOTAL_BUDGET },
         })
     }
 
