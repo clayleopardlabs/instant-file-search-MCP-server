@@ -32,7 +32,7 @@ pub struct EverythingHandler;
 
 #[tool_router]
 impl EverythingHandler {
-    #[tool(description = "Find files instantly across ALL indexed drives. USE THIS instead of glob, grep, or Get-ChildItem. Query examples: '*.rs', 'content:handler', 'dm:lastweek size:>1mb', 'attrib:h'. Supports wildcards, regex, content search, date/size filters, path scoping, and sorting. For broad patterns, call count_files first to gauge size. NOTE: content: search uses a bounded 256MB store and may not cover all files -- use it for targeted searches, not exhaustive scans.")]
+    #[tool(description = "Find files instantly across ALL indexed drives. USE THIS instead of glob, grep, or Get-ChildItem. Query examples: '*.rs', 'content:handler', 'dm:lastweek size:>1mb', 'attrib:h'. Supports wildcards, regex, content search, date/size filters, path scoping, and sorting. For broad patterns, call count_files first to gauge size. NOTE: content: search is bounded. Memory mode uses up to 256 MB of RAM; disk mode can persist content in SQLite. Use it for targeted searches, not exhaustive scans.")]
     async fn find_files(
         &self,
         Parameters(params): Parameters<SearchParams>,
