@@ -103,6 +103,18 @@ impl DiskIndex {
         Ok(())
     }
 
+    /// Remove every cached file-content copy. Content search is a temporary
+    /// cache, never a durable archive. VACUUM releases its pages back to the
+    /// filesystem when the cache held data.
+    pub fn clear_content(&self) -> Result<usize> {
+        let conn = self.conn.lock().unwrap();
+        let removed = conn.execute("DELETE FROM file_contents", [])?;
+        if removed > 0 {
+            conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE); VACUUM;")?;
+        }
+        Ok(removed)
+    }
+
     pub fn content_insert(&self, path: &str, data: &[u8]) -> Result<bool> {
         if data.is_empty() {
             return Ok(false);
@@ -1106,7 +1118,7 @@ mod tests {
     }
 
     #[test]
-    fn content_rows_persist_and_filter_disk_queries() {
+    fn content_rows_can_be_cleared_and_do_not_survive_reopen() {
         let path = test_path();
         let _ = std::fs::remove_file(&path);
         let index = DiskIndex::open(path.clone()).unwrap();
@@ -1122,11 +1134,10 @@ mod tests {
             ..Default::default()
         });
         assert_eq!(result.total, 1);
+        assert_eq!(index.clear_content().unwrap(), 1);
+        assert_eq!(index.content_stats().unwrap(), (0, 0));
         drop(index);
         let reopened = DiskIndex::open(path.clone()).unwrap();
-        assert_eq!(reopened.content_stats().unwrap(), (1, 21));
-        assert!(reopened.content_contains(r"C:\WORK\ALPHA.RS", "hello").unwrap());
-        reopened.content_remove(r"C:\work\alpha.rs").unwrap();
         assert_eq!(reopened.content_stats().unwrap(), (0, 0));
         drop(reopened);
         let _ = std::fs::remove_file(&path);

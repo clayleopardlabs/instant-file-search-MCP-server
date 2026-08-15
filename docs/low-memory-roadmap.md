@@ -39,7 +39,7 @@ their current behavior unless the user explicitly changes a setting.
 - `INSTANT_FS_CONTENT_INDEX` currently accepts true-like values and controls a
   bounded 256 MiB in-memory content cache.
 - Disk metadata mode leaves content indexing off by default. Set
-  `INSTANT_FS_CONTENT_INDEX=disk` to persist a bounded content index in the
+  `INSTANT_FS_CONTENT_INDEX=disk` to use a bounded temporary content cache in the
   same SQLite database.
 - The disk query engine streams rows from SQLite and applies the shared Rust
   filter engine. This protects query parity but scans too many rows for common
@@ -357,7 +357,7 @@ Use milestone 1 JSON results on the same machine and release build.
 - Update the README benchmark table only after rerunning the complete benchmark
   on named hardware. Keep the README free of em dashes.
 
-## Milestone 4: optional persistent content index
+## Milestone 4: optional disk content cache
 
 Goal: allow literal content search without a large resident cache while keeping
 the feature explicitly opt-in.
@@ -374,7 +374,7 @@ Extend `INSTANT_FS_CONTENT_INDEX` while preserving old values:
 
 - `1`, `true`, `on`, or `memory`: bounded in-memory content index;
 - `0`, `false`, or `off`: content indexing disabled;
-- `disk`: persistent disk content index;
+- `disk`: temporary disk content cache;
 - unset or `auto`: memory content for memory metadata mode and off for disk
   metadata mode, preserving current effective behavior.
 
@@ -385,7 +385,7 @@ large path set in memory.
 Add explicit limits such as:
 
 - maximum bytes read from one file;
-- total persistent content bytes;
+- total cached content bytes;
 - background backfill rate or concurrency.
 
 Names may be adjusted during implementation, but defaults and units must be
@@ -408,8 +408,8 @@ documented and reported by `search_status`.
   of matching paths.
 - Apply file metadata changes and content deletion or rename consistently.
   Prefer one transaction where practical.
-- Persist backfill progress. First-time content indexing must run in the
-  background and resume after restart without blocking metadata search.
+- First-time content indexing must run in the background without blocking
+  metadata search. Disk content caches start fresh after restart.
 - Enforce the disk budget deterministically and expose files indexed, bytes
   stored, eligible files, coverage state, and last backfill error.
 - Treat the content database as sensitive. Ensure platform installers create
@@ -420,8 +420,8 @@ documented and reported by `search_status`.
 
 - Match current in-memory content results for quotes, spaces, multiple needles,
   case folding, updates, renames, deletions, and ineligible files.
-- Verify persistence and query results after reopen.
-- Verify backfill interruption and resume.
+- Verify cache cleanup and query results after reopen.
+- Verify backfill interruption.
 - Verify budget enforcement and deterministic eviction.
 - Verify no unbounded path-vector allocation in disk content mode.
 - Verify content remains off by default in disk metadata mode.
@@ -435,7 +435,7 @@ documented and reported by `search_status`.
 - Metadata-only users pay no content database or backfill cost.
 - `content:` works through find, count, and aggregate operations in disk content
   mode with parity against memory content mode.
-- Restart does not require rereading unchanged eligible files.
+- Restart clears the disk content cache before rereading eligible files.
 
 ## Milestone 5: cross-platform installer and service configuration
 
@@ -616,7 +616,7 @@ All work is complete only when:
 3. Disk mode remains the default and shows no material regression.
 4. Disk metadata mode has measured low RAM, faster common queries, durable
    schema handling, and safe corruption recovery.
-5. Disk content is opt-in, persistent, bounded, secure, and does not create an
+5. Disk content is opt-in, temporary, bounded, secure, and does not create an
    unbounded in-memory candidate list.
 6. Windows, Linux, and macOS installers preserve and verify the selected mode.
 7. The full tool/filter matrix and portable crash tests pass.

@@ -205,6 +205,14 @@ fn serve_with_stop(stop: Arc<std::sync::atomic::AtomicBool>) -> Result<()> {
     }
 
     let requested_content = content_mode()?;
+    // Content search is a cache, not a durable copy of the user's files.
+    // Clear any entries left by a crash or a prior disk-content session before
+    // deciding whether this run enables content search.
+    if let Some(backend) = index.disk_backend() {
+        if let Err(error) = backend.clear_content() {
+            tracing::warn!("clear temporary disk content cache: {error:#}");
+        }
+    }
     let content = Arc::new(match requested_content {
         ContentMode::Off => ContentStore::disabled(),
         ContentMode::Memory => ContentStore::new(),
@@ -295,6 +303,16 @@ fn serve_with_stop(stop: Arc<std::sync::atomic::AtomicBool>) -> Result<()> {
 
     let server = platform::PipeServer::with_stop(state, stop)?;
     let result = server.run();
+
+    // Do not retain file text after a clean stop. The metadata index and its
+    // checkpoints remain durable; only the optional content cache is removed.
+    if content.is_disk() {
+        if let Some(backend) = index.disk_backend() {
+            if let Err(error) = backend.clear_content() {
+                tracing::warn!("clear temporary disk content cache on shutdown: {error:#}");
+            }
+        }
+    }
 
     // Flush the WAL after a clean service stop. A crash takes the normal
     // recovery path and does not depend on this best-effort maintenance.

@@ -42,7 +42,7 @@ filesystem map. Runs as the Windows service `instant-file-search-indexer`
   and falls back to a full scan if the checkpoint is missing or invalid.
 - **Content index:** `content:` searches use the bounded in-memory cache by
   default in memory metadata mode. Disk metadata mode leaves content indexing
-  off by default, or can use `INSTANT_FS_CONTENT_INDEX=disk` to persist
+  off by default, or can use `INSTANT_FS_CONTENT_INDEX=disk` for a temporary
   lowercased content in the same SQLite database. Disk content is bounded by
   `INSTANT_FS_CONTENT_DISK_BUDGET` and is updated by the same filesystem
   watchers as metadata.

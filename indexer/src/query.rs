@@ -29,7 +29,7 @@ pub struct QueryOptions {
     /// Populated by the pipe layer from the ContentStore.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub content_paths: Option<Vec<String>>,
-    /// Content needles resolved by a persistent disk content backend. This is
+    /// Content needles resolved by a temporary disk content backend. This is
     /// kept out of the wire format and translated into SQLite predicates.
     #[serde(default, skip_serializing, skip_deserializing)]
     pub content_needles: Option<Vec<String>>,
