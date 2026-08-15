@@ -18,6 +18,12 @@ Now your agents do too.
 
 ![](demo.gif)
 
+## Real life examples
+
+I screwed up and moved all my LM Studio models to the wrong folder, stopped copying halfway through, and messed up the entire directory structure. I didn't know which files to save or where to move them. Using Instant File Search tools, the agent quickly found all the files and determined how to fix the mess.
+
+![Agent recovering misplaced LM Studio models](Reallifeexample_lmstudioModels.gif)
+
 
 
 
