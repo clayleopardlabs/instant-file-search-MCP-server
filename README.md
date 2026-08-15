@@ -69,11 +69,8 @@ Linux:
 sudo bash scripts/install-linux.sh
 ```
 
-To use the low-RAM mode and keep content search on disk, run:
-
-```sh
-sudo bash scripts/install-linux.sh --index-mode disk --content-mode disk
-```
+The automatic installer defaults to RAM saving mode and keeps content search
+enabled.
 
 ## MacOS - Automatic installer 
 
@@ -263,7 +260,7 @@ Your agent has endless options for narrowing down a search:
 | `metric:` | `metric:size:>1000kb` | Switch size interpretation from JEDEC (1024-based) to decimal (1000-based) |
 | `wholeword:` | `wholeword:foo`, `ww:foo` | Match whole word only |
 | `" "` | `"exact phrase"` | Match an exact phrase |
-| `content:` | `content:"fn main"` | Match file contents. Backed by a bounded 256 MB store, so coverage is a subset of files; use it for targeted searches, not exhaustive counts |
+| `content:` | `content:"fn main"` | Match file contents. It uses a bounded local cache, so coverage is a subset of files; use it for targeted searches, not exhaustive counts |
 
 Noisy folders such as `node_modules`, `.git`, and `WinSxS` are skipped by default so results stay useful. When a task genuinely requires a complete inventory, the agent can include those folders with `include_all=true`. Folder scoping also accepts ordinary paths such as `C:/Users`; the engine normalizes path separators for the agent.
 
