@@ -10,7 +10,9 @@
 
 
 
-Windows, MacOS and Linux already know where every last file is. They know their names and how old they are and when you renamed or moved something. They know exactly where they are without searching folder by folder. Now your agents do too.
+Windows, MacOS and Linux already know where every last file is.
+
+Now your agents do too.
 
 
 
