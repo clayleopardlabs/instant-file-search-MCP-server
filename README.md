@@ -200,6 +200,8 @@ By default, searches are answered in milliseconds straight from memory. Nothing 
 
 ## Two Modes
 
+The usage difference is negligible so it defaults to the RAM saving version when it installs. 
+
 Super duper fast mode is useful though when you have an old or slow hard drive or have to do a ton of file searching. It keeps the file list in RAM so you give up about half a gig of RAM for the speed. (The fall back engine only operates in RAM mode btw)
 
 ![Super duper fast mode and RAM saving mode](docs/images/storage-mode-options.png)
@@ -220,7 +222,7 @@ in RAM saving mode.
 | Find a module name | 36 ms | 92 ms |
 
 
-As you can see, aside from the first index build which only happens once, the difference is negligible so it defaults to the RAM saving version when it installs. 
+As you can see, aside from the first index build which only happens once there's no real reason to use the super duper fast mode. Unless... you're going to be running literally hundreds of thousands of searches. And since every search is millions of files in milliseconds, you'd basically only want the super duper fast mode if you're the NSA.
 
 ### Old hard drives and huge file collections
 
