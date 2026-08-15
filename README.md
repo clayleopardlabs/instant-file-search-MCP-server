@@ -5,7 +5,7 @@
 
 
 
-# Search every file on your computer. All 3 million of them. In under a second.
+# Search all 3 million files on your pc. In milliseconds.
 
 
 
