@@ -231,8 +231,8 @@ searches out of the hard drive after the index is built.
 
 For the 500,000-file test, RAM saving mode moved about 8.3 GiB while building
 its database. On a 4,500 RPM hard drive, that works out to about 90 to 180
-seconds of data transfer before the drive's extra seek time. We need a real
-hard-drive run to measure the final number. See the [technical details](docs/technical-details.md#storage-mode-performance-on-a-slow-hard-drive) for the calculation and large-server limits.
+seconds of data transfer before the drive's extra seek time. See the
+[technical details](docs/technical-details.md#storage-mode-performance-on-a-slow-hard-drive) for the calculation and large-server limits.
 
 ### Search query filters
 
