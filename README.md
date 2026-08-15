@@ -222,6 +222,18 @@ in RAM saving mode.
 | Find `*.rs` files | 515 ms | 340 ms |
 | Find a module name | 36 ms | 92 ms |
 
+### Old hard drives and huge file collections
+
+The numbers above are from an NVMe SSD. RAM saving mode is the right choice
+for most computers and large file collections. Super duper fast mode is useful
+when you have a slow hard drive and enough spare RAM for the index. It keeps
+searches out of the hard drive after the index is built.
+
+For the 500,000-file test, RAM saving mode moved about 8.3 GiB while building
+its database. On a 4,500 RPM hard drive, that works out to about 90 to 180
+seconds of data transfer before the drive's extra seek time. We need a real
+hard-drive run to measure the final number. See the [technical details](docs/technical-details.md#storage-mode-performance-on-a-slow-hard-drive) for the calculation and large-server limits.
+
 ### Search query filters
 
 Your agent has endless options for narrowing down a search:

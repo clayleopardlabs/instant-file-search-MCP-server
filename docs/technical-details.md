@@ -11,6 +11,16 @@ No separate programs to install. This tool brings its own search engine, so it w
 
 Searches are local. RAM saving mode stores the index on disk, while super duper fast mode keeps it in RAM. Nothing leaves your machine.
 
+## Storage-mode performance on a slow hard drive
+
+The published 500,000-file benchmark ran on NVMe storage. It is not an HDD benchmark.
+
+The RAM saving run recorded 6,159,225,044 bytes read and 2,752,666,044 bytes written while building its SQLite database. That is 8,911,891,088 bytes, or about 8.3 GiB of I/O. A 4,500 RPM hard drive that manages 50 to 100 MB/s of sustained transfer would need roughly 90 to 180 seconds for that transfer alone. Random reads, seeks, and SQLite's write pattern will add time, so a few minutes is a more realistic expectation for the first 500,000-file build.
+
+Super duper fast mode avoids writing that SQLite database, but it still has to read the filesystem to build the index. Once it is built, its searches stay in RAM. The 500,000-file run used 488 MiB, or roughly 1 MiB per 1,000 synthetic file records. Real paths and metadata vary, so treat that as a planning estimate, not a capacity guarantee.
+
+For a very large server, file count matters more than the total number of bytes stored. A petabyte made of a few large files is easy to index. A petabyte made of billions of small files is not. RAM saving mode is the only practical choice for those catalogs, but this project's generic disk queries can still stream many SQLite rows. It is not yet a petabyte-scale search architecture without further sharding and query indexes.
+
 ## Detailed Installation Reference
 
 The one-line installer command shown in Install on Windows is the recommended method. Notes for agents and power users:
