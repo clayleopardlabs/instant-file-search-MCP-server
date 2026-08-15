@@ -44,7 +44,7 @@ if ((-not $IndexMode) -and (Test-Path -LiteralPath $statePath)) {
 if ((-not $ContentMode) -and (Test-Path -LiteralPath $statePath)) {
     try { $ContentMode = (Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json).content_mode } catch {}
 }
-if (-not $IndexMode) { $IndexMode = 'memory' }
+if (-not $IndexMode) { $IndexMode = 'disk' }
 if (-not $ContentMode) { $ContentMode = 'auto' }
 if ($IndexMode -notin @('memory', 'disk')) { throw "IndexMode must be memory or disk." }
 if ($ContentMode -notin @('auto', 'off', 'memory', 'disk')) { throw "ContentMode must be auto, off, memory, or disk." }

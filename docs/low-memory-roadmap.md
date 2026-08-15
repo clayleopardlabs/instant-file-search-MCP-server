@@ -26,12 +26,12 @@ implemented in the original list order.
 5. Update installers after all runtime configuration values are stable.
 6. Finish with process-restart, crash-window, and privileged platform tests.
 
-Memory metadata mode must remain the default. Existing installations must keep
+Disk metadata mode is the default. Existing installations must keep
 their current behavior unless the user explicitly changes a setting.
 
 ## Current behavior and baseline
 
-- `INSTANT_FS_INDEX_MODE=memory` is the default.
+- `INSTANT_FS_INDEX_MODE=disk` is the default.
 - `INSTANT_FS_INDEX_MODE=disk` stores file metadata in SQLite.
 - Disk metadata mode stores durable Windows USN and macOS FSEvents checkpoints.
 - Linux still performs a full metadata walk after service restart because
@@ -451,7 +451,7 @@ feat: configure index modes in platform installers
 ### Shared behavior
 
 - Expose validated installer choices for metadata mode and content mode.
-- Default new installs to metadata `memory` and content `auto`.
+- Default new installs to metadata `disk` and content `auto`.
 - On upgrade, preserve the installed choice when the user does not specify a
   new value.
 - Record the selected values in installation state where that platform has
@@ -613,7 +613,7 @@ All work is complete only when:
 
 1. Six milestone commits have each been tested and pushed independently.
 2. Existing MCP schemas remain compatible.
-3. Memory mode remains the default and shows no material regression.
+3. Disk mode remains the default and shows no material regression.
 4. Disk metadata mode has measured low RAM, faster common queries, durable
    schema handling, and safe corruption recovery.
 5. Disk content is opt-in, persistent, bounded, secure, and does not create an

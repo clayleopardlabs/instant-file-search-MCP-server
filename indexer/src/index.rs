@@ -79,10 +79,10 @@ impl FileIndex {
         }
     }
 
-    /// Select the storage backend. `memory` remains the default for backward
-    /// compatibility; `disk` keeps the live metadata in SQLite instead.
+    /// Select the storage backend. `disk` is the default and keeps the live
+    /// metadata in SQLite; `memory` keeps it in RAM for the fastest searches.
     pub fn from_env() -> anyhow::Result<Self> {
-        let mode = std::env::var("INSTANT_FS_INDEX_MODE").unwrap_or_else(|_| "memory".into());
+        let mode = std::env::var("INSTANT_FS_INDEX_MODE").unwrap_or_else(|_| "disk".into());
         if mode.eq_ignore_ascii_case("memory") {
             return Ok(Self::new());
         }

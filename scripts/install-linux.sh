@@ -51,7 +51,7 @@ while [ "$i" -le "$#" ]; do
     esac
     i=$((i + 1))
 done
-: "${INDEX_MODE:=memory}"
+: "${INDEX_MODE:=disk}"
 : "${CONTENT_MODE:=auto}"
 case "$INDEX_MODE" in memory|disk) ;; *) echo "error: --index-mode must be memory or disk" >&2; exit 2 ;; esac
 case "$CONTENT_MODE" in auto|off|memory|disk) ;; *) echo "error: --content-mode must be auto, off, memory, or disk" >&2; exit 2 ;; esac

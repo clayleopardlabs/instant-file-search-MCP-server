@@ -200,7 +200,9 @@ By default, searches are answered in milliseconds straight from memory. Nothing 
 
 ### Choose a storage mode
 
-There are two options:
+Instant File Search defaults to RAM saving mode. It stays in the mode it was
+installed with. Super duper fast mode is available when you have plenty of RAM
+and want every bit of speed.
 
 ![Super duper fast mode and RAM saving mode](docs/images/storage-mode-options.png)
 
