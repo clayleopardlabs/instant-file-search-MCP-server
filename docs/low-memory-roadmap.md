@@ -36,11 +36,11 @@ their current behavior unless the user explicitly changes a setting.
 - Disk metadata mode stores durable Windows USN and macOS FSEvents checkpoints.
 - Linux still performs a full metadata walk after service restart because
   fanotify has no persistent event history.
-- `INSTANT_FS_CONTENT_INDEX` currently accepts true-like values and controls a
-  bounded 256 MiB in-memory content cache.
-- Disk metadata mode leaves content indexing off by default. Set
-  `INSTANT_FS_CONTENT_INDEX=disk` to use a bounded temporary content cache in the
-  same SQLite database.
+- `INSTANT_FS_CONTENT_INDEX=auto` enables a bounded content cache. It uses up
+  to 256 MiB in memory metadata mode and temporary SQLite storage in disk
+  metadata mode.
+- Disk metadata mode uses a bounded temporary content cache in the same SQLite
+  database by default.
 - The disk query engine streams rows from SQLite and applies the shared Rust
   filter engine. This protects query parity but scans too many rows for common
   filters.
@@ -375,8 +375,8 @@ Extend `INSTANT_FS_CONTENT_INDEX` while preserving old values:
 - `1`, `true`, `on`, or `memory`: bounded in-memory content index;
 - `0`, `false`, or `off`: content indexing disabled;
 - `disk`: temporary disk content cache;
-- unset or `auto`: memory content for memory metadata mode and off for disk
-  metadata mode, preserving current effective behavior.
+- unset or `auto`: memory content for memory metadata mode and temporary disk
+  content for disk metadata mode.
 
 Disk content mode should initially require disk metadata mode. Reject the
 unsupported combination with a clear error rather than silently allocating a
@@ -424,7 +424,8 @@ documented and reported by `search_status`.
 - Verify backfill interruption.
 - Verify budget enforcement and deterministic eviction.
 - Verify no unbounded path-vector allocation in disk content mode.
-- Verify content remains off by default in disk metadata mode.
+- Verify automatic content indexing uses the temporary disk cache in disk
+  metadata mode.
 - Verify search status accurately reports disabled, memory, building, ready,
   limited, and failed states.
 

@@ -226,7 +226,10 @@ fn serve_with_stop(stop: Arc<std::sync::atomic::AtomicBool>) -> Result<()> {
             if index.storage_mode() == "memory" {
                 ContentStore::new()
             } else {
-                ContentStore::disabled()
+                let backend = index
+                    .disk_backend()
+                    .context("disk content mode requires a disk metadata backend")?;
+                ContentStore::disk(backend)
             }
         }
     });
