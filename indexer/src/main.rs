@@ -10,6 +10,7 @@
 //!   help     — usage
 
 mod content;
+mod benchmark;
 mod disk;
 mod index;
 mod platform;
@@ -75,7 +76,7 @@ fn main() -> Result<()> {
             print!("{out}");
             Ok(())
         }
-        "benchmark" => benchmark(args),
+        "benchmark" => benchmark::run(args),
         #[cfg(windows)]
         "service" => service_dispatcher::start(SERVICE_NAME, service_main)
             .context("failed to start service dispatcher"),
@@ -276,112 +277,6 @@ fn serve_with_stop(stop: Arc<std::sync::atomic::AtomicBool>) -> Result<()> {
     let _ = sd_notify::notify(false, &[sd_notify::NotifyState::Stopping]);
 
     result
-}
-
-/// Compare the index metadata backends without accessing the live filesystem.
-/// It is intentionally a separate process per mode so allocator retention in
-/// the memory run cannot inflate the disk run's RSS.
-fn benchmark(mut args: impl Iterator<Item = String>) -> Result<()> {
-    let mode = args.next().unwrap_or_else(|| "memory".to_string());
-    let entries: usize = args
-        .next()
-        .as_deref()
-        .unwrap_or("250000")
-        .parse()
-        .context("benchmark entry count must be a positive integer")?;
-    if entries == 0 {
-        anyhow::bail!("benchmark entry count must be greater than zero");
-    }
-    let db_path = std::env::temp_dir().join(format!(
-        "instant-file-search-benchmark-{}-{}.sqlite3",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)?
-            .as_nanos()
-    ));
-    let index = FileIndex::for_benchmark(&mode, db_path.clone())?;
-    let started = std::time::Instant::now();
-    let mut files = Vec::with_capacity(entries);
-    for n in 0..entries {
-        let mut entry = types::IndexedFile::new(
-            format!(
-                r"C:\benchmark\workspace-{:03}\src\module-{:04}\file-{:08}.rs",
-                n % 1000,
-                n % 10_000,
-                n
-            ),
-            (n % 1_048_576) as u64,
-            n as i64,
-            n as i64,
-            n as i64,
-            false,
-            n as u64,
-        );
-        entry.attributes = 0x80;
-        files.push(entry);
-    }
-    index.replace(files);
-    let build_ms = started.elapsed().as_secs_f64() * 1_000.0;
-    // Let temporary scan input be dropped and report the settled resident set.
-    std::thread::sleep(std::time::Duration::from_millis(250));
-    let rss_bytes = resident_bytes();
-
-    let queries = ["file-00000123", "*.rs", "module-0042"];
-    let mut query_ms = Vec::new();
-    let mut matched = 0usize;
-    for query in queries {
-        let opts = query::QueryOptions {
-            query: query.to_string(),
-            max_results: 100,
-            ..Default::default()
-        };
-        let q_started = std::time::Instant::now();
-        let result = index.search(&opts);
-        query_ms.push(q_started.elapsed().as_secs_f64() * 1_000.0);
-        matched = matched.saturating_add(result.total);
-    }
-    let _ = std::fs::remove_file(&db_path);
-    let _ = std::fs::remove_file(db_path.with_extension("sqlite3-wal"));
-    let _ = std::fs::remove_file(db_path.with_extension("sqlite3-shm"));
-    println!(
-        "{}",
-        serde_json::json!({
-            "mode": mode,
-            "entries": entries,
-            "build_ms": build_ms,
-            "rss_bytes_after_build": rss_bytes,
-            "queries_ms": query_ms,
-            "matched_total": matched,
-            "content_cache_included": false,
-        })
-    );
-    Ok(())
-}
-
-#[cfg(windows)]
-fn resident_bytes() -> u64 {
-    use windows::Win32::System::ProcessStatus::{GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS_EX};
-    use windows::Win32::System::Threading::GetCurrentProcess;
-    let mut counters = PROCESS_MEMORY_COUNTERS_EX::default();
-    counters.cb = std::mem::size_of::<PROCESS_MEMORY_COUNTERS_EX>() as u32;
-    if unsafe {
-        GetProcessMemoryInfo(
-            GetCurrentProcess(),
-            &mut counters as *mut _ as *mut _,
-            counters.cb,
-        )
-    }
-    .is_ok()
-    {
-        counters.WorkingSetSize as u64
-    } else {
-        0
-    }
-}
-
-#[cfg(not(windows))]
-fn resident_bytes() -> u64 {
-    0
 }
 
 #[cfg(test)]
