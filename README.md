@@ -172,7 +172,7 @@ The practical result is a different workflow: agents can discover, measure, inve
 
 ![Five MCP tools at a glance](docs/images/five-tool-capabilities.png)
 
-You agent gets 5 new tools:
+But they usually just use the first two:
 
 | Tool | What it does |
 |------|--------------|
@@ -234,7 +234,7 @@ its database. On a 4,500 RPM hard drive, that works out to about 90 to 180
 seconds of data transfer before the drive's extra seek time. See the
 [technical details](docs/technical-details.md#storage-mode-performance-on-a-slow-hard-drive) for the calculation and large-server limits.
 
-### Search query filters
+## Search query filters
 
 Your agent has endless options for narrowing down a search:
 
