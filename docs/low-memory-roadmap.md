@@ -623,7 +623,7 @@ All work is complete only when:
 ## Progress checklist
 
 - [x] Milestone 1 committed and pushed
-- [ ] Milestone 2 committed and pushed
+- [x] Milestone 2 committed and pushed
 - [ ] Milestone 3 committed and pushed
 - [ ] Milestone 4 committed and pushed
 - [ ] Milestone 5 committed and pushed

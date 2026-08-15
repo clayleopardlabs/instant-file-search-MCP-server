@@ -48,6 +48,10 @@ filesystem map. Runs as the Windows service `instant-file-search-indexer`
 - **Query engine:** case-insensitive substring matching (Everything semantics),
   optional path scope / exclude paths / size & date filters / sort, with a
   bounded top-N selection so `*` on millions of matches stays sub-second.
+  Disk mode adds versioned canonical path, name, and extension columns with
+  conservative SQLite candidate filters for common path, type, size, and
+  wildcard queries. The shared Rust matcher still verifies every candidate;
+  unsupported grammar falls back to the full streamed scan.
 - **Named pipe server:** per-connection request/response JSON over
   `\\.\pipe\instant-file-search-indexer`, newline-terminated responses,
   keep-alive until the client disconnects. The SYSTEM-created pipe grants

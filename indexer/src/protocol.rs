@@ -393,7 +393,10 @@ mod tests {
         );
         let status_data = status.data.unwrap();
         assert_eq!(status_data["storage_mode"], "disk");
-        assert_eq!(status_data["disk_health"]["schema_version"], 1);
+        assert_eq!(
+            status_data["disk_health"]["schema_version"],
+            crate::disk::SCHEMA_VERSION
+        );
         drop(state);
         drop(index);
         let _ = std::fs::remove_file(&path);

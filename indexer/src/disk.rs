@@ -10,7 +10,7 @@ use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
-use rusqlite::{params, Connection, ErrorCode, OptionalExtension, Row};
+use rusqlite::{params, params_from_iter, Connection, ErrorCode, OptionalExtension, Row};
 use serde::Serialize;
 
 use crate::query::{self, AggregateOptions, AggregateResult, QueryOptions, QueryResult};
@@ -22,7 +22,7 @@ pub struct DiskIndex {
     recovery_reason: Option<String>,
 }
 
-pub const SCHEMA_VERSION: i64 = 1;
+pub const SCHEMA_VERSION: i64 = 2;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct DiskHealth {
@@ -260,7 +260,7 @@ impl DiskIndex {
             .optional()?
             .unwrap_or(0) as u64;
         let changed: Vec<IndexedFile> = {
-            let mut stmt = tx.prepare("SELECT path,size,created,modified,accessed,is_dir,attributes,file_ref,parent_ref,own_name FROM files WHERE path=?1 OR path LIKE ?2 OR path LIKE ?3")?;
+            let mut stmt = tx.prepare("SELECT path,size,created,modified,accessed,is_dir,attributes,file_ref,parent_ref,own_name,name_key,path_key,extension,excluded FROM files WHERE path=?1 OR path LIKE ?2 OR path LIKE ?3")?;
             let rows = stmt.query_map(
                 params![
                     old_prefix,
@@ -306,11 +306,13 @@ impl DiskIndex {
 
     pub fn search(&self, opts: &QueryOptions) -> QueryResult {
         let conn = self.conn.lock().unwrap();
-        let mut stmt = match conn.prepare("SELECT path,size,created,modified,accessed,is_dir,attributes,file_ref,parent_ref,own_name FROM files") {
+        let plan = candidate_plan(opts);
+        let sql = format!("SELECT path,size,created,modified,accessed,is_dir,attributes,file_ref,parent_ref,own_name,name_key,path_key,extension,excluded FROM files{}", plan.where_sql);
+        let mut stmt = match conn.prepare(&sql) {
             Ok(s) => s,
             Err(e) => { tracing::error!("disk index query failed: {e}"); return QueryResult::default(); }
         };
-        let rows = stmt.query_map([], entry_from_row);
+        let rows = stmt.query_map(params_from_iter(plan.params.iter()), entry_from_row);
         match rows {
             Ok(rows) => query::search_iter(
                 rows.filter_map(|row| row.map_err(|e| tracing::warn!("disk index row: {e}")).ok()),
@@ -325,11 +327,13 @@ impl DiskIndex {
 
     pub fn aggregate(&self, opts: &AggregateOptions) -> AggregateResult {
         let conn = self.conn.lock().unwrap();
-        let mut stmt = match conn.prepare("SELECT path,size,created,modified,accessed,is_dir,attributes,file_ref,parent_ref,own_name FROM files") {
+        let plan = candidate_plan_for_aggregate(opts);
+        let sql = format!("SELECT path,size,created,modified,accessed,is_dir,attributes,file_ref,parent_ref,own_name,name_key,path_key,extension,excluded FROM files{}", plan.where_sql);
+        let mut stmt = match conn.prepare(&sql) {
             Ok(s) => s,
             Err(e) => { tracing::error!("disk index aggregate failed: {e}"); return AggregateResult::default(); }
         };
-        let result = match stmt.query_map([], entry_from_row) {
+        let result = match stmt.query_map(params_from_iter(plan.params.iter()), entry_from_row) {
             Ok(rows) => query::aggregate_iter(
                 rows.filter_map(|row| row.map_err(|e| tracing::warn!("disk index row: {e}")).ok()),
                 opts,
@@ -371,7 +375,11 @@ fn open_and_migrate(path: &Path) -> Result<Connection> {
                 modified INTEGER NOT NULL,
                 accessed INTEGER NOT NULL,
                 is_dir INTEGER NOT NULL,
-                attributes INTEGER NOT NULL
+                attributes INTEGER NOT NULL,
+                name_key TEXT NOT NULL DEFAULT '',
+                path_key TEXT NOT NULL DEFAULT '',
+                extension TEXT,
+                excluded INTEGER NOT NULL DEFAULT 0
              );
              CREATE INDEX IF NOT EXISTS files_ref ON files(volume, file_ref);
              CREATE TABLE IF NOT EXISTS checkpoints (
@@ -379,7 +387,31 @@ fn open_and_migrate(path: &Path) -> Result<Connection> {
                 journal_id INTEGER NOT NULL,
                 cursor INTEGER NOT NULL
              );
-             PRAGMA user_version = 1;",
+             SELECT 1;",
+        )?;
+        ensure_derived_columns(&tx)?;
+        create_derived_indexes(&tx)?;
+        populate_derived_columns(&tx)?;
+        tx.execute_batch("PRAGMA user_version = 2;")?;
+        tx.commit()?;
+    } else if current == 1 {
+        let tx = conn.unchecked_transaction()?;
+        tx.execute_batch(
+            "ALTER TABLE files ADD COLUMN name_key TEXT NOT NULL DEFAULT '';
+             ALTER TABLE files ADD COLUMN path_key TEXT NOT NULL DEFAULT '';
+             ALTER TABLE files ADD COLUMN extension TEXT;
+             ALTER TABLE files ADD COLUMN excluded INTEGER NOT NULL DEFAULT 0;
+             CREATE INDEX IF NOT EXISTS files_path_key ON files(path_key);
+             CREATE INDEX IF NOT EXISTS files_size ON files(size);
+             CREATE INDEX IF NOT EXISTS files_modified ON files(modified);
+             CREATE INDEX IF NOT EXISTS files_type ON files(is_dir);
+             UPDATE files SET name_key=lower(own_name), path_key=lower(path),
+               extension=CASE
+                 WHEN is_dir != 0 OR instr(own_name, '.') = 0 THEN NULL
+                 WHEN instr(substr(own_name, instr(own_name, '.') + 1), '.') != 0 THEN NULL
+                 ELSE lower(substr(own_name, instr(own_name, '.') + 1))
+               END;
+             PRAGMA user_version = 2;",
         )?;
         tx.commit()?;
     }
@@ -431,9 +463,222 @@ fn sidecar_bytes(path: &Path) -> u64 {
     std::fs::metadata(path).map(|metadata| metadata.len()).unwrap_or(0)
 }
 
-const INSERT_SQL: &str = "INSERT INTO files(path,volume,file_ref,parent_ref,own_name,size,created,modified,accessed,is_dir,attributes)
- VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)
- ON CONFLICT(path) DO UPDATE SET volume=excluded.volume,file_ref=excluded.file_ref,parent_ref=excluded.parent_ref,own_name=excluded.own_name,size=excluded.size,created=excluded.created,modified=excluded.modified,accessed=excluded.accessed,is_dir=excluded.is_dir,attributes=excluded.attributes";
+fn ensure_derived_columns(tx: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
+    let columns: std::collections::HashSet<String> = {
+        let mut stmt = tx.prepare("PRAGMA table_info(files)")?;
+        let rows = stmt.query_map([], |row| row.get::<_, String>(1))?;
+        rows.collect::<rusqlite::Result<_>>()?
+    };
+    for statement in [
+        ("name_key", "ALTER TABLE files ADD COLUMN name_key TEXT NOT NULL DEFAULT ''"),
+        ("path_key", "ALTER TABLE files ADD COLUMN path_key TEXT NOT NULL DEFAULT ''"),
+        ("extension", "ALTER TABLE files ADD COLUMN extension TEXT"),
+        ("excluded", "ALTER TABLE files ADD COLUMN excluded INTEGER NOT NULL DEFAULT 0"),
+    ] {
+        if !columns.contains(statement.0) {
+            tx.execute_batch(statement.1)?;
+        }
+    }
+    Ok(())
+}
+
+fn create_derived_indexes(tx: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
+    tx.execute_batch(
+        "CREATE INDEX IF NOT EXISTS files_path_key ON files(path_key);
+         CREATE INDEX IF NOT EXISTS files_size ON files(size);
+         CREATE INDEX IF NOT EXISTS files_modified ON files(modified);
+         CREATE INDEX IF NOT EXISTS files_type ON files(is_dir);",
+    )
+}
+
+fn populate_derived_columns(tx: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
+    tx.execute_batch(
+        "UPDATE files SET name_key=lower(own_name), path_key=lower(path),
+           extension=CASE
+             WHEN is_dir != 0 OR instr(own_name, '.') = 0 THEN NULL
+             WHEN instr(substr(own_name, instr(own_name, '.') + 1), '.') != 0 THEN NULL
+             ELSE lower(substr(own_name, instr(own_name, '.') + 1))
+           END;",
+    )
+}
+
+struct CandidatePlan {
+    where_sql: String,
+    params: Vec<rusqlite::types::Value>,
+}
+
+fn candidate_plan(opts: &QueryOptions) -> CandidatePlan {
+    let mut clauses = Vec::new();
+    let mut params = Vec::new();
+
+    if !opts.match_case {
+        if let Some(scope) = ascii_path_key(opts.path.as_deref()) {
+            let escaped = escape_like(&scope);
+            clauses.push("(path_key = ? OR path_key LIKE ? ESCAPE '\\')".to_string());
+            params.push(rusqlite::types::Value::Text(scope));
+            params.push(rusqlite::types::Value::Text(format!("{escaped}\\\\%")));
+        }
+        if let Some(exclude) = opts.exclude_path.as_deref() {
+            let mut excluded = Vec::new();
+            for part in exclude.split(';').filter_map(|part| ascii_path_key(Some(part.trim()))) {
+                let escaped = escape_like(&part);
+                excluded.push("(path_key = ? OR path_key LIKE ? ESCAPE '\\')".to_string());
+                params.push(rusqlite::types::Value::Text(part));
+                params.push(rusqlite::types::Value::Text(format!("{escaped}\\\\%")));
+            }
+            if !excluded.is_empty() {
+                clauses.push(format!("NOT ({})", excluded.join(" OR ")));
+            }
+        }
+    }
+
+    if !opts.regex && !opts.match_case && !opts.match_whole_word {
+        let query = opts.query.trim();
+        if !query.is_empty() && !query.contains(['|', '<', '>']) {
+            for token in query.split_whitespace() {
+                if token.starts_with('!') || token.starts_with("not:") || token.starts_with("or:") {
+                    continue;
+                }
+                let (kind, value) = token.split_once(':').unwrap_or(("", token));
+                match kind.to_ascii_lowercase().as_str() {
+                    "file" => {
+                        clauses.push("is_dir = 0".to_string());
+                    }
+                    "folder" => {
+                        clauses.push("is_dir != 0".to_string());
+                    }
+                    "ext" => add_extension_pattern(&mut clauses, &mut params, value),
+                    "size" => add_size_constraint(&mut clauses, &mut params, value),
+                    "content" | "path" | "dm" | "dc" | "da" | "attrib" | "len" | "frn" => {}
+                    "" => add_like_pattern(&mut clauses, &mut params, value),
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    CandidatePlan {
+        where_sql: if clauses.is_empty() {
+            String::new()
+        } else {
+            format!(" WHERE {}", clauses.join(" AND "))
+        },
+        params,
+    }
+}
+
+fn candidate_plan_for_aggregate(opts: &AggregateOptions) -> CandidatePlan {
+    candidate_plan(&QueryOptions {
+        query: opts.query.clone(),
+        path: opts.path.clone(),
+        exclude_path: opts.exclude_path.clone(),
+        include_all: opts.include_all,
+        match_path: opts.match_path,
+        regex: opts.regex,
+        match_case: opts.match_case,
+        match_whole_word: opts.match_whole_word,
+        content_paths: opts.content_paths.clone(),
+        ..Default::default()
+    })
+}
+
+fn ascii_path_key(path: Option<&str>) -> Option<String> {
+    let path = path?.trim();
+    if path.is_empty() {
+        return None;
+    }
+    let normalized = crate::platform::normalize_path(path);
+    let canonical = crate::platform::canonical_key(&normalized);
+    let key = crate::platform::trim_trailing_sep(&canonical);
+    key.is_ascii().then(|| key.to_string())
+}
+
+fn escape_like(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_")
+}
+
+fn add_like_pattern(clauses: &mut Vec<String>, params: &mut Vec<rusqlite::types::Value>, pattern: &str) {
+    if let Some(extension) = pattern.strip_prefix("*.") {
+        if !extension.is_empty() && extension.is_ascii() && !extension.contains(['*', '?', '[', '#']) {
+            clauses.push("(extension = ? OR is_dir != 0 OR (extension IS NULL AND path_key LIKE ? ESCAPE '\\'))".to_string());
+            params.push(rusqlite::types::Value::Text(extension.to_ascii_lowercase()));
+            params.push(rusqlite::types::Value::Text(format!("%.{}", escape_like(&extension.to_ascii_lowercase()))));
+            return;
+        }
+    }
+    let Some(like) = wildcard_like(pattern) else {
+        return;
+    };
+    clauses.push("path_key LIKE ? ESCAPE '\\'".to_string());
+    params.push(rusqlite::types::Value::Text(format!("%{like}%")));
+}
+
+fn add_extension_pattern(clauses: &mut Vec<String>, params: &mut Vec<rusqlite::types::Value>, extension: &str) {
+    let extension = extension.trim_start_matches('.');
+    if extension.is_empty() || !extension.is_ascii() || extension.contains(['*', '?', '[', '#']) {
+        return;
+    }
+    clauses.push("(extension = ? OR is_dir != 0 OR (extension IS NULL AND path_key LIKE ? ESCAPE '\\'))".to_string());
+    params.push(rusqlite::types::Value::Text(extension.to_ascii_lowercase()));
+    params.push(rusqlite::types::Value::Text(format!("%.{}", escape_like(&extension.to_ascii_lowercase()))));
+}
+
+fn wildcard_like(pattern: &str) -> Option<String> {
+    if !pattern.is_ascii() || pattern.contains(['\\', '/', '[', ']', '#']) {
+        return None;
+    }
+    let mut out = String::new();
+    for ch in pattern.chars() {
+        match ch {
+            '*' => out.push('%'),
+            '?' => out.push('_'),
+            '%' | '_' => {
+                out.push('\\');
+                out.push(ch);
+            }
+            _ => out.push(ch.to_ascii_lowercase()),
+        }
+    }
+    Some(out)
+}
+
+fn add_size_constraint(clauses: &mut Vec<String>, params: &mut Vec<rusqlite::types::Value>, value: &str) {
+    let (operator, number) = if let Some(value) = value.strip_prefix(">=") {
+        (">=", value)
+    } else if let Some(value) = value.strip_prefix("<=") {
+        ("<=", value)
+    } else if let Some(value) = value.strip_prefix('>') {
+        (">", value)
+    } else if let Some(value) = value.strip_prefix('<') {
+        ("<", value)
+    } else if let Some(value) = value.strip_prefix('=') {
+        ("=", value)
+    } else {
+        return;
+    };
+    let (number, multiplier) = if let Some(value) = number.strip_suffix("kb") {
+        (value, 1024u64)
+    } else if let Some(value) = number.strip_suffix("mb") {
+        (value, 1024u64 * 1024)
+    } else if let Some(value) = number.strip_suffix("gb") {
+        (value, 1024u64 * 1024 * 1024)
+    } else if let Some(value) = number.strip_suffix('b') {
+        (value, 1)
+    } else {
+        return;
+    };
+    let Ok(number) = number.parse::<u64>() else { return };
+    let Some(bytes) = number.checked_mul(multiplier) else { return };
+    clauses.push(format!("size {operator} ?"));
+    params.push(rusqlite::types::Value::Integer(bytes.min(i64::MAX as u64) as i64));
+}
+
+const INSERT_SQL: &str = "INSERT INTO files(path,volume,file_ref,parent_ref,own_name,size,created,modified,accessed,is_dir,attributes,name_key,path_key,extension,excluded)
+ VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)
+ ON CONFLICT(path) DO UPDATE SET volume=excluded.volume,file_ref=excluded.file_ref,parent_ref=excluded.parent_ref,own_name=excluded.own_name,size=excluded.size,created=excluded.created,modified=excluded.modified,accessed=excluded.accessed,is_dir=excluded.is_dir,attributes=excluded.attributes,name_key=excluded.name_key,path_key=excluded.path_key,extension=excluded.extension,excluded=excluded.excluded";
 
 fn insert_entry(stmt: &mut rusqlite::CachedStatement<'_>, e: &IndexedFile) -> rusqlite::Result<()> {
     stmt.execute(params![
@@ -447,7 +692,11 @@ fn insert_entry(stmt: &mut rusqlite::CachedStatement<'_>, e: &IndexedFile) -> ru
         e.modified,
         e.accessed,
         e.is_dir as i64,
-        e.attributes as i64
+        e.attributes as i64,
+        e.lower_name,
+        e.lower_path,
+        e.extension,
+        e.excluded as i64
     ])?;
     Ok(())
 }
@@ -465,6 +714,10 @@ fn entry_from_row(r: &Row<'_>) -> rusqlite::Result<IndexedFile> {
     e.attributes = r.get::<_, i64>(6)? as u32;
     e.parent_ref = r.get::<_, i64>(8)? as u64;
     e.own_name = r.get(9)?;
+    e.lower_name = r.get(10)?;
+    e.lower_path = r.get(11)?;
+    e.extension = r.get(12)?;
+    e.excluded = r.get::<_, i64>(13)? != 0;
     Ok(e)
 }
 
@@ -734,6 +987,62 @@ mod tests {
         assert!(health.recovery_reason.is_none());
         drop(index);
         remove_test_database(&path);
+    }
+
+    #[test]
+    fn migrates_schema_version_one_to_the_indexed_columns() {
+        let path = test_path();
+        let _ = std::fs::remove_file(&path);
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE files (
+                path TEXT PRIMARY KEY NOT NULL,
+                volume TEXT NOT NULL,
+                file_ref INTEGER NOT NULL,
+                parent_ref INTEGER NOT NULL,
+                own_name TEXT NOT NULL,
+                size INTEGER NOT NULL,
+                created INTEGER NOT NULL,
+                modified INTEGER NOT NULL,
+                accessed INTEGER NOT NULL,
+                is_dir INTEGER NOT NULL,
+                attributes INTEGER NOT NULL
+             );
+             CREATE TABLE checkpoints (
+                volume TEXT PRIMARY KEY NOT NULL,
+                journal_id INTEGER NOT NULL,
+                cursor INTEGER NOT NULL
+             );
+             PRAGMA user_version = 1;",
+        )
+        .unwrap();
+        drop(conn);
+        let index = DiskIndex::open(path.clone()).unwrap();
+        assert_eq!(index.health().schema_version, SCHEMA_VERSION);
+        index
+            .replace(vec![IndexedFile::new(
+                r"C:\work\one.rs".into(),
+                1,
+                1,
+                1,
+                1,
+                false,
+                1,
+            )])
+            .unwrap();
+        assert_eq!(index.search(&QueryOptions { query: "*.rs".into(), max_results: 10, ..Default::default() }).total, 1);
+        remove_test_database(&path);
+    }
+
+    #[test]
+    fn common_extension_queries_use_a_conservative_index_candidate() {
+        let plan = candidate_plan(&QueryOptions {
+            query: "*.rs".into(),
+            max_results: 10,
+            ..Default::default()
+        });
+        assert!(plan.where_sql.contains("extension = ?"));
+        assert_eq!(plan.params.len(), 2);
     }
 
     #[test]
