@@ -155,6 +155,8 @@ The practical result is a different workflow: agents can discover, measure, inve
 
 ##  Save your start-up tokens. Only adds 5 new tools.
 
+![Five MCP tools at a glance](docs/images/five-tool-capabilities.png)
+
 You agent gets 5 new tools:
 
 | Tool | What it does |
@@ -165,9 +167,6 @@ You agent gets 5 new tools:
 | `recent_changes` | Investigate what was created, modified, renamed, or deleted, newest first |
 | `aggregate_files` | Answer roll-up questions like largest files, file counts by type, or total size |
 
-![Five MCP tools at a glance](docs/images/five-tool-capabilities.png)
-
-It also gets a mountain of filters it can use to narrow its searches down (these are listed in the 'Search query filters' section below). 
 
 You could ask it very specific questions like, 
 
