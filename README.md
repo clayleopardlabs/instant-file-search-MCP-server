@@ -157,8 +157,6 @@ The practical result is a different workflow: agents can discover, measure, inve
 
 You agent gets 5 new tools:
 
-![Five MCP tools at a glance](docs/images/five-tool-capabilities.png)
-
 | Tool | What it does |
 |------|--------------|
 | `find_files` | Discover the exact files an agent should read, with names, paths, dates, sizes, and filters |
@@ -166,6 +164,8 @@ You agent gets 5 new tools:
 | `search_status` | Confirm which local search engine is available and whether the index is healthy |
 | `recent_changes` | Investigate what was created, modified, renamed, or deleted, newest first |
 | `aggregate_files` | Answer roll-up questions like largest files, file counts by type, or total size |
+
+![Five MCP tools at a glance](docs/images/five-tool-capabilities.png)
 
 It also gets a mountain of filters it can use to narrow its searches down (these are listed in the 'Search query filters' section below). 
 
