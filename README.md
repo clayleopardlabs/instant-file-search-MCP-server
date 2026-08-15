@@ -198,19 +198,16 @@ You could ask it very specific questions like,
 
 By default, searches are answered in milliseconds straight from memory. Nothing leaves your machine.
 
-### Choose a storage mode
+## Two Modes
 
-Instant File Search defaults to RAM saving mode. It stays in the mode it was
-installed with. Super duper fast mode is useful when you have plenty of RAM,
-especially if your computer has an old or slow hard drive. It keeps the file
-list in RAM, so searches do not have to wait on the drive.
+Super duper fast mode is useful though when you have an old or slow hard drive or have to do a ton of file searching. It keeps the file list in RAM so you give up about half a gig of RAM for the speed. (The fall back engine only operates in RAM mode btw)
 
 ![Super duper fast mode and RAM saving mode](docs/images/storage-mode-options.png)
 
 ### Speed and RAM usage
 
-Here is what we saw with 500,000 test files on Windows. RAM saving mode used
-about 49 times less RAM, 10 MiB instead of 488 MiB. Finding one filename took
+Here's what we saw with 500,000 test files on Windows. RAM saving mode used
+about 50x less RAM, 10 MiB instead of 488 MiB. Finding one filename took
 about twice as long, 87 ms instead of 38 ms. Some broad searches were faster
 in RAM saving mode.
 
@@ -221,6 +218,9 @@ in RAM saving mode.
 | Find one filename | 38 ms | 87 ms |
 | Find `*.rs` files | 515 ms | 340 ms |
 | Find a module name | 36 ms | 92 ms |
+
+
+As you can see, aside from the first index build which only happens once, the difference is negligible so it defaults to the RAM saving version when it installs. 
 
 ### Old hard drives and huge file collections
 
