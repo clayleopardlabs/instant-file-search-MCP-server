@@ -17,7 +17,7 @@
 #   - run as root (sudo), or with sudo available
 #
 # Usage:
-#   sudo ./install-linux.sh [--no-register] [--dry-run]
+#   sudo ./install-linux.sh [--index-mode memory|disk] [--content-mode auto|off|memory|disk] [--no-register] [--dry-run]
 
 set -euo pipefail
 
@@ -28,13 +28,33 @@ REGISTER_SCRIPT="$(cd "$(dirname "$0")" && pwd)/register-linux-client.py"
 
 DRY_RUN=0
 DO_REGISTER=1
-for arg in "$@"; do
+INDEX_MODE=""
+CONTENT_MODE=""
+ENV_FILE="/etc/instant-file-search/indexer.env"
+if [ -f "$ENV_FILE" ]; then
+    INDEX_MODE="$(sed -n 's/^INSTANT_FS_INDEX_MODE=//p' "$ENV_FILE" | tail -1)"
+    CONTENT_MODE="$(sed -n 's/^INSTANT_FS_CONTENT_INDEX=//p' "$ENV_FILE" | tail -1)"
+fi
+i=1
+while [ "$i" -le "$#" ]; do
+    arg="${!i}"
     case "$arg" in
         --dry-run) DRY_RUN=1 ;;
         --no-register) DO_REGISTER=0 ;;
+        --index-mode=*) INDEX_MODE="${arg#*=}" ;;
+        --content-mode=*) CONTENT_MODE="${arg#*=}" ;;
+        --index-mode)
+            i=$((i + 1)); INDEX_MODE="${!i}" ;;
+        --content-mode)
+            i=$((i + 1)); CONTENT_MODE="${!i}" ;;
         *) echo "unknown option: $arg" >&2; exit 2 ;;
     esac
+    i=$((i + 1))
 done
+: "${INDEX_MODE:=memory}"
+: "${CONTENT_MODE:=auto}"
+case "$INDEX_MODE" in memory|disk) ;; *) echo "error: --index-mode must be memory or disk" >&2; exit 2 ;; esac
+case "$CONTENT_MODE" in auto|off|memory|disk) ;; *) echo "error: --content-mode must be auto, off, memory, or disk" >&2; exit 2 ;; esac
 
 step() { printf '\n==> %s\n' "$*"; }
 action() { if [ "$DRY_RUN" -eq 1 ]; then printf 'DRY RUN: %s\n' "$*"; fi }
@@ -75,9 +95,12 @@ fi
 
 # ---- 3. systemd unit ---------------------------------------------------------
 step "Installing systemd unit $UNIT_NAME"
-action "cp $UNIT_SRC /etc/systemd/system/$UNIT_NAME && systemctl daemon-reload && systemctl enable --now $UNIT_NAME"
+action "write /etc/instant-file-search/indexer.env (index=$INDEX_MODE content=$CONTENT_MODE); cp $UNIT_SRC /etc/systemd/system/$UNIT_NAME && systemctl daemon-reload && systemctl enable --now $UNIT_NAME"
 if [ "$DRY_RUN" -eq 0 ]; then
     [ -f "$UNIT_SRC" ] || { echo "error: unit file missing: $UNIT_SRC" >&2; exit 1; }
+    install -d -m 0755 "$(dirname "$ENV_FILE")"
+    printf 'INSTANT_FS_INDEX_MODE=%s\nINSTANT_FS_CONTENT_INDEX=%s\n' "$INDEX_MODE" "$CONTENT_MODE" > "$ENV_FILE"
+    chmod 0644 "$ENV_FILE"
     cp "$UNIT_SRC" "/etc/systemd/system/$UNIT_NAME"
     systemctl daemon-reload
     systemctl enable --now "$UNIT_NAME"

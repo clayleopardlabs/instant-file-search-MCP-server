@@ -63,6 +63,12 @@ Linux:
 sudo bash scripts/install-linux.sh
 ```
 
+To use the low-RAM mode and keep content search on disk, run:
+
+```sh
+sudo bash scripts/install-linux.sh --index-mode disk --content-mode disk
+```
+
 ## MacOS - Automatic installer 
 
 macOS:
@@ -70,6 +76,9 @@ macOS:
 ```sh
 sudo bash scripts/install-macos.sh
 ```
+
+The macOS installer accepts the same `--index-mode` and `--content-mode`
+options. Windows accepts `-IndexMode` and `-ContentMode` in PowerShell.
 
 On macOS, grant Full Disk Access to the installed indexer in System Settings, then restart the launched service. See the platform-specific build guides below for the details and current limitations.
 

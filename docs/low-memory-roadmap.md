@@ -628,5 +628,5 @@ All work is complete only when:
 - [x] Milestone 2 committed and pushed
 - [x] Milestone 3 committed and pushed
 - [x] Milestone 4 committed and pushed
-- [ ] Milestone 5 committed and pushed
+- [x] Milestone 5 committed and pushed
 - [ ] Milestone 6 committed and pushed

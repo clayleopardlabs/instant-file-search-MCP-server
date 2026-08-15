@@ -9,6 +9,10 @@ param(
     [string]$VendorDir,
     [string]$ExpectedSha256,
     [string]$Version,
+    [ValidateSet('memory', 'disk')]
+    [string]$IndexMode,
+    [ValidateSet('auto', 'off', 'memory', 'disk')]
+    [string]$ContentMode,
     [switch]$SkipDownload,
     [switch]$SkipElevation,
     [switch]$SkipCodex,
@@ -31,6 +35,19 @@ $stableBinary = $null
 $stableIndexer = $null
 $installVersion = $null
 $downloadRoot = Join-Path (Join-Path $InstallRoot 'downloads') $PID
+
+# Keep an existing choice during upgrades unless the caller supplies a new one.
+$statePath = Join-Path $InstallRoot 'current.json'
+if ((-not $IndexMode) -and (Test-Path -LiteralPath $statePath)) {
+    try { $IndexMode = (Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json).index_mode } catch {}
+}
+if ((-not $ContentMode) -and (Test-Path -LiteralPath $statePath)) {
+    try { $ContentMode = (Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json).content_mode } catch {}
+}
+if (-not $IndexMode) { $IndexMode = 'memory' }
+if (-not $ContentMode) { $ContentMode = 'auto' }
+if ($IndexMode -notin @('memory', 'disk')) { throw "IndexMode must be memory or disk." }
+if ($ContentMode -notin @('auto', 'off', 'memory', 'disk')) { throw "ContentMode must be auto, off, memory, or disk." }
 
 # Simulation mode: redirect all user-config writes into a sandbox and skip the
 # global env-var write, so parallel/simulated installs never touch the real
@@ -211,6 +228,8 @@ function Write-InstallState([string]$ServiceBinary) {
         version = $installVersion
         server_binary = $stableBinary
         indexer_binary = $ServiceBinary
+        index_mode = $IndexMode
+        content_mode = $ContentMode
         installed_at = (Get-Date).ToUniversalTime().ToString('o')
     } | ConvertTo-Json
     $temp = Join-Path $InstallRoot 'current.json.tmp'
@@ -852,6 +871,7 @@ function Install-NativeService {
     }
 
     if ($DryRun) {
+        Write-Action "Configure service environment: INSTANT_FS_INDEX_MODE=$IndexMode, INSTANT_FS_CONTENT_INDEX=$ContentMode"
         Write-Action "Copy '$resolved' to '$serviceIndexer'"
         Write-Action "sc.exe create $serviceName binPath= `"$serviceIndexer service`" start= auto"
         return
@@ -864,6 +884,8 @@ function Install-NativeService {
     $escResolved = $resolved -replace "'", "''"
     $escServiceIndexer = $serviceIndexer -replace "'", "''"
     $escServiceName = $serviceName -replace "'", "''"
+    $escIndexMode = $IndexMode -replace "'", "''"
+    $escContentMode = $ContentMode -replace "'", "''"
 
 # Write a tiny helper that performs the admin-only switch. The binary was
 # copied after the service stops, so updates can replace an existing binary.
@@ -874,6 +896,8 @@ $helper = @"
 `$sourceIndexer = '$escResolved'
 `$serviceName = '$escServiceName'
 `$serviceIndexer = '$escServiceIndexer'
+`$indexMode = '$escIndexMode'
+`$contentMode = '$escContentMode'
 `$serviceCommand = 'sc.exe config "' + `$serviceName + '" binPath= "\"' + `$serviceIndexer + '\" service" start= auto'
 `$existing = Get-Service -Name `$serviceName -ErrorAction SilentlyContinue
 if (`$existing) {
@@ -890,6 +914,8 @@ if (`$existing) {
   & cmd.exe /d /c `$serviceCommand | Out-Null
   if (`$LASTEXITCODE -ne 0) { throw "sc.exe create failed for service `$serviceName." }
 }
+`$environment = @("INSTANT_FS_INDEX_MODE=`$indexMode", "INSTANT_FS_CONTENT_INDEX=`$contentMode")
+New-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Services\`$serviceName" -Name Environment -PropertyType MultiString -Value `$environment -Force | Out-Null
 Start-Service -Name `$serviceName
 `$started = Get-Service -Name `$serviceName
 `$started.WaitForStatus([System.ServiceProcess.ServiceControllerStatus]::Running, [TimeSpan]::FromSeconds(120))

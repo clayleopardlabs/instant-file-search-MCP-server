@@ -33,6 +33,14 @@
         <string>serve</string>
     </array>
 
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>INSTANT_FS_INDEX_MODE</key>
+        <string>memory</string>
+        <key>INSTANT_FS_CONTENT_INDEX</key>
+        <string>auto</string>
+    </dict>
+
     <key>RunAtLoad</key>
     <true/>
 

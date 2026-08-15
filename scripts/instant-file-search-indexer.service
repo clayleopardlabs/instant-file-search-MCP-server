@@ -22,6 +22,7 @@ After=local-fs.target
 [Service]
 Type=notify
 ExecStart=/usr/local/lib/instant-file-search/instant-file-search-indexer serve
+EnvironmentFile=-/etc/instant-file-search/indexer.env
 Restart=on-failure
 RestartSec=2
 # fanotify FAN_MARK_FILESYSTEM requires CAP_SYS_ADMIN.

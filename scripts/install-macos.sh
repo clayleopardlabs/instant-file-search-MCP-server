@@ -19,7 +19,7 @@
 #   - run as root (sudo), or with sudo available
 #
 # Usage:
-#   sudo ./install-macos.sh [--no-register] [--dry-run]
+#   sudo ./install-macos.sh [--index-mode memory|disk] [--content-mode auto|off|memory|disk] [--no-register] [--dry-run]
 #
 # After install: grant Full Disk Access to
 # /usr/local/lib/instant-file-search/instant-file-search-indexer in
@@ -35,13 +35,31 @@ REGISTER_SCRIPT="$(cd "$(dirname "$0")" && pwd)/register-linux-client.py"
 
 DRY_RUN=0
 DO_REGISTER=1
-for arg in "$@"; do
+INDEX_MODE=""
+CONTENT_MODE=""
+INSTALLED_PLIST="/Library/LaunchDaemons/$PLIST_NAME"
+if [ -x /usr/libexec/PlistBuddy ] && [ -f "$INSTALLED_PLIST" ]; then
+    INDEX_MODE="$(/usr/libexec/PlistBuddy -c 'Print :EnvironmentVariables:INSTANT_FS_INDEX_MODE' "$INSTALLED_PLIST" 2>/dev/null || true)"
+    CONTENT_MODE="$(/usr/libexec/PlistBuddy -c 'Print :EnvironmentVariables:INSTANT_FS_CONTENT_INDEX' "$INSTALLED_PLIST" 2>/dev/null || true)"
+fi
+i=1
+while [ "$i" -le "$#" ]; do
+    arg="${!i}"
     case "$arg" in
         --dry-run) DRY_RUN=1 ;;
         --no-register) DO_REGISTER=0 ;;
+        --index-mode=*) INDEX_MODE="${arg#*=}" ;;
+        --content-mode=*) CONTENT_MODE="${arg#*=}" ;;
+        --index-mode) i=$((i + 1)); INDEX_MODE="${!i}" ;;
+        --content-mode) i=$((i + 1)); CONTENT_MODE="${!i}" ;;
         *) echo "unknown option: $arg" >&2; exit 2 ;;
     esac
+    i=$((i + 1))
 done
+: "${INDEX_MODE:=memory}"
+: "${CONTENT_MODE:=auto}"
+case "$INDEX_MODE" in memory|disk) ;; *) echo "error: --index-mode must be memory or disk" >&2; exit 2 ;; esac
+case "$CONTENT_MODE" in auto|off|memory|disk) ;; *) echo "error: --content-mode must be auto, off, memory, or disk" >&2; exit 2 ;; esac
 
 step() { printf '\n==> %s\n' "$*"; }
 action() { if [ "$DRY_RUN" -eq 1 ]; then printf 'DRY RUN: %s\n' "$*"; fi }
@@ -89,11 +107,13 @@ fi
 
 # ---- 3. launchd daemon -------------------------------------------------------
 step "Installing launchd daemon $PLIST_NAME"
-action "plutil -lint $PLIST_SRC && install -o root -g wheel -m 0644 $PLIST_SRC /Library/LaunchDaemons/$PLIST_NAME && launchctl bootstrap system /Library/LaunchDaemons/$PLIST_NAME"
+action "install plist with INSTANT_FS_INDEX_MODE=$INDEX_MODE and INSTANT_FS_CONTENT_INDEX=$CONTENT_MODE"
 if [ "$DRY_RUN" -eq 0 ]; then
     [ -f "$PLIST_SRC" ] || { echo "error: plist missing: $PLIST_SRC" >&2; exit 1; }
     plutil -lint "$PLIST_SRC" >/dev/null
     install -o root -g wheel -m 0644 "$PLIST_SRC" "/Library/LaunchDaemons/$PLIST_NAME"
+    /usr/libexec/PlistBuddy -c "Set :EnvironmentVariables:INSTANT_FS_INDEX_MODE $INDEX_MODE" "/Library/LaunchDaemons/$PLIST_NAME"
+    /usr/libexec/PlistBuddy -c "Set :EnvironmentVariables:INSTANT_FS_CONTENT_INDEX $CONTENT_MODE" "/Library/LaunchDaemons/$PLIST_NAME"
     # Remove any previous instance so bootstrap is idempotent.
     launchctl bootout "system/com.clayleopardlabs.instant-file-search" 2>/dev/null || true
     launchctl bootstrap system "/Library/LaunchDaemons/$PLIST_NAME"
