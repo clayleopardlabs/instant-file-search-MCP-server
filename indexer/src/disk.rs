@@ -7,9 +7,11 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
-use rusqlite::{params, Connection, OptionalExtension, Row};
+use rusqlite::{params, Connection, ErrorCode, OptionalExtension, Row};
+use serde::Serialize;
 
 use crate::query::{self, AggregateOptions, AggregateResult, QueryOptions, QueryResult};
 use crate::types::IndexedFile;
@@ -17,6 +19,17 @@ use crate::types::IndexedFile;
 pub struct DiskIndex {
     conn: Mutex<Connection>,
     path: PathBuf,
+    recovery_reason: Option<String>,
+}
+
+pub const SCHEMA_VERSION: i64 = 1;
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DiskHealth {
+    pub schema_version: i64,
+    pub integrity: String,
+    pub recovery_reason: Option<String>,
+    pub wal_bytes: u64,
 }
 
 impl DiskIndex {
@@ -25,34 +38,24 @@ impl DiskIndex {
             std::fs::create_dir_all(parent)
                 .with_context(|| format!("create index directory {}", parent.display()))?;
         }
-        let conn = Connection::open(&path)
-            .with_context(|| format!("open disk index {}", path.display()))?;
-        conn.pragma_update(None, "journal_mode", "WAL")?;
-        conn.pragma_update(None, "synchronous", "NORMAL")?;
-        conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS files (
-                path TEXT PRIMARY KEY NOT NULL,
-                volume TEXT NOT NULL,
-                file_ref INTEGER NOT NULL,
-                parent_ref INTEGER NOT NULL,
-                own_name TEXT NOT NULL,
-                size INTEGER NOT NULL,
-                created INTEGER NOT NULL,
-                modified INTEGER NOT NULL,
-                accessed INTEGER NOT NULL,
-                is_dir INTEGER NOT NULL,
-                attributes INTEGER NOT NULL
-             );
-             CREATE INDEX IF NOT EXISTS files_ref ON files(volume, file_ref);
-             CREATE TABLE IF NOT EXISTS checkpoints (
-                volume TEXT PRIMARY KEY NOT NULL,
-                journal_id INTEGER NOT NULL,
-                cursor INTEGER NOT NULL
-             );",
-        )?;
+        let (conn, recovery_reason) = match open_and_migrate(&path) {
+            Ok(conn) => (conn, None),
+            Err(error) if is_confirmed_corruption(&error) => {
+                let reason = format!("{error:#}");
+                quarantine_database(&path)?;
+                (
+                    open_and_migrate(&path).with_context(|| {
+                        format!("recreate disk index after quarantining {}", path.display())
+                    })?,
+                    Some(reason),
+                )
+            }
+            Err(error) => return Err(error).with_context(|| format!("open disk index {}", path.display())),
+        };
         Ok(Self {
             conn: Mutex::new(conn),
             path,
+            recovery_reason,
         })
     }
 
@@ -64,6 +67,39 @@ impl DiskIndex {
         let conn = self.conn.lock().unwrap();
         conn.query_row("SELECT COUNT(*) FROM files", [], |r| r.get::<_, i64>(0))
             .unwrap_or(0) as usize
+    }
+
+    pub fn health(&self) -> DiskHealth {
+        let conn = self.conn.lock().unwrap();
+        let schema_version = conn
+            .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
+            .unwrap_or(0);
+        let integrity = conn
+            .query_row("PRAGMA quick_check(1)", [], |row| row.get::<_, String>(0))
+            .unwrap_or_else(|error| format!("error: {error}"));
+        let wal_bytes = sidecar_bytes(&self.path.with_extension("sqlite3-wal"));
+        DiskHealth {
+            schema_version,
+            integrity,
+            recovery_reason: self.recovery_reason.clone(),
+            wal_bytes,
+        }
+    }
+
+    /// Run inexpensive maintenance after a large write batch. This is safe to
+    /// call while the service is running and never blocks on a full VACUUM.
+    pub fn optimize(&self) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute_batch("PRAGMA optimize; PRAGMA wal_checkpoint(PASSIVE);")?;
+        Ok(())
+    }
+
+    /// Finish a clean service shutdown. A later startup can still recover from
+    /// an interrupted write, but clean shutdowns do not leave a growing WAL.
+    pub fn clean_shutdown(&self) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute_batch("PRAGMA optimize; PRAGMA wal_checkpoint(TRUNCATE);")?;
+        Ok(())
     }
 
     /// Replace the complete set of durable watcher checkpoints after a full
@@ -305,6 +341,94 @@ impl DiskIndex {
         };
         result
     }
+}
+
+fn open_and_migrate(path: &Path) -> Result<Connection> {
+    let conn = Connection::open(path)?;
+    conn.busy_timeout(Duration::from_secs(5))?;
+    conn.pragma_update(None, "journal_mode", "WAL")?;
+    conn.pragma_update(None, "synchronous", "NORMAL")?;
+    conn.pragma_update(None, "wal_autocheckpoint", 1000i64)?;
+    conn.pragma_update(None, "foreign_keys", "ON")?;
+
+    let current: i64 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+    if current > SCHEMA_VERSION {
+        anyhow::bail!(
+            "disk index schema version {current} is newer than supported version {SCHEMA_VERSION}"
+        );
+    }
+    if current == 0 {
+        let tx = conn.unchecked_transaction()?;
+        tx.execute_batch(
+            "CREATE TABLE IF NOT EXISTS files (
+                path TEXT PRIMARY KEY NOT NULL,
+                volume TEXT NOT NULL,
+                file_ref INTEGER NOT NULL,
+                parent_ref INTEGER NOT NULL,
+                own_name TEXT NOT NULL,
+                size INTEGER NOT NULL,
+                created INTEGER NOT NULL,
+                modified INTEGER NOT NULL,
+                accessed INTEGER NOT NULL,
+                is_dir INTEGER NOT NULL,
+                attributes INTEGER NOT NULL
+             );
+             CREATE INDEX IF NOT EXISTS files_ref ON files(volume, file_ref);
+             CREATE TABLE IF NOT EXISTS checkpoints (
+                volume TEXT PRIMARY KEY NOT NULL,
+                journal_id INTEGER NOT NULL,
+                cursor INTEGER NOT NULL
+             );
+             PRAGMA user_version = 1;",
+        )?;
+        tx.commit()?;
+    }
+
+    let check: String = conn.query_row("PRAGMA quick_check(1)", [], |row| row.get(0))?;
+    if check != "ok" {
+        anyhow::bail!("sqlite integrity check failed: {check}");
+    }
+    Ok(conn)
+}
+
+fn is_confirmed_corruption(error: &anyhow::Error) -> bool {
+    if error.to_string().contains("sqlite integrity check failed") {
+        return true;
+    }
+    error.chain().any(|cause| {
+        cause
+            .downcast_ref::<rusqlite::Error>()
+            .and_then(|e| e.sqlite_error_code())
+            .is_some_and(|code| matches!(code, ErrorCode::DatabaseCorrupt | ErrorCode::NotADatabase))
+    })
+}
+
+fn quarantine_database(path: &Path) -> Result<PathBuf> {
+    if !path.exists() {
+        return Ok(path.to_path_buf());
+    }
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    let quarantine = PathBuf::from(format!("{}.corrupt-{stamp}", path.display()));
+    std::fs::rename(path, &quarantine).with_context(|| {
+        format!("quarantine corrupt disk index {}", path.display())
+    })?;
+    for suffix in ["sqlite3-wal", "sqlite3-shm"] {
+        let sidecar = path.with_extension(suffix);
+        if sidecar.exists() {
+            let sidecar_quarantine = PathBuf::from(format!("{}.corrupt-{stamp}", sidecar.display()));
+            std::fs::rename(&sidecar, sidecar_quarantine).with_context(|| {
+                format!("quarantine corrupt disk index sidecar {}", sidecar.display())
+            })?;
+        }
+    }
+    Ok(quarantine)
+}
+
+fn sidecar_bytes(path: &Path) -> u64 {
+    std::fs::metadata(path).map(|metadata| metadata.len()).unwrap_or(0)
 }
 
 const INSERT_SQL: &str = "INSERT INTO files(path,volume,file_ref,parent_ref,own_name,size,created,modified,accessed,is_dir,attributes)
@@ -571,6 +695,91 @@ mod tests {
         );
         drop(disk);
         let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(path.with_extension("sqlite3-wal"));
+        let _ = std::fs::remove_file(path.with_extension("sqlite3-shm"));
+    }
+
+    #[test]
+    fn migrates_the_original_unversioned_schema_and_reports_health() {
+        let path = test_path();
+        let _ = std::fs::remove_file(&path);
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE files (
+                path TEXT PRIMARY KEY NOT NULL,
+                volume TEXT NOT NULL,
+                file_ref INTEGER NOT NULL,
+                parent_ref INTEGER NOT NULL,
+                own_name TEXT NOT NULL,
+                size INTEGER NOT NULL,
+                created INTEGER NOT NULL,
+                modified INTEGER NOT NULL,
+                accessed INTEGER NOT NULL,
+                is_dir INTEGER NOT NULL,
+                attributes INTEGER NOT NULL
+             );
+             CREATE TABLE checkpoints (
+                volume TEXT PRIMARY KEY NOT NULL,
+                journal_id INTEGER NOT NULL,
+                cursor INTEGER NOT NULL
+             );",
+        )
+        .unwrap();
+        drop(conn);
+
+        let index = DiskIndex::open(path.clone()).unwrap();
+        let health = index.health();
+        assert_eq!(health.schema_version, SCHEMA_VERSION);
+        assert_eq!(health.integrity, "ok");
+        assert!(health.recovery_reason.is_none());
+        drop(index);
+        remove_test_database(&path);
+    }
+
+    #[test]
+    fn quarantines_confirmed_corruption_but_preserves_the_old_file() {
+        let path = test_path();
+        let _ = std::fs::remove_file(&path);
+        std::fs::write(&path, b"not a sqlite database").unwrap();
+        let index = DiskIndex::open(path.clone()).unwrap();
+        let health = index.health();
+        assert_eq!(health.integrity, "ok");
+        assert!(health.recovery_reason.is_some());
+        assert!(path.exists(), "a fresh replacement database was created");
+        drop(index);
+        let quarantined = std::fs::read_dir(path.parent().unwrap())
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.path())
+            .find(|candidate| {
+                candidate
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.starts_with("instant-file-search-disk-test-") && name.contains(".corrupt-"))
+            })
+            .expect("corrupt database was quarantined");
+        let _ = std::fs::remove_file(quarantined);
+        remove_test_database(&path);
+    }
+
+    #[test]
+    fn rejects_a_future_schema_without_quarantining_it() {
+        let path = test_path();
+        let _ = std::fs::remove_file(&path);
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch("PRAGMA user_version = 99;").unwrap();
+        drop(conn);
+        let error = match DiskIndex::open(path.clone()) {
+            Ok(_) => panic!("future schema unexpectedly opened"),
+            Err(error) => error,
+        };
+        assert!(format!("{error:#}").contains("newer than supported"));
+        assert!(path.exists());
+        remove_test_database(&path);
+    }
+
+    fn remove_test_database(path: &Path) {
+        let _ = std::fs::remove_file(path);
         let _ = std::fs::remove_file(path.with_extension("sqlite3-wal"));
         let _ = std::fs::remove_file(path.with_extension("sqlite3-shm"));
     }

@@ -56,6 +56,25 @@ filesystem map. Runs as the Windows service `instant-file-search-indexer`
   client connection pokes the blocking `ConnectNamedPipe` so the service stops
   promptly.
 
+### Disk index durability
+
+The disk database uses SQLite WAL mode, a five second busy timeout, normal
+synchronous writes, and a bounded WAL autocheckpoint. Its schema has an
+explicit `user_version`. Existing unversioned databases migrate transactionally;
+newer unsupported versions fail without modification.
+
+On open, the index runs `PRAGMA quick_check(1)`. Only a confirmed SQLite
+corruption or not-a-database error is quarantined. The original database and
+sidecars are renamed with a timestamped `.corrupt-*` suffix, a fresh database is
+created, and the normal missing-checkpoint path performs a full scan. Permission,
+read-only, busy, and disk-full errors are reported without deleting or renaming
+the database.
+
+`search_status` reports the disk schema version, integrity result, WAL size, and
+whether the current database was recreated after corruption. Clean service stop
+runs `PRAGMA optimize` and truncates the WAL. Routine operation uses passive
+checkpointing and never runs an automatic full `VACUUM`.
+
 ## Everything engine fallback
 
 - All Everything IPC calls are synchronous and blocking — dispatched via

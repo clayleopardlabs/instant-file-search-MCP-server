@@ -45,6 +45,7 @@ pub fn handle(state: &IndexerState, req: Request) -> Response<'static> {
                 "volumes": state.volumes.iter().map(|v| v.clone()).collect::<Vec<_>>(),
                 "storage_mode": state.index.storage_mode(),
                 "index_path": state.index.disk_path().map(|p| p.display().to_string()),
+                "disk_health": state.index.disk_health(),
             })),
             error: None,
         },
@@ -390,7 +391,9 @@ mod tests {
                 params: serde_json::Value::Null,
             },
         );
-        assert_eq!(status.data.unwrap()["storage_mode"], "disk");
+        let status_data = status.data.unwrap();
+        assert_eq!(status_data["storage_mode"], "disk");
+        assert_eq!(status_data["disk_health"]["schema_version"], 1);
         drop(state);
         drop(index);
         let _ = std::fs::remove_file(&path);

@@ -196,6 +196,7 @@ fn serve_with_stop(stop: Arc<std::sync::atomic::AtomicBool>) -> Result<()> {
             let n = scan::build_index(&volumes, &index).context("initial scan")?;
             tracing::info!("initial index built: {n} entries");
             index.replace_checkpoints(&live_tails);
+            index.optimize_storage();
             live_tails
         }
     };
@@ -270,6 +271,10 @@ fn serve_with_stop(stop: Arc<std::sync::atomic::AtomicBool>) -> Result<()> {
 
     let server = platform::PipeServer::with_stop(state, stop)?;
     let result = server.run();
+
+    // Flush the WAL after a clean service stop. A crash takes the normal
+    // recovery path and does not depend on this best-effort maintenance.
+    index.clean_shutdown();
 
     // Tell systemd the service is shutting down (Type=notify). No-op when
     // NOTIFY_SOCKET is unset.

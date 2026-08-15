@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex, RwLock};
 
 use serde::{Deserialize, Serialize};
 
-use crate::disk::DiskIndex;
+use crate::disk::{DiskHealth, DiskIndex};
 use crate::query::{AggregateOptions, AggregateResult, QueryOptions, QueryResult};
 use crate::types::IndexedFile;
 
@@ -126,6 +126,26 @@ impl FileIndex {
     }
     pub fn disk_path(&self) -> Option<&std::path::Path> {
         self.disk.as_ref().map(DiskIndex::path)
+    }
+
+    pub fn disk_health(&self) -> Option<DiskHealth> {
+        self.disk.as_ref().map(DiskIndex::health)
+    }
+
+    pub fn optimize_storage(&self) {
+        if let Some(disk) = &self.disk {
+            if let Err(error) = disk.optimize() {
+                tracing::warn!("disk index maintenance failed: {error:#}");
+            }
+        }
+    }
+
+    pub fn clean_shutdown(&self) {
+        if let Some(disk) = &self.disk {
+            if let Err(error) = disk.clean_shutdown() {
+                tracing::warn!("disk index clean shutdown maintenance failed: {error:#}");
+            }
+        }
     }
 
     /// Persist watcher positions after a fresh scan. Checkpoints exist only
