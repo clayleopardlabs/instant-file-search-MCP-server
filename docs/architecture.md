@@ -85,6 +85,11 @@ whether the current database was recreated after corruption. Clean service stop
 runs `PRAGMA optimize` and truncates the WAL. Routine operation uses passive
 checkpointing and never runs an automatic full `VACUUM`.
 
+The portable recovery tests cover clean reopen, idempotent replay, checkpoint
+ordering, schema migration, and confirmed corruption quarantine. Native USN,
+FSEvents, and fanotify smoke tests still need to run on their real operating
+systems with the required privileges.
+
 ## Everything engine fallback
 
 - All Everything IPC calls are synchronous and blocking — dispatched via

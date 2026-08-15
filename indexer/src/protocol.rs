@@ -383,6 +383,14 @@ mod tests {
                 params: serde_json::json!({"query":"content:protocol"}),
             },
             Request {
+                method: "count".into(),
+                params: serde_json::json!({"query":"content:protocol"}),
+            },
+            Request {
+                method: "aggregate".into(),
+                params: serde_json::json!({"query":"content:protocol"}),
+            },
+            Request {
                 method: "aggregate".into(),
                 params: serde_json::json!({"query":"*.rs"}),
             },

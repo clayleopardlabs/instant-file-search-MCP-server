@@ -1,0 +1,28 @@
+{
+  "generated_by": "cargo test --workspace",
+  "portable_tests": {
+    "indexer_passed": 60,
+    "mcp_server_passed": 5,
+    "mcp_server_ignored_external_everything": 7
+  },
+  "modes": ["memory", "disk", "disk-content"],
+  "protocol_methods": ["ping", "status", "search", "count", "aggregate", "recent_changes"],
+  "query_families": [
+    "substring",
+    "wildcard",
+    "file-and-folder-type",
+    "extension",
+    "size",
+    "date",
+    "attributes",
+    "path-scope-and-exclude",
+    "regex",
+    "whole-word",
+    "sort-and-offset",
+    "duplicate-filename",
+    "content-quoted-and-multiple-needles",
+    "invalid-filter-input"
+  ],
+  "result": "passed",
+  "scope_note": "This is a portable regression matrix. Native watcher smoke tests still require Windows, macOS, and Linux machines with their platform permissions."
+}

@@ -225,22 +225,22 @@ still scans after a restart because its watcher has no persistent history.
 
 ### Measured memory and speed
 
-We created the same 500,000 synthetic file records in a fresh release-build
-process for each mode. The test measures the process working set after the index
-is built, then runs the same three searches. It does not include the optional
-content cache or operating system file cache.
+We created the same 100,000 synthetic file records in a fresh Windows x64
+release-build process for each mode. The test measures process RSS after the
+index is built, then runs the same six searches five times. It does not include
+the optional content cache or the operating system file cache.
 
 | Operation | Memory mode | Disk mode |
 |-----------|------------:|----------:|
-| Process RAM after indexing | 500 MiB | 10 MiB |
-| Build index | 954 ms | 8.71 s |
-| Search for one filename | 68 ms | 417 ms |
-| Search for `*.rs` | 844 ms | 1.82 s |
-| Search for a module name | 62 ms | 420 ms |
+| Process RAM after indexing | 81 MiB | 10 MiB |
+| Build index | 169 ms | 1.20 s |
+| Search for one filename, p50 | 8 ms | 26 ms |
+| Search for `*.rs`, p50 | 145 ms | 86 ms |
+| Search for a module name, p50 | 7 ms | 25 ms |
 
 For a repeatable comparison, build the release indexer and run
 `instant-file-search-indexer benchmark memory 500000` and
-`instant-file-search-indexer benchmark disk 500000`.
+`instant-file-search-indexer benchmark synthetic --mode disk --entries 100000 --runs 5 --json`.
 
 ### Search query filters
 

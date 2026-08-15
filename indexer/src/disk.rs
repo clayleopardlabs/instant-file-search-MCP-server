@@ -1122,6 +1122,64 @@ mod tests {
     }
 
     #[test]
+    fn restart_recovery_is_idempotent_and_checkpoint_ordered() {
+        let path = test_path();
+        let _ = std::fs::remove_file(&path);
+        let index = DiskIndex::open(path.clone()).unwrap();
+        index
+            .replace(vec![IndexedFile::new(
+                r"C:\work\alpha.rs".into(),
+                10,
+                1,
+                2,
+                3,
+                false,
+                1,
+            )])
+            .unwrap();
+        index
+            .replace_checkpoints(&[("C:\\".into(), 9, 100)])
+            .unwrap();
+        index
+            .upsert(IndexedFile::new(
+                r"C:\work\alpha.rs".into(),
+                20,
+                1,
+                4,
+                3,
+                false,
+                1,
+            ))
+            .unwrap();
+        // The checkpoint is advanced only after the metadata transaction.
+        index.advance_checkpoint("C:\\", 9, 200).unwrap();
+        index.clean_shutdown().unwrap();
+        drop(index);
+
+        let reopened = DiskIndex::open(path.clone()).unwrap();
+        assert_eq!(reopened.len(), 1);
+        assert_eq!(reopened.checkpoints().unwrap(), vec![("C:\\".into(), 9, 200)]);
+        assert_eq!(reopened.aggregate(&AggregateOptions::default()).total_size, 20);
+        // Replaying the same update is idempotent, not a duplicate row.
+        reopened
+            .upsert(IndexedFile::new(
+                r"C:\work\alpha.rs".into(),
+                20,
+                1,
+                4,
+                3,
+                false,
+                1,
+            ))
+            .unwrap();
+        assert_eq!(reopened.len(), 1);
+        drop(reopened);
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(path.with_extension("sqlite3-wal"));
+        let _ = std::fs::remove_file(path.with_extension("sqlite3-shm"));
+    }
+
+    #[test]
     fn migrates_the_original_unversioned_schema_and_reports_health() {
         let path = test_path();
         let _ = std::fs::remove_file(&path);

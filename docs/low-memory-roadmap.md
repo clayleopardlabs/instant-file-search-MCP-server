@@ -1,6 +1,7 @@
 # Low-memory index roadmap
 
-Status: implementation plan only
+Status: implemented through milestone 6; native privileged smoke tests remain
+platform-specific follow-up work.
 
 Baseline: `aadf7af` on `master`
 
@@ -629,4 +630,4 @@ All work is complete only when:
 - [x] Milestone 3 committed and pushed
 - [x] Milestone 4 committed and pushed
 - [x] Milestone 5 committed and pushed
-- [ ] Milestone 6 committed and pushed
+- [x] Milestone 6 committed and pushed
