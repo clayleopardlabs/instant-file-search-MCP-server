@@ -77,7 +77,9 @@ On macOS, grant Full Disk Access to the installed indexer in System Settings, th
 
 When you ask your agent to work on something the most tedious step is the first step. It has to go folder by folder peeking inside trying to find what it needs. 
 
-When you use /init it makes a handy agents.md with a map but it has to go folder by folder to make that map. It's silly. And it takes ages. Now they instantly know where every last file is. 
+Yes, of course you can run a /init and it makes a handy agents.md with a map, but even when you do that, it has to go folder by folder to make that map. It's silly. And it takes ages. Imagine if your /init was instantaneous.
+
+Now they instantly know where every last file is. 
 
 ![Indexed search versus recursive file discovery](docs/images/speed-comparison.png)
 
