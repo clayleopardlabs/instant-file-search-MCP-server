@@ -20,7 +20,7 @@ Now your agents do too.
 
 ## Real life examples
 
-October 2026 - A serious security bug was published in PHP on 21 October 2026. It lets an attacker run their own code on a web server that runs PHP. instant-file-search-MCP-server tools were used to assess in a fraction-of-a-second whether any of my dozens of codebases were affected; one indexed count across the entire projects folder, with dependency and git folders excluded.
+October 2026 - A serious security bug was published in PHP on 21 October 2026. It lets an attacker run their own code on a web server that runs PHP. instant-file-search-MCP-server tools were used to assess in a fraction-of-a-second whether any of my dozens of codebases were affected; one indexed count across the entire projects folder using `count_files`, with dependency and git folders excluded. That single call collapsed the question to machine-wide scope. Zero PHP files across all of B:\Projects, with the noise folders excluded. It converted a repo-local negative into a whole-machine negative
 
 September 2026 - I screwed up and moved all my LM Studio models to the wrong folder, stopped copying halfway through, and messed up the entire directory structure. I didn't know which files to save or where to move them. Using Instant File Search tools, the agent quickly found all the files and determined how to fix the mess. (removed the thinking parts)
 
