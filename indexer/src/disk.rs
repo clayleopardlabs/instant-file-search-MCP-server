@@ -25,6 +25,15 @@ pub struct DiskIndex {
 pub const SCHEMA_VERSION: i64 = 4;
 pub const DISK_CONTENT_BUDGET_DEFAULT: usize = 2 * 1024 * 1024 * 1024;
 
+/// Ceiling for the write-ahead log file. SQLite truncates the WAL back to this
+/// size after a completed checkpoint; without a limit it keeps the high-water
+/// mark forever, which is how a 2.7 GB `index.sqlite3-wal` survived restarts.
+pub const WAL_SIZE_LIMIT_BYTES: i64 = 64 * 1024 * 1024;
+
+/// Only spend a truncate checkpoint at startup when the WAL is worth it.
+pub const WAL_SHRINK_THRESHOLD_BYTES: u64 = 8 * 1024 * 1024;
+
+
 #[derive(Debug, Clone, Serialize)]
 pub struct DiskHealth {
     pub schema_version: i64,
@@ -53,6 +62,15 @@ impl DiskIndex {
             }
             Err(error) => return Err(error).with_context(|| format!("open disk index {}", path.display())),
         };
+        // Reclaim an oversized WAL from a previous run before serving. Nothing
+        // else has the database open yet, so a TRUNCATE checkpoint can finish.
+        // Without this the file only shrinks on a clean service stop - which an
+        // SCM stop that skips the worker join, or a crash, never reaches.
+        if sidecar_bytes(&path.with_extension("sqlite3-wal")) > WAL_SHRINK_THRESHOLD_BYTES {
+            if let Err(error) = checkpoint(&conn, true) {
+                tracing::warn!("truncate WAL at startup: {error:#}");
+            }
+        }
         Ok(Self {
             conn: Mutex::new(conn),
             path,
@@ -89,9 +107,14 @@ impl DiskIndex {
 
     /// Run inexpensive maintenance after a large write batch. This is safe to
     /// call while the service is running and never blocks on a full VACUUM.
+    ///
+    /// The checkpoint truncates rather than merely recycles the WAL: the index
+    /// build writes millions of rows in one transaction, and a PASSIVE
+    /// checkpoint leaves the file at that high-water mark indefinitely.
     pub fn optimize(&self) -> Result<()> {
         let conn = self.conn.lock().unwrap();
-        conn.execute_batch("PRAGMA optimize; PRAGMA wal_checkpoint(PASSIVE);")?;
+        conn.execute_batch("PRAGMA optimize;")?;
+        checkpoint(&conn, true)?;
         Ok(())
     }
 
@@ -99,8 +122,8 @@ impl DiskIndex {
     /// an interrupted write, but clean shutdowns do not leave a growing WAL.
     pub fn clean_shutdown(&self) -> Result<()> {
         let conn = self.conn.lock().unwrap();
-        conn.execute_batch("PRAGMA optimize; PRAGMA wal_checkpoint(TRUNCATE);")?;
-        Ok(())
+        conn.execute_batch("PRAGMA optimize;")?;
+        checkpoint(&conn, true)
     }
 
     /// Remove every cached file-content copy. Content search is a temporary
@@ -465,6 +488,9 @@ fn open_and_migrate(path: &Path) -> Result<Connection> {
     conn.pragma_update(None, "journal_mode", "WAL")?;
     conn.pragma_update(None, "synchronous", "NORMAL")?;
     conn.pragma_update(None, "wal_autocheckpoint", 1000i64)?;
+    // Cap the WAL file itself. A completed checkpoint truncates it back to this
+    // size instead of leaving it at whatever peak the last bulk write reached.
+    conn.pragma_update(None, "journal_size_limit", WAL_SIZE_LIMIT_BYTES)?;
     conn.pragma_update(None, "foreign_keys", "ON")?;
 
     let current: i64 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
@@ -607,6 +633,26 @@ fn quarantine_database(path: &Path) -> Result<PathBuf> {
 
 fn sidecar_bytes(path: &Path) -> u64 {
     std::fs::metadata(path).map(|metadata| metadata.len()).unwrap_or(0)
+}
+
+/// Checkpoint the WAL, optionally truncating the file.
+///
+/// `PRAGMA wal_checkpoint` reports an inability to finish as a result row
+/// (`busy` = 1), not as an error, so returning `Ok` from here does not prove the
+/// WAL was rewritten. Callers that care read `wal_bytes` afterwards; this
+/// function only surfaces real SQLite failures and logs the busy case.
+fn checkpoint(conn: &Connection, truncate: bool) -> Result<()> {
+    let mode = if truncate { "TRUNCATE" } else { "PASSIVE" };
+    let (busy, log_frames, checkpointed): (i64, i64, i64) =
+        conn.query_row(&format!("PRAGMA wal_checkpoint({mode})"), [], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+        })?;
+    if busy != 0 {
+        tracing::warn!(
+            "wal checkpoint ({mode}) left {log_frames} frames in the log, {checkpointed} checkpointed: a reader is holding a snapshot"
+        );
+    }
+    Ok(())
 }
 
 fn disk_content_budget() -> usize {
@@ -918,6 +964,59 @@ mod tests {
                 .unwrap()
                 .as_nanos()
         ))
+    }
+
+    #[test]
+    fn open_caps_the_wal_file() {
+        let path = test_path();
+        let index = DiskIndex::open(path.clone()).unwrap();
+        let limit: i64 = {
+            let conn = index.conn.lock().unwrap();
+            conn.query_row("PRAGMA journal_size_limit", [], |row| row.get(0))
+                .unwrap()
+        };
+        assert_eq!(
+            limit, WAL_SIZE_LIMIT_BYTES,
+            "a completed checkpoint must truncate the WAL back to the limit"
+        );
+        drop(index);
+        remove_index_files(&path);
+    }
+
+    #[test]
+    fn optimize_truncates_the_wal() {
+        let path = test_path();
+        let index = DiskIndex::open(path.clone()).unwrap();
+        let entries: Vec<_> = (0..4_000)
+            .map(|i| {
+                IndexedFile::new(
+                    format!(r"C:\work\file{i}.rs"),
+                    10,
+                    1,
+                    2,
+                    3,
+                    false,
+                    10_000 + i as u64,
+                )
+            })
+            .collect();
+        index.replace(entries).unwrap();
+        let before = index.health().wal_bytes;
+        assert!(before > 0, "a bulk write should leave frames in the WAL");
+        index.optimize().unwrap();
+        assert_eq!(
+            index.health().wal_bytes,
+            0,
+            "TRUNCATE checkpoint must empty the WAL, not just recycle it"
+        );
+        drop(index);
+        remove_index_files(&path);
+    }
+
+    fn remove_index_files(path: &Path) {
+        let _ = std::fs::remove_file(path);
+        let _ = std::fs::remove_file(path.with_extension("sqlite3-wal"));
+        let _ = std::fs::remove_file(path.with_extension("sqlite3-shm"));
     }
 
     #[test]
