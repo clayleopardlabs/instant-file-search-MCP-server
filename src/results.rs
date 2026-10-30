@@ -18,6 +18,11 @@ pub struct SearchResult {
     /// Full path (excluding filename).
     pub path: Option<String>,
 
+    /// True when this entry is a directory rather than a file. Directories are
+    /// indexed (they carry aggregated sizes), so `find_files` returns them
+    /// unless the query excludes them with `is:file`.
+    pub is_dir: bool,
+
     /// File size in bytes.
     pub size: Option<u64>,
 
@@ -131,6 +136,13 @@ fn is_leap_year(y: i64) -> bool {
     (y % 4 == 0 && y % 100 != 0) || y % 400 == 0
 }
 
+/// True when the Windows attribute word marks a directory
+/// (`FILE_ATTRIBUTE_DIRECTORY`). The Everything fallback reports folders this
+/// way, so it can fill `SearchResult::is_dir` without an extra request.
+pub(crate) fn is_dir_from_attributes(attrs: u32) -> bool {
+    attrs & 0x0010 != 0
+}
+
 /// Format file attributes as a human-friendly string (e.g. "A", "H", "R", "S",
 /// "D").
 pub(crate) fn format_attributes(attrs: u32) -> String {
@@ -198,6 +210,17 @@ mod tests {
         assert_eq!(format_attributes(0x0001), "R");
         assert_eq!(format_attributes(0x0021), "AR");
         assert_eq!(format_attributes(0x0000), "-");
+    }
+
+    #[test]
+    fn test_is_dir_from_attributes() {
+        // FILE_ATTRIBUTE_DIRECTORY is 0x0010; Everything reports folders only
+        // through this bit, so it must survive other flags being set.
+        assert!(is_dir_from_attributes(0x0010));
+        assert!(is_dir_from_attributes(0x0010 | 0x0002)); // hidden folder
+        assert!(is_dir_from_attributes(0x0010 | 0x0004)); // system folder
+        assert!(!is_dir_from_attributes(0x0020)); // archive file
+        assert!(!is_dir_from_attributes(0x0000));
     }
 
     #[test]

@@ -231,9 +231,11 @@ pub fn search(params: &SearchParams) -> Result<SearchResults> {
                         _ => None,
                     }
                 });
+            let is_dir = e.get("is_dir").and_then(|v| v.as_bool()).unwrap_or(false);
             results.push(SearchResult {
                 filename,
                 path,
+                is_dir,
                 size,
                 date_modified: ns("modified"),
                 date_created: ns("created"),

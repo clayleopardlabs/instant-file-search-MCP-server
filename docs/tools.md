@@ -15,7 +15,12 @@
 - **Default auto-exclusions** (skip unless `include_all=true`): `node_modules`, `.git`, `WinSxS`
 - **`exclude_path` separator**: `;` (semicolon), not comma
 - **Default scope**: ALL indexed drives. Narrow with `path` (forward slashes like `C:/Users` work; the engine normalizes them)
+- **Directories are indexed and returned by `find_files`.** A folder carries the aggregate size of everything under it, so a `size:` filter will rank folders alongside files. Every result has `is_dir`, and the query tokens `is:file` / `is:folder` (or `file:` / `folder:`) filter by type when you only want real files.
 - Response includes `total` (all matches), `returned` (current page count), `offset` (page position), and `note` (exclusion info)
+
+## find_files result fields
+
+`filename`, `path`, `is_dir`, `size`, `date_modified`, `date_created`, `date_accessed`, `attributes`, `extension`, `run_count`, `date_run`. The last two are Everything-only and are always `null` on the native engine.
 
 ## recent_changes
 
