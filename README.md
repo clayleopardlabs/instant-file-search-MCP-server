@@ -166,6 +166,10 @@ The practical result is a different workflow: agents can discover, measure, inve
 
 `search_status` gives the agent a coverage and health check before it begins an investigation. It can see whether the native index is available, how many files are indexed, and which volumes are covered. That means the agent can recognize the difference between "nothing matched" and "the search service is not ready," and can explain when a result is based on a fallback or a limited content index.
 
+Completeness is the part a shell scan cannot give you. The indexer runs as a service - SYSTEM on Windows, root on Linux, Full Disk Access on macOS - so it reads trees that `dir /s`, `Get-ChildItem -Recurse`, `ripgrep` and `find` are refused: `C:\Program Files\WindowsApps`, other users' profiles, anything ACL-locked. Those tools stop at "Access is denied", drop the subtree, and return a smaller number as if it were the whole truth. Every "none found" from a shell really means "none in the folders I was allowed to read."
+
+This index does not have that hole. On one Windows machine, `*.dll` under `C:\Program Files` is 29,206 files here and 6,169 through PowerShell - the missing 23,037 are all in `WindowsApps`. So "zero PHP files anywhere" comes back as a whole-machine answer, not a best-effort one.
+
 
 ##  Save your start-up tokens. Only adds 5 new tools.
 
@@ -310,15 +314,15 @@ Linux and macOS: sorry, you can only use the native indexer, so if there's a pro
 
 Windows needs administrator approval once to install the background service. On macOS, Full Disk Access must also be granted manually in System Settings if you want to search protected folders such as Documents or Desktop.
 
-That approval is also why the index can see things your shell cannot, which is the next question.
+That approval buys more than the service: it is also why the index sees folders your shell cannot, which is the next question.
 
-**Why does it report more files than `dir /s` or `Get-ChildItem -Recurse`?**
+**Does it see files my shell can't?**
 
-Because it can actually read them. The indexer runs as a background service - SYSTEM on Windows, root on Linux, Full Disk Access on macOS - so it indexes folders a normal shell cannot open: `C:\Program Files\WindowsApps`, other users' profiles, and anything else locked down by ACLs. A user-mode scan hits "Access is denied", skips that whole subtree, and reports a smaller number without telling you.
+Yes, and that is the main reason its answers are worth trusting. The indexer runs as a background service - SYSTEM on Windows, root on Linux, Full Disk Access on macOS - so it indexes folders a normal scan is not allowed to open. `dir /s`, `Get-ChildItem -Recurse`, `ripgrep` and `find` all hit "Access is denied", skip that subtree silently, and report a smaller number as if it were the whole picture.
 
-The gap is usually large, not cosmetic. On one Windows machine, `*.dll` under `C:\Program Files` came back as 29,206 from `count_files` and 6,169 from `Get-ChildItem -Recurse`. The missing 23,037 were all in `WindowsApps`, which PowerShell refuses to enter.
+One concrete case: `*.dll` under `C:\Program Files` is 29,206 files here and 6,169 through PowerShell. The 23,037 difference is exactly what sits in `C:\Program Files\WindowsApps`, which PowerShell refuses to enter.
 
-Neither number is wrong - they answer different questions. If a shell scan and the index disagree, assume the index is the complete one, and that the shell silently skipped what it could not read.
+So when the two disagree, trust the index - the shell reported what it could reach, not what exists. That is what makes a negative answer usable: when a search says there are no affected files on the machine, it had the access to actually check.
 
 **How do I know it's working?**
 
