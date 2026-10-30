@@ -342,9 +342,11 @@ pub fn search(params: SearchParams) -> Result<SearchResults> {
                 .map(|ft| ((ft.dwHighDateTime as u64) << 32) | (ft.dwLowDateTime as u64))
                 .and_then(ns100_to_iso_string);
 
-            let attributes = item
-                .get_u32(RequestFlags::Attributes)
-                .map(format_attributes);
+            let raw_attributes = item.get_u32(RequestFlags::Attributes);
+            let is_dir = raw_attributes
+                .map(|attrs| crate::results::is_dir_from_attributes(attrs as u32))
+                .unwrap_or(false);
+            let attributes = raw_attributes.map(format_attributes);
             let extension = item.get_string(RequestFlags::Extension);
             let run_count = item.get_u32(RequestFlags::RunCount);
             let date_run = item
@@ -355,6 +357,7 @@ pub fn search(params: SearchParams) -> Result<SearchResults> {
             SearchResult {
                 filename,
                 path,
+                is_dir,
                 size,
                 date_modified,
                 date_created,
