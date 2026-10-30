@@ -1117,8 +1117,17 @@ $helper = @"
 `$existing = Get-Service -Name `$serviceName -ErrorAction SilentlyContinue
 if (`$existing) {
   if (`$existing.Status -ne 'Stopped') {
-    Stop-Service -Name `$serviceName -Force
-    `$existing.WaitForStatus([System.ServiceProcess.ServiceControllerStatus]::Stopped, [TimeSpan]::FromSeconds(30))
+    # A stop that slightly exceeds the SCM window throws even though it lands a
+    # moment later, which used to abort whole upgrades. Ask, then wait for the
+    # state to settle rather than trusting one call.
+    try { Stop-Service -Name `$serviceName -Force -ErrorAction Stop } catch { }
+    `$stopDeadline = (Get-Date).AddSeconds(60)
+    while ((Get-Service -Name `$serviceName -ErrorAction SilentlyContinue).Status -ne 'Stopped' -and (Get-Date) -lt `$stopDeadline) {
+      Start-Sleep -Milliseconds 500
+    }
+    if ((Get-Service -Name `$serviceName -ErrorAction SilentlyContinue).Status -ne 'Stopped') {
+      throw "Service `$serviceName did not stop within 60 seconds. Close the AI apps using it and run the installer again."
+    }
   }
   Copy-Item -LiteralPath `$sourceIndexer -Destination `$serviceIndexer -Force
   & cmd.exe /d /c `$serviceCommand | Out-Null
@@ -1294,6 +1303,28 @@ elseif (Test-Path -LiteralPath (Join-Path $versionRoot 'everything\Everything.ex
 
 $verifyOk = $true
 if (-not $DryRun) { $verifyOk = Test-Installation }
+
+# Keep the plain "stable install" copy current: docs/build.md and the OpenCode
+# plugin's resolution order both name it, and it used to stay frozen at whatever
+# the first install left there. Then drop this run's downloads so repeated
+# installs stop accumulating scratch - a handful of upgrades left ~70 MB behind.
+if (-not $DryRun) {
+    $rootBinary = Join-Path $InstallRoot $binaryName
+    if ($stableBinary -and (Test-Path -LiteralPath $stableBinary) -and $rootBinary -ne $stableBinary) {
+        try {
+            Copy-Item -LiteralPath $stableBinary -Destination $rootBinary -Force -ErrorAction Stop
+            Write-Host "PASS: refreshed the stable copy at '$rootBinary'." -ForegroundColor Green
+        } catch {
+            Write-Host "WARN: could not refresh '$rootBinary' ($($_.Exception.Message)); a client may be running it." -ForegroundColor Yellow
+        }
+    }
+    $downloadsDir = Join-Path $InstallRoot 'downloads'
+    if (Test-Path -LiteralPath $downloadsDir) {
+        Get-ChildItem -LiteralPath $downloadsDir -Directory -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -eq $downloadRoot -or $_.LastWriteTime -lt (Get-Date).AddDays(-1) } |
+            ForEach-Object { Remove-Item -LiteralPath $_.FullName -Recurse -Force -ErrorAction SilentlyContinue }
+    }
+}
 
 Write-Host "`nInstalled version: $installVersion" -ForegroundColor Green
 Write-Host "Installed binary:  $stableBinary" -ForegroundColor Green
