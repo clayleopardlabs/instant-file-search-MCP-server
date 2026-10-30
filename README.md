@@ -310,6 +310,16 @@ Linux and macOS: sorry, you can only use the native indexer, so if there's a pro
 
 Windows needs administrator approval once to install the background service. On macOS, Full Disk Access must also be granted manually in System Settings if you want to search protected folders such as Documents or Desktop.
 
+That approval is also why the index can see things your shell cannot, which is the next question.
+
+**Why does it report more files than `dir /s` or `Get-ChildItem -Recurse`?**
+
+Because it can actually read them. The indexer runs as a background service - SYSTEM on Windows, root on Linux, Full Disk Access on macOS - so it indexes folders a normal shell cannot open: `C:\Program Files\WindowsApps`, other users' profiles, and anything else locked down by ACLs. A user-mode scan hits "Access is denied", skips that whole subtree, and reports a smaller number without telling you.
+
+The gap is usually large, not cosmetic. On one Windows machine, `*.dll` under `C:\Program Files` came back as 29,206 from `count_files` and 6,169 from `Get-ChildItem -Recurse`. The missing 23,037 were all in `WindowsApps`, which PowerShell refuses to enter.
+
+Neither number is wrong - they answer different questions. If a shell scan and the index disagree, assume the index is the complete one, and that the shell silently skipped what it could not read.
+
 **How do I know it's working?**
 
 Ask your AI assistant to run `search_status`, or use the platform health-check command described below.
