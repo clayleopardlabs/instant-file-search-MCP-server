@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [ValidateSet('codex', 'opencode', 'claude', 'hermes', 'all')]
+    [ValidateSet('codex', 'opencode', 'claude', 'hermes', 'dsh', 'all')]
     [string[]]$Clients,
     [string]$InstallRoot = (Join-Path $env:LOCALAPPDATA 'ClayLeopardLabs\instant-file-search'),
     [string]$ReleaseBase = 'https://github.com/clayleopardlabs/instant-file-search-MCP-server/releases/latest/download',
@@ -19,6 +19,7 @@ param(
     [switch]$SkipOpenCode,
     [switch]$SkipClaude,
     [switch]$SkipHermes,
+    [switch]$SkipDsh,
     [switch]$DryRun
 )
 
@@ -96,12 +97,135 @@ function Test-HermesInstalled {
     return (Find-HermesCli) -or (Test-Path -LiteralPath $hermesConfig)
 }
 
+# --- DeepSeek Harness -------------------------------------------------------
+# DSH composes one Cordis plugin tree per profile; the user-owned layer is
+# `cordis.patch.yml` under <DSH_HOME>\profiles\<profile>\. An MCP server is one
+# `- insert:` entry naming @deepseek-ai/dsh-mcp-client, so registering here is
+# the same edit a user would make by hand.
+function Get-DshHome {
+    if ($env:DSH_HOME) { return $env:DSH_HOME }
+    return (Join-Path $env:USERPROFILE '.dsh')
+}
+
+function Resolve-DshPatch {
+    $profilesRoot = Join-Path (Get-DshHome) 'profiles'
+    if (-not (Test-Path -LiteralPath $profilesRoot)) { return $null }
+    $wanted = if ($env:DSH_PROFILE) { $env:DSH_PROFILE } else { 'desktop' }
+    $preferred = Join-Path $profilesRoot (Join-Path $wanted 'cordis.patch.yml')
+    if (Test-Path -LiteralPath $preferred) { return $preferred }
+    return (Get-ChildItem -LiteralPath $profilesRoot -Directory -ErrorAction SilentlyContinue |
+        ForEach-Object { Join-Path $_.FullName 'cordis.patch.yml' } |
+        Where-Object { Test-Path -LiteralPath $_ } |
+        Select-Object -First 1)
+}
+
+function Test-DshInstalled {
+    return [bool](Resolve-DshPatch)
+}
+
+# Server names this plugin has used, newest first. The installer registers
+# `instant` everywhere; `instant-file-search` was the pre-1.0.4 name, so an
+# entry under either one is ours to update rather than duplicate.
+function Get-DshServerNames([string]$Text) {
+    return @([regex]::Matches($Text, 'serverName:\s*[''"]?([A-Za-z0-9_-]+)') |
+        ForEach-Object { $_.Groups[1].Value })
+}
+
+function Get-DshBinaryPath {
+    return ($stableBinary -replace '\\', '/')
+}
+
+function New-DshEntryText {
+    return @(
+        '- insert:'
+        '    - id: mcp-instant-file-search'
+        '      name: ''@deepseek-ai/dsh-mcp-client'''
+        '      config:'
+        "        serverName: $serverName"
+        '        transport: stdio'
+        "        command: `"$(Get-DshBinaryPath)`""
+        '        failOnStartupError: true'
+    ) -join "`n"
+}
+
+# Point an existing entry's `command:` at the freshly installed binary. Works on
+# lines so the rest of the user's patch (model settings, UI flags) is untouched.
+function Set-DshCommandPath([string]$Text, [string]$Path) {
+    $lines = [System.Collections.Generic.List[string]]::new()
+    $lines.AddRange([string[]]($Text -split "`r?`n"))
+    $entryStart = -1
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        if ($lines[$i] -match '^\s*-\s+id:') { $entryStart = $i }
+        if ($lines[$i] -match 'serverName:\s*[''"]?(instant|instant-file-search)[''"]?\s*$') {
+            $from = if ($entryStart -ge 0) { $entryStart } else { 0 }
+            for ($j = $from; $j -lt $lines.Count; $j++) {
+                if ($j -gt $from -and $lines[$j] -match '^\s*-\s+id:') { break }
+                if ($lines[$j] -match '^(\s*)command:\s*.+$') {
+                    $indent = $Matches[1]
+                    $lines[$j] = "$indent`command: `"$Path`""
+                    return ($lines -join "`n")
+                }
+            }
+            break
+        }
+    }
+    return $null
+}
+
+function Install-Dsh {
+    Write-Step 'Configuring DeepSeek Harness'
+    $patch = Resolve-DshPatch
+    if (-not $patch) {
+        Write-Host 'WARN: no DeepSeek Harness profile found (no cordis.patch.yml under the DSH home); skipping DSH registration.' -ForegroundColor Yellow
+        return
+    }
+
+    if ($DryRun) {
+        Write-Action "Register MCP server '$serverName' for DeepSeek Harness in '$patch' (command: '$(Get-DshBinaryPath)')"
+        return
+    }
+
+    $text = if (Test-Path -LiteralPath $patch) { Get-Content -LiteralPath $patch -Raw } else { '' }
+    $names = Get-DshServerNames $text
+
+    if ($names -contains $serverName -or $names -contains 'instant-file-search') {
+        $updated = Set-DshCommandPath $text (Get-DshBinaryPath)
+        if (-not $updated) {
+            Write-Host "WARN: '$patch' registers '$serverName' but its command line could not be located; update it to '$(Get-DshBinaryPath)' by hand." -ForegroundColor Yellow
+            return
+        }
+        Backup-Config $patch
+        [System.IO.File]::WriteAllText($patch, $updated + "`n", (New-Object System.Text.UTF8Encoding($false)))
+        Write-Host "PASS: DeepSeek Harness entry updated in '$patch'." -ForegroundColor Green
+    } else {
+        $profileJson = Join-Path (Split-Path -Parent $patch) 'package.json'
+        if (Test-Path -LiteralPath $profileJson) {
+            $bundles = Get-Content -LiteralPath $profileJson -Raw
+            if ($bundles -match '"(@[^"]*/)?[^"]*instant[^"]*"') {
+                Write-Host "NOTE: DeepSeek Harness loads this server from the bundle '$($Matches[0].Trim('"'))'." -ForegroundColor Yellow
+                Write-Host "      Update that bundle's cordis.patch.yml command to '$(Get-DshBinaryPath)' instead of adding a second entry." -ForegroundColor Yellow
+                return
+            }
+        }
+        Backup-Config $patch
+        $separator = if ($text.TrimEnd().Length -gt 0) { "`n" } else { '' }
+        [System.IO.File]::WriteAllText($patch, $text.TrimEnd() + $separator + (New-DshEntryText) + "`n", (New-Object System.Text.UTF8Encoding($false)))
+        Write-Host "PASS: DeepSeek Harness MCP server '$serverName' registered in '$patch'." -ForegroundColor Green
+    }
+
+    $running = Get-Process -Name 'DeepSeek Harness' -ErrorAction SilentlyContinue
+    if ($running) {
+        Write-Host '      Restart DeepSeek Harness so it composes the new entry (live reload is not guaranteed).' -ForegroundColor Gray
+    }
+}
+
 function Get-DetectedClients {
     $found = @()
     if ((Get-Command codex -ErrorAction SilentlyContinue) -or (Test-Path -LiteralPath (Join-Path $env:USERPROFILE '.codex\config.toml'))) { $found += 'codex' }
     if ((Get-Command opencode -ErrorAction SilentlyContinue) -or (Test-Path -LiteralPath $openCodeConfigDir)) { $found += 'opencode' }
     if (Test-ClaudeInstalled) { $found += 'claude' }
     if (Test-HermesInstalled) { $found += 'hermes' }
+    if (Test-DshInstalled) { $found += 'dsh' }
     return $found
 }
 
@@ -118,15 +242,15 @@ function Select-InstallClients {
     }
 
     Write-Host "Detected clients: $(if($detected){$detected -join ', '}else{'none'})" -ForegroundColor Green
-    Write-Host 'Choose clients to configure: [A]ll detected, or enter a comma-separated list: codex, opencode, claude, hermes'
+    Write-Host 'Choose clients to configure: [A]ll detected, or enter a comma-separated list: codex, opencode, claude, hermes, dsh'
     $answer = Read-Host 'Selection (default A)'
     if ([string]::IsNullOrWhiteSpace($answer)) { return $detected }
     $choice = $answer.Trim().ToLowerInvariant()
     if ($choice -eq 'a') { return $detected }
     if ($choice -eq 'n') { return @() }
     $selected = @($choice -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
-    $invalid = @($selected | Where-Object { $_ -notin @('codex', 'opencode', 'claude', 'hermes') })
-    if ($invalid) { throw "Unknown client(s): $($invalid -join ', '). Use codex, opencode, claude, hermes, or all detected." }
+    $invalid = @($selected | Where-Object { $_ -notin @('codex', 'opencode', 'claude', 'hermes', 'dsh') })
+    if ($invalid) { throw "Unknown client(s): $($invalid -join ', '). Use codex, opencode, claude, hermes, dsh, or all detected." }
     return @($selected | Select-Object -Unique)
 }
 
@@ -159,6 +283,52 @@ function Get-ReleaseAsset([string]$Name, [string]$Dest) {
     Write-Host "   Saved $Dest ($([math]::Round($len / 1KB, 1)) KB)" -ForegroundColor Green
 }
 
+# Replace the installed server binary. On Windows a running client holds the
+# current exe open, so a plain Copy-Item fails with a sharing violation (this
+# aborted real upgrades). Stop the server processes - their host restarts them -
+# and retry once before giving up with an actionable message.
+function Install-ServerBinary([string]$Source, [string]$Destination) {
+    $attempt = 0
+    while ($true) {
+        $attempt++
+        try {
+            Copy-Item -LiteralPath $Source -Destination $Destination -Force -ErrorAction Stop
+            return
+        } catch {
+            if ($attempt -ge 2) {
+                throw ("Could not replace '$Destination': a running MCP server still holds the file. " +
+                    "Close DeepSeek Harness (or whichever client runs this server) and run the installer again. " +
+                    "Underlying error: $($_.Exception.Message)")
+            }
+            $running = @(Get-Process -Name 'instant-file-search-mcp-server' -ErrorAction SilentlyContinue)
+            if ($running.Count -gt 0) {
+                Write-Host "   Stopping $($running.Count) running MCP server process(es) so the binary can be replaced..." -ForegroundColor Gray
+                $running | Stop-Process -Force -ErrorAction SilentlyContinue
+                Start-Sleep -Milliseconds 800
+            } else {
+                Start-Sleep -Milliseconds 300
+            }
+        }
+    }
+}
+
+function Get-BinaryVersion([string]$Path) {
+    try {
+        $out = (& $Path --version 2>$null | Select-Object -First 1)
+        if ($out -and $out -match '^instant-file-search-mcp-server\s+([0-9]+\.[0-9]+\.[0-9]+)') { return $Matches[1] }
+    } catch {}
+    return $null
+}
+
+function Get-SourceVersion {
+    if (-not $isCheckout) { return $null }
+    $cargo = Join-Path $repoRoot 'Cargo.toml'
+    if (-not (Test-Path -LiteralPath $cargo)) { return $null }
+    $match = Select-String -LiteralPath $cargo -Pattern '^version\s*=\s*"([^"]+)"' | Select-Object -First 1
+    if ($match) { return $match.Matches[0].Groups[1].Value }
+    return $null
+}
+
 function Resolve-ServerBinary {
     if ($ServerBinary) {
         if (-not (Test-Path -LiteralPath $ServerBinary)) { throw "Server binary not found: $ServerBinary" }
@@ -166,7 +336,24 @@ function Resolve-ServerBinary {
     }
     if ($isCheckout) {
         $local = Join-Path $repoRoot "target\release\$binaryName"
-        if (Test-Path -LiteralPath $local) { return $local }
+        if (Test-Path -LiteralPath $local) {
+            # A stale target\release build used to be installed silently: the
+            # installer took its version from the binary, so an old build could
+            # overwrite a live versioned directory (or downgrade an existing
+            # install) and every client would be repointed at it. Refuse when
+            # the build does not match the tree it came from.
+            $builtVersion = Get-BinaryVersion $local
+            $sourceVersion = Get-SourceVersion
+            if ($builtVersion -and $sourceVersion -and $builtVersion -ne $sourceVersion) {
+                throw ("target\release\$binaryName reports version $builtVersion but Cargo.toml is $sourceVersion, so it is a stale build. " +
+                    "Run 'cargo build --release', or pass -ServerBinary <path> to install a specific build, " +
+                    "or run the published installer (irm .../scripts/install.ps1 | iex) to install the current release instead of a local build.")
+            }
+            if (-not $builtVersion) {
+                Write-Host "   WARN: '$local' does not report a version; installing it as a $sourceVersion local build." -ForegroundColor Yellow
+            }
+            return $local
+        }
     }
     if ($SkipDownload) { throw "Server binary not found and -SkipDownload was set. Pass -ServerBinary or remove -SkipDownload." }
     New-Item -ItemType Directory -Path $downloadRoot -Force | Out-Null
@@ -190,7 +377,21 @@ function Resolve-IndexerBinary {
     }
     if ($isCheckout) {
         $local = Join-Path $repoRoot "target\release\$indexerName"
-        if (Test-Path -LiteralPath $local) { return $local }
+        if (Test-Path -LiteralPath $local) {
+            # Keep server and indexer from the same tree: pairing a release
+            # server with a stale local indexer mismatches the IPC protocol.
+            $builtVersion = $null
+            try {
+                $out = (& $local --version 2>$null | Select-Object -First 1)
+                if ($out -and $out -match '^instant-file-search-indexer\s+([0-9]+\.[0-9]+\.[0-9]+)') { $builtVersion = $Matches[1] }
+            } catch {}
+            $sourceVersion = Get-SourceVersion
+            if ($builtVersion -and $sourceVersion -and $builtVersion -ne $sourceVersion) {
+                throw ("target\release\$indexerName reports version $builtVersion but Cargo.toml is $sourceVersion, so it is a stale build. " +
+                    "Run 'cargo build --release', or pass -IndexerBinary <path> together with -ServerBinary.")
+            }
+            return $local
+        }
     }
     if ($SkipDownload) { return $null }
     New-Item -ItemType Directory -Path $downloadRoot -Force | Out-Null
@@ -1028,11 +1229,12 @@ if ($SkipCodex) { $selected = @($selected | Where-Object { $_ -ne 'codex' }) }
 if ($SkipOpenCode) { $selected = @($selected | Where-Object { $_ -ne 'opencode' }) }
 if ($SkipClaude) { $selected = @($selected | Where-Object { $_ -ne 'claude' }) }
 if ($SkipHermes) { $selected = @($selected | Where-Object { $_ -ne 'hermes' }) }
+if ($SkipDsh) { $selected = @($selected | Where-Object { $_ -ne 'dsh' }) }
 
 # Always install the server, engines, and diagnostics even when no supported
 # MCP client was detected - a user may configure any MCP host manually.
 if (-not $selected) {
-    Write-Host 'No MCP clients detected (Codex, OpenCode, Claude Desktop, or Hermes).' -ForegroundColor Yellow
+    Write-Host 'No MCP clients detected (Codex, OpenCode, Claude Desktop, Hermes, or DeepSeek Harness).' -ForegroundColor Yellow
     Write-Host 'The MCP server and engines will still be installed so you can configure any host manually.' -ForegroundColor Yellow
 } else {
     Write-Host "Selected: $($selected -join ', ')" -ForegroundColor Green
@@ -1041,8 +1243,12 @@ if (-not $selected) {
 Write-Step 'Obtaining the MCP server binary'
 $serverSource = Resolve-ServerBinary
 Initialize-VersionedInstall $serverSource
-if (-not $DryRun -and $serverSource -ne $stableBinary) {
-    Copy-Item -LiteralPath $serverSource -Destination $stableBinary -Force
+if ($DryRun) {
+    Write-Action "Copy '$serverSource' to '$stableBinary'"
+} elseif ($serverSource -eq $stableBinary) {
+    Write-Host "PASS: MCP server $installVersion is already in place at '$stableBinary'." -ForegroundColor Green
+} else {
+    Install-ServerBinary $serverSource $stableBinary
     Write-Host "PASS: MCP server $installVersion installed at '$stableBinary'." -ForegroundColor Green
 }
 
@@ -1056,6 +1262,7 @@ foreach ($client in $selected) {
         'opencode' { Install-OpenCode }
         'claude' { Install-Claude }
         'hermes' { Install-Hermes }
+        'dsh' { Install-Dsh }
     }
 }
 

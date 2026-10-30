@@ -189,6 +189,57 @@ if ($hermes -or (Test-Path -LiteralPath $hermesConfig)) {
     }
 }
 
+# DeepSeek Harness: one Cordis patch layer per profile, <DSH_HOME>\profiles\<profile>\cordis.patch.yml.
+# The row can live in that patch or in an installed bundle the profile lists.
+$dshHome = if ($env:DSH_HOME) { $env:DSH_HOME } else { Join-Path $env:USERPROFILE '.dsh' }
+$dshProfiles = Join-Path $dshHome 'profiles'
+if (Test-Path -LiteralPath $dshProfiles) {
+    $dshProfile = if ($env:DSH_PROFILE) { $env:DSH_PROFILE } else { 'desktop' }
+    $dshProfileDir = Join-Path $dshProfiles $dshProfile
+    $dshPatch = Join-Path $dshProfileDir 'cordis.patch.yml'
+    if (-not (Test-Path -LiteralPath $dshPatch)) {
+        $dshPatch = Get-ChildItem -LiteralPath $dshProfiles -Directory -ErrorAction SilentlyContinue |
+            ForEach-Object { Join-Path $_.FullName 'cordis.patch.yml' } |
+            Where-Object { Test-Path -LiteralPath $_ } |
+            Select-Object -First 1
+        if ($dshPatch) { $dshProfileDir = Split-Path -Parent $dshPatch }
+    }
+
+    if ($dshPatch) {
+        $expected = $stableBinary -replace '\\', '/'
+        $sources = @()
+        $patchText = if (Test-Path -LiteralPath $dshPatch) { Get-Content -LiteralPath $dshPatch -Raw } else { '' }
+        if ($patchText -match 'serverName:\s*[''"]?(instant|instant-file-search)[''"]?') {
+            $sources += [pscustomobject]@{ Kind = 'profile patch'; Path = $dshPatch; Text = $patchText }
+        }
+        $profilePackage = Join-Path $dshProfileDir 'package.json'
+        if (Test-Path -LiteralPath $profilePackage) {
+            $bundles = @()
+            try { $bundles = @((Get-Content -LiteralPath $profilePackage -Raw | ConvertFrom-Json).dsh.profile.bundles) } catch {}
+            foreach ($bundle in $bundles) {
+                if (-not $bundle) { continue }
+                $bundlePatch = Join-Path $dshProfileDir (Join-Path 'node_modules' (Join-Path $bundle 'cordis.patch.yml'))
+                if (-not (Test-Path -LiteralPath $bundlePatch)) { continue }
+                $bundleText = Get-Content -LiteralPath $bundlePatch -Raw
+                if ($bundleText -match 'serverName:\s*[''"]?(instant|instant-file-search)[''"]?') {
+                    $sources += [pscustomobject]@{ Kind = "bundle '$bundle'"; Path = $bundlePatch; Text = $bundleText }
+                }
+            }
+        }
+
+        if ($sources.Count -eq 0) {
+            Warn "DeepSeek Harness profile found at '$dshProfileDir', but MCP server '$serverName' is not registered. Run .\scripts\install.ps1 -Clients dsh."
+        } else {
+            $current = @($sources | Where-Object { $_.Text -replace '\\', '/' -match [regex]::Escape($expected) })
+            if ($current.Count -gt 0) {
+                Pass "DeepSeek Harness MCP server '$serverName' is registered from $($current[0].Kind)."
+            } else {
+                Warn "DeepSeek Harness registers '$serverName' from $($sources[0].Kind) with an older binary path. Update it to '$expected'."
+            }
+        }
+    }
+}
+
 $everything = Get-Process -Name Everything -ErrorAction SilentlyContinue
 if ($everything) {
     Pass 'Fallback Engine is running.'

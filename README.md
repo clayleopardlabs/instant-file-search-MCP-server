@@ -38,11 +38,11 @@ Have your AI agent do it:
 Install Instant File Search MCP from https://github.com/clayleopardlabs/instant-file-search-MCP-server for this computer and this AI app. Use the repository's recommended automatic installer for this operating system, configure this AI app, and complete the native indexer installation with any required OS permissions. Do not treat a fallback-only setup as complete. Verify the installation with the repository's documented diagnostic, restart this AI app if needed, then tell me which client was configured and whether verification passed.
 ```
 
-Then the AI uses the following auto installers which pull from the releases. Which you can use manually yourself if you want. They detect if you have Hermes, opencode, and ohmyopencode. If you have OMO, normally subagents don't have access to top-level MCP servers so this adds a plugin to allow them to use the tools too. The goal is that the tools from instant-file-search become the new go-to tools instead of the much slower an inefficient defaults.
+Then the AI uses the following auto installers which pull from the releases. Which you can use manually yourself if you want. They detect if you have Hermes, opencode, DeepSeek Harness, and ohmyopencode. If you have OMO, normally subagents don't have access to top-level MCP servers so this adds a plugin to allow them to use the tools too. The goal is that the tools from instant-file-search become the new go-to tools instead of the much slower an inefficient defaults.
 
 ## Windows - Automatic installer
 
-Detects a bunch of common programs like Codex and Opencode (and has plugins for ohmyopencode and omo-slim), installs the search service, and updates their configuration. You can safely run it again when a new version is available.
+Detects a bunch of common programs like Codex, Opencode and DeepSeek Harness (and has plugins for ohmyopencode and omo-slim), installs the search service, and updates their configuration. You can safely run it again when a new version is available.
 
 1. Open PowerShell.
 2. Run:
