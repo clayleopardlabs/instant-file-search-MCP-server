@@ -943,8 +943,14 @@ mod tests {
         drop(index);
         let reopened = DiskIndex::open(path.clone()).unwrap();
         assert_eq!(reopened.len(), 2);
+        // The row's volume key comes from `insert_entry`, which stores
+        // `platform::volume_of(path)` — `C:` on Windows, the mount root
+        // elsewhere. Derive it the same way: a hardcoded "C:" makes this
+        // assertion fail on Linux/macOS, where the stored key is "/".
         assert_eq!(
-            reopened.path_by_ref("C:", 42).as_deref(),
+            reopened
+                .path_by_ref(&crate::platform::volume_of(r"C:\work\alpha.rs"), 42)
+                .as_deref(),
             Some(r"C:\work\alpha.rs")
         );
         assert_eq!(
