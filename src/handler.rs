@@ -1,6 +1,8 @@
 use rmcp::{
     handler::server::wrapper::Parameters,
-    model::{CallToolResult, ContentBlock, ErrorData, Implementation, ServerInfo},
+    model::{
+        CallToolResult, ContentBlock, ErrorData, Implementation, ServerCapabilities, ServerInfo,
+    },
     ServerHandler, tool, tool_handler, tool_router,
 };
 use tracing::error;
@@ -168,9 +170,57 @@ impl EverythingHandler {
 #[tool_handler]
 impl ServerHandler for EverythingHandler {
     fn get_info(&self) -> ServerInfo {
-        ServerInfo::default().with_server_info(
+        // Advertise the `tools` capability. Without it, strictly conforming
+        // clients skip `tools/list` entirely and the server appears to expose
+        // no tools at all — the connection succeeds and the failure is silent.
+        // Observed with the DeepSeek Harness MCP bridge (which mirrors the
+        // official SDK check `capabilities.tools === undefined`); Codex,
+        // OpenCode and Hermes call `tools/list` without checking, so they were
+        // unaffected. Guarded by `initialize_advertises_tools_capability`.
+        ServerInfo::new(ServerCapabilities::builder().enable_tools().build()).with_server_info(
             Implementation::new("instant-file-search", crate::APP_VERSION)
                 .with_title("Instant File Search"),
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::EverythingHandler;
+    use rmcp::ServerHandler;
+
+    /// Strict MCP clients (DeepSeek Harness, and anything else that follows the
+    /// SDK's capability check) never call `tools/list` unless `initialize`
+    /// advertises the `tools` capability: they end up with a connected server
+    /// that exposes zero tools and no error anywhere. Keep this advertised.
+    #[test]
+    fn initialize_advertises_tools_capability() {
+        let info = EverythingHandler.get_info();
+        assert!(
+            info.capabilities.tools.is_some(),
+            "initialize must advertise capabilities.tools"
+        );
+    }
+
+    /// The capability is only useful if the router really serves the five
+    /// documented tools; a rename or a dropped `#[tool]` should fail loudly.
+    #[test]
+    fn router_registers_the_documented_tools() {
+        let mut names: Vec<String> = EverythingHandler::tool_router()
+            .list_all()
+            .into_iter()
+            .map(|tool| tool.name.to_string())
+            .collect();
+        names.sort();
+        assert_eq!(
+            names,
+            vec![
+                "aggregate_files",
+                "count_files",
+                "find_files",
+                "recent_changes",
+                "search_status",
+            ]
+        );
     }
 }
