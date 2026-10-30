@@ -207,9 +207,10 @@ fn serve_with_stop(stop: Arc<std::sync::atomic::AtomicBool>) -> Result<()> {
     let requested_content = content_mode()?;
     // Content search is a cache, not a durable copy of the user's files.
     // Clear any entries left by a crash or a prior disk-content session before
-    // deciding whether this run enables content search.
+    // deciding whether this run enables content search. No VACUUM: a multi-GB
+    // index would delay service start, and the pages are reused anyway.
     if let Some(backend) = index.disk_backend() {
-        if let Err(error) = backend.clear_content() {
+        if let Err(error) = backend.clear_content(false) {
             tracing::warn!("clear temporary disk content cache: {error:#}");
         }
     }
@@ -309,9 +310,11 @@ fn serve_with_stop(stop: Arc<std::sync::atomic::AtomicBool>) -> Result<()> {
 
     // Do not retain file text after a clean stop. The metadata index and its
     // checkpoints remain durable; only the optional content cache is removed.
+    // Deliberately no VACUUM: on a multi-GB index it takes tens of seconds, so
+    // the SCM stop timed out and reported "cannot be stopped" (issue #9).
     if content.is_disk() {
         if let Some(backend) = index.disk_backend() {
-            if let Err(error) = backend.clear_content() {
+            if let Err(error) = backend.clear_content(false) {
                 tracing::warn!("clear temporary disk content cache on shutdown: {error:#}");
             }
         }
