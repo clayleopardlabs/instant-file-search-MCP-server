@@ -127,13 +127,23 @@ impl DiskIndex {
     }
 
     /// Remove every cached file-content copy. Content search is a temporary
-    /// cache, never a durable archive. VACUUM releases its pages back to the
-    /// filesystem when the cache held data.
-    pub fn clear_content(&self) -> Result<usize> {
+    /// cache, never a durable archive.
+    ///
+    /// `vacuum` decides whether the freed pages go back to the filesystem
+    /// immediately. The service passes `false`: VACUUM on a multi-gigabyte
+    /// index takes tens of seconds, which made an SCM stop time out and report
+    /// the service as unstoppable, and the pages are reused by the next content
+    /// build anyway.
+    pub fn clear_content(&self, vacuum: bool) -> Result<usize> {
         let conn = self.conn.lock().unwrap();
         let removed = conn.execute("DELETE FROM file_contents", [])?;
-        if removed > 0 {
+        if removed == 0 {
+            return Ok(0);
+        }
+        if vacuum {
             conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE); VACUUM;")?;
+        } else {
+            checkpoint(&conn, true)?;
         }
         Ok(removed)
     }
@@ -1239,7 +1249,9 @@ mod tests {
             ..Default::default()
         });
         assert_eq!(result.total, 1);
-        assert_eq!(index.clear_content().unwrap(), 1);
+        // `true` exercises the VACUUM path; the service uses `false` so a stop
+        // does not spend tens of seconds reclaiming pages.
+        assert_eq!(index.clear_content(true).unwrap(), 1);
         assert_eq!(index.content_stats().unwrap(), (0, 0));
         drop(index);
         let reopened = DiskIndex::open(path.clone()).unwrap();
