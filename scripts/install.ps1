@@ -180,15 +180,34 @@ function Install-Dsh {
         return
     }
 
+    $text = if (Test-Path -LiteralPath $patch) { Get-Content -LiteralPath $patch -Raw } else { '' }
+    $names = Get-DshServerNames $text
+    $inProfilePatch = ($names -contains $serverName) -or ($names -contains 'instant-file-search')
+
+    # A profile that loads the server from an installed bundle must not also get
+    # a patch row: two entries with the same serverName in one scope is a load
+    # error. Report which bundle owns the row instead of writing anything.
+    $bundleName = $null
+    if (-not $inProfilePatch) {
+        $profileJson = Join-Path (Split-Path -Parent $patch) 'package.json'
+        if (Test-Path -LiteralPath $profileJson) {
+            $bundlesText = Get-Content -LiteralPath $profileJson -Raw
+            if ($bundlesText -match '"(@[^"]*/)?[^"]*instant[^"]*"') { $bundleName = $Matches[0].Trim('"') }
+        }
+    }
+
     if ($DryRun) {
-        Write-Action "Register MCP server '$serverName' for DeepSeek Harness in '$patch' (command: '$(Get-DshBinaryPath)')"
+        if ($inProfilePatch) {
+            Write-Action "Update the DeepSeek Harness entry in '$patch' to command '$(Get-DshBinaryPath)'"
+        } elseif ($bundleName) {
+            Write-Action "NOTE: DeepSeek Harness loads this server from bundle '$bundleName'; that bundle's cordis.patch.yml needs command '$(Get-DshBinaryPath)' (nothing written here)"
+        } else {
+            Write-Action "Register MCP server '$serverName' for DeepSeek Harness in '$patch' (command: '$(Get-DshBinaryPath)')"
+        }
         return
     }
 
-    $text = if (Test-Path -LiteralPath $patch) { Get-Content -LiteralPath $patch -Raw } else { '' }
-    $names = Get-DshServerNames $text
-
-    if ($names -contains $serverName -or $names -contains 'instant-file-search') {
+    if ($inProfilePatch) {
         $updated = Set-DshCommandPath $text (Get-DshBinaryPath)
         if (-not $updated) {
             Write-Host "WARN: '$patch' registers '$serverName' but its command line could not be located; update it to '$(Get-DshBinaryPath)' by hand." -ForegroundColor Yellow
@@ -197,16 +216,11 @@ function Install-Dsh {
         Backup-Config $patch
         [System.IO.File]::WriteAllText($patch, $updated + "`n", (New-Object System.Text.UTF8Encoding($false)))
         Write-Host "PASS: DeepSeek Harness entry updated in '$patch'." -ForegroundColor Green
+    } elseif ($bundleName) {
+        Write-Host "NOTE: DeepSeek Harness loads this server from the bundle '$bundleName'." -ForegroundColor Yellow
+        Write-Host "      Update that bundle's cordis.patch.yml command to '$(Get-DshBinaryPath)' instead of adding a second entry." -ForegroundColor Yellow
+        return
     } else {
-        $profileJson = Join-Path (Split-Path -Parent $patch) 'package.json'
-        if (Test-Path -LiteralPath $profileJson) {
-            $bundles = Get-Content -LiteralPath $profileJson -Raw
-            if ($bundles -match '"(@[^"]*/)?[^"]*instant[^"]*"') {
-                Write-Host "NOTE: DeepSeek Harness loads this server from the bundle '$($Matches[0].Trim('"'))'." -ForegroundColor Yellow
-                Write-Host "      Update that bundle's cordis.patch.yml command to '$(Get-DshBinaryPath)' instead of adding a second entry." -ForegroundColor Yellow
-                return
-            }
-        }
         Backup-Config $patch
         $separator = if ($text.TrimEnd().Length -gt 0) { "`n" } else { '' }
         [System.IO.File]::WriteAllText($patch, $text.TrimEnd() + $separator + (New-DshEntryText) + "`n", (New-Object System.Text.UTF8Encoding($false)))
