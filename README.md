@@ -185,6 +185,8 @@ But they usually just use the first two:
 | `recent_changes` | Investigate what was created, modified, renamed, or deleted, newest first |
 | `aggregate_files` | Answer roll-up questions like largest files, file counts by type, or total size |
 
+Searches return files. Directories are indexed too - a folder knows the total size of everything inside it - but you only get them when you ask (`is:folder`), because otherwise the biggest folder on the drive answers "find my largest files".
+
 You could ask it very specific questions like, 
 
 - "Find the project's README file."

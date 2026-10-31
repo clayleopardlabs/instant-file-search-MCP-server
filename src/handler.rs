@@ -34,11 +34,18 @@ pub struct EverythingHandler;
 
 #[tool_router]
 impl EverythingHandler {
-    #[tool(description = "Find files instantly across ALL indexed drives. USE THIS instead of glob, grep, or Get-ChildItem. Query examples: '*.rs', 'content:handler', 'dm:lastweek size:>1mb', 'attrib:h'. Supports wildcards, regex, content search, date/size filters, path scoping, and sorting. For broad patterns, call count_files first to gauge size. Results include directories, which carry aggregate sizes and are marked by is_dir - add 'is:file' when you only want files. NOTE: content: search is bounded. Memory mode uses up to 256 MB of RAM; disk mode can persist content in SQLite. Use it for targeted searches, not exhaustive scans.")]
+    #[tool(description = "Find files instantly across ALL indexed drives. USE THIS instead of glob, grep, or Get-ChildItem. Query examples: '*.rs', 'content:handler', 'dm:lastweek size:>1mb', 'attrib:h'. Supports wildcards, regex, content search, date/size filters, path scoping, and sorting. For broad patterns, call count_files first to gauge size. Results are files only; add 'is:folder' to include directories, which carry aggregate sizes and are marked by is_dir. NOTE: content: search is bounded. Memory mode uses up to 256 MB of RAM; disk mode can persist content in SQLite. Use it for targeted searches, not exhaustive scans.")]
     async fn find_files(
         &self,
         Parameters(params): Parameters<SearchParams>,
     ) -> Result<CallToolResult, ErrorData> {
+        // Files by default. Directories are indexed and carry aggregate sizes,
+        // so without this `size:>1gb` ranked `C:` above every real file. An
+        // explicit `is:folder` / `folder:` / `attrib:` opts into them.
+        let params = SearchParams {
+            query: crate::tools::default_to_files(&params.query),
+            ..params
+        };
         let result = tokio::task::spawn_blocking(move || {
             match native::search(&params) {
                 Ok(r) => Ok(r),
@@ -68,11 +75,16 @@ impl EverythingHandler {
         Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
 
-    #[tool(description = "Count files matching a query instantly across ALL indexed drives. USE THIS instead of Get-ChildItem -Recurse | Measure-Object or shell wc/find commands. Examples: '*.json path:C:/Users', '*.log'. Returns just the count, no file data. For broad patterns, always use this before find_files. NOTE: use forward slashes in paths (C:/Users) to avoid JSON escaping issues.")]
+    #[tool(description = "Count files matching a query instantly across ALL indexed drives. USE THIS instead of Get-ChildItem -Recurse | Measure-Object or shell wc/find commands. Examples: '*.json path:C:/Users', '*.log'. Returns just the count, no file data. For broad patterns, always use this before find_files. Counts files only, matching find_files; add 'is:folder' to count directories. NOTE: use forward slashes in paths (C:/Users) to avoid JSON escaping issues.")]
     async fn count_files(
         &self,
         Parameters(params): Parameters<CountParams>,
     ) -> Result<CallToolResult, ErrorData> {
+        // Same default as find_files, so "count first, then list" agrees.
+        let params = CountParams {
+            query: crate::tools::default_to_files(&params.query),
+            ..params
+        };
         let (count, note) = tokio::task::spawn_blocking(move || {
             match native::count(&params) {
                 Ok(r) => Ok(r),
@@ -149,7 +161,14 @@ impl EverythingHandler {
 
         let native_status = match native_result {
             Ok(v) => serde_json::json!({ "ok": true, "detail": v }),
-            Err(e) => serde_json::json!({ "ok": false, "error": e.to_string() }),
+            // A missing pipe usually means the service is still building its
+            // index after a start or upgrade. Say so, instead of a bare
+            // "no indexer server" that reads like a broken install.
+            Err(e) => serde_json::json!({
+                "ok": false,
+                "error": e.to_string(),
+                "hint": "The native indexer is not accepting connections. After a start, upgrade or crash it may still be scanning; retry in a few seconds. If it persists, run: sc query instant-file-search-indexer",
+            }),
         };
         let everything_status = match everything_result {
             Ok(v) => serde_json::json!({ "ok": true, "detail": v }),
@@ -165,6 +184,18 @@ impl EverythingHandler {
             .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
         Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
+}
+
+/// Names of the tools this server advertises, sorted. `--self-test` prints them
+/// so a support report shows what the model actually receives.
+pub fn tool_names() -> Vec<String> {
+    let mut names: Vec<String> = EverythingHandler::tool_router()
+        .list_all()
+        .into_iter()
+        .map(|tool| tool.name.to_string())
+        .collect();
+    names.sort();
+    names
 }
 
 #[tool_handler]

@@ -15,12 +15,13 @@
 - **Default auto-exclusions** (skip unless `include_all=true`): `node_modules`, `.git`, `WinSxS`
 - **`exclude_path` separator**: `;` (semicolon), not comma
 - **Default scope**: ALL indexed drives. Narrow with `path` (forward slashes like `C:/Users` work; the engine normalizes them)
-- **Directories are indexed and returned by `find_files`.** A folder carries the aggregate size of everything under it, so a `size:` filter will rank folders alongside files. Every result has `is_dir`, and the query tokens `is:file` / `is:folder` (or `file:` / `folder:`) filter by type when you only want real files.
+- **`find_files` and `count_files` return files, not directories.** Directories are indexed and carry the aggregate size of everything under them, so an unqualified `size:>1gb` used to rank `C:` above every real file; the tools now append the `file:` type token unless the query already chooses a type. Add `is:folder`, `folder:`, or an `attrib:` filter (`attrib:d`) to include them — `aggregate_files` still reports files and folders separately.
+- Every result carries `is_dir`, so a caller can filter either way without re-querying.
 - Response includes `total` (all matches), `returned` (current page count), `offset` (page position), and `note` (exclusion info)
 
 ## find_files result fields
 
-`filename`, `path`, `is_dir`, `size`, `date_modified`, `date_created`, `date_accessed`, `attributes`, `extension`, `run_count`, `date_run`. The last two are Everything-only and are always `null` on the native engine.
+`filename`, `path`, `is_dir`, `size`, `date_modified`, `date_created`, `date_accessed`, `attributes`, `extension`, `run_count`, `date_run`. The last two are Everything-only and are **omitted** (not `null`) on the native engine, which does not track launch counts.
 
 ## recent_changes
 
@@ -30,6 +31,8 @@ USN Change Journal events since a time, **newest first**:
 - `since=<FILETIME>` — events strictly newer than this Windows FILETIME (100ns since 1601-01-01, NOT .NET ticks)
 - `limit` — max events returned; **default 100**, pass `0` for all (capped at 100k). The ring buffer holds the last 100,000 events.
 - `reasons=created,modified,renamed,deleted` — comma-separated filter; use `reasons=created,modified` to skip delete noise from the NTFS `$Deleted` staging area
+
+Each event carries `timestamp` (the raw 100ns-since-1601 value, for round-tripping into `since`) **and** `date`, its ISO 8601 UTC equivalent, so nothing has to convert by hand.
 
 ## Sort options (14)
 
