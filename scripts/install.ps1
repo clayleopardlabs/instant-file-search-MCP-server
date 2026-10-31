@@ -1320,8 +1320,16 @@ if (-not $DryRun) {
     }
     $downloadsDir = Join-Path $InstallRoot 'downloads'
     if (Test-Path -LiteralPath $downloadsDir) {
+        # Each run drops its own directory under downloads\<pid>. A directory
+        # whose PID is no longer running belongs to a finished install and can
+        # go immediately; the age check only covers reused PIDs.
         Get-ChildItem -LiteralPath $downloadsDir -Directory -ErrorAction SilentlyContinue |
-            Where-Object { $_.FullName -eq $downloadRoot -or $_.LastWriteTime -lt (Get-Date).AddDays(-1) } |
+            Where-Object {
+                if ($_.FullName -eq $downloadRoot) { return $true }
+                $owner = 0
+                $alive = [int]::TryParse($_.Name, [ref]$owner) -and (Get-Process -Id $owner -ErrorAction SilentlyContinue)
+                (-not $alive) -or $_.LastWriteTime -lt (Get-Date).AddDays(-1)
+            } |
             ForEach-Object { Remove-Item -LiteralPath $_.FullName -Recurse -Force -ErrorAction SilentlyContinue }
     }
 }
