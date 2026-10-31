@@ -84,7 +84,7 @@ fn connect_inner(timeout_ms: u32) -> std::io::Result<std::fs::File> {
             Err(_) => {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::NotFound,
-                    "no indexer server",
+                    "indexer named pipe is not present (service stopped, or still building its index after a start or upgrade)",
                 ));
             }
         }
@@ -340,7 +340,13 @@ pub fn aggregate(params: &AggregateParams) -> Result<AggregateResult> {
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct ChangeEvent {
+    /// USN timestamp: 100 ns intervals since 1601-01-01.
     pub timestamp: i64,
+    /// Readable equivalent of `timestamp` (ISO 8601 UTC). Filled in by
+    /// `recent_changes` so callers never have to do 18-digit FILETIME math;
+    /// the indexer does not send it, hence `default`.
+    #[serde(default)]
+    pub date: String,
     pub reason: String,
     pub path: String,
     pub is_dir: bool,
@@ -375,5 +381,13 @@ pub fn recent_changes(params: &RecentChangesParams) -> Result<RecentChanges> {
     };
     let limit = params.limit.unwrap_or(100);
     let data = exchange("recent_changes", Some(options_from_recent(since, limit, params.reasons.clone())))?;
-    Ok(serde_json::from_value(data).map_err(|e| anyhow!("native recent_changes: bad response: {e}"))?)
+    let mut changes: RecentChanges =
+        serde_json::from_value(data).map_err(|e| anyhow!("native recent_changes: bad response: {e}"))?;
+    // The wire carries the raw USN timestamp; derive the readable form here so
+    // every consumer (agents included) sees an ISO date next to it.
+    for change in &mut changes.changes {
+        change.date =
+            ns100_to_iso_string(change.timestamp.max(0) as u64).unwrap_or_default();
+    }
+    Ok(changes)
 }

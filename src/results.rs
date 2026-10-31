@@ -41,10 +41,13 @@ pub struct SearchResult {
     /// File extension.
     pub extension: Option<String>,
 
-    /// Number of times this file has been run (launched).
+    /// Number of times this file has been run (launched). Everything-only:
+    /// omitted rather than null on the native engine, which does not track it.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub run_count: Option<u32>,
 
-    /// Last run date (ISO 8601 UTC).
+    /// Last run date (ISO 8601 UTC). Everything-only, like `run_count`.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub date_run: Option<String>,
 }
 
