@@ -1,0 +1,75 @@
+name: Windows CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+
+jobs:
+  build-test:
+    # Windows ships the release binaries, but Linux and macOS were the only
+    # platforms with tests. This runs the same suite where the product runs,
+    # including the stdio handshake test that cannot be exercised elsewhere.
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: msys2/setup-msys2@v2
+        with:
+          update: true
+          install: mingw-w64-x86_64-gcc
+          path-type: inherit
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-gnu
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      - name: Test (Windows target)
+        run: |
+          export PATH="/c/Users/runneradmin/.cargo/bin:$PATH"
+          cargo test --workspace
+        env:
+          CC_x86_64_pc_windows_gnu: gcc
+
+      - name: Validate the elevated service helper (no admin, no service)
+        shell: pwsh
+        run: |
+          # The helper is the only part of the installer that runs as admin, and
+          # it used to be generated from a here-string. Bind its parameters here
+          # so a syntax or parameter regression fails on the PR, not on a user's
+          # machine mid-upgrade.
+          ./scripts/register-indexer-service.ps1 -Validate `
+            -SourceIndexer 'C:\staging\instant-file-search-indexer.exe' `
+            -ServiceIndexer 'C:\Program Files\ifs\instant-file-search-indexer.exe'
+
+      - name: Parse-check the installer and doctor
+        shell: pwsh
+        run: |
+          $files = @('scripts/install.ps1', 'scripts/doctor.ps1')
+          $failed = $false
+          foreach ($file in $files) {
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $file), [ref]$null, [ref]$errors) | Out-Null
+            if ($errors.Count -gt 0) {
+              $failed = $true
+              Write-Host "::error file=$file::$($errors[0].Message)"
+              $errors | ForEach-Object { Write-Host "$file:$($_.Extent.StartLineNumber): $($_.Message)" }
+            } else {
+              Write-Host "$file parses clean"
+            }
+          }
+          if ($failed) { exit 1 }
