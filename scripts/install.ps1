@@ -384,6 +384,22 @@ function Resolve-ServerBinary {
     return $downloaded
 }
 
+function Resolve-ServiceHelper {
+    # The admin-only half of the install lives in scripts\ (and ships as a
+    # release asset) instead of being generated from a here-string: it can be
+    # reviewed, syntax-checked, and exercised by CI without elevation.
+    $helperName = 'register-indexer-service.ps1'
+    if ($isCheckout) {
+        $local = Join-Path $repoRoot "scripts\$helperName"
+        if (Test-Path -LiteralPath $local) { return $local }
+    }
+    if ($SkipDownload) { throw "Service helper '$helperName' was not found and -SkipDownload was set." }
+    New-Item -ItemType Directory -Path $downloadRoot -Force | Out-Null
+    $downloaded = Join-Path $downloadRoot $helperName
+    Get-ReleaseAsset $helperName $downloaded
+    return $downloaded
+}
+
 function Resolve-IndexerBinary {
     if ($IndexerBinary) {
         if (-not (Test-Path -LiteralPath $IndexerBinary)) { throw "Indexer binary not found: $IndexerBinary" }
@@ -1094,63 +1110,25 @@ function Install-NativeService {
 
     New-Item -ItemType Directory -Path $indexerDir -Force | Out-Null
 
-    # Escape single quotes in paths so the generated helper survives usernames
-    # or install roots that contain an apostrophe.
-    $escResolved = $resolved -replace "'", "''"
-    $escServiceIndexer = $serviceIndexer -replace "'", "''"
-    $escServiceName = $serviceName -replace "'", "''"
-    $escIndexMode = $IndexMode -replace "'", "''"
-    $escContentMode = $ContentMode -replace "'", "''"
-
-# Write a tiny helper that performs the admin-only switch. The binary was
-# copied after the service stops, so updates can replace an existing binary.
-# Use cmd.exe for sc.exe because PowerShell strips nested quotes from native
-# command arguments.
-$helper = @"
-`$ErrorActionPreference = 'Stop'
-`$sourceIndexer = '$escResolved'
-`$serviceName = '$escServiceName'
-`$serviceIndexer = '$escServiceIndexer'
-`$indexMode = '$escIndexMode'
-`$contentMode = '$escContentMode'
-`$serviceCommand = 'sc.exe config "' + `$serviceName + '" binPath= "\"' + `$serviceIndexer + '\" service" start= auto'
-`$existing = Get-Service -Name `$serviceName -ErrorAction SilentlyContinue
-if (`$existing) {
-  if (`$existing.Status -ne 'Stopped') {
-    # A stop that slightly exceeds the SCM window throws even though it lands a
-    # moment later, which used to abort whole upgrades. Ask, then wait for the
-    # state to settle rather than trusting one call.
-    try { Stop-Service -Name `$serviceName -Force -ErrorAction Stop } catch { }
-    `$stopDeadline = (Get-Date).AddSeconds(60)
-    while ((Get-Service -Name `$serviceName -ErrorAction SilentlyContinue).Status -ne 'Stopped' -and (Get-Date) -lt `$stopDeadline) {
-      Start-Sleep -Milliseconds 500
+    # The admin-only half lives in scripts\register-indexer-service.ps1 (shipped
+    # as a release asset too) instead of a generated here-string: it can be
+    # reviewed, syntax-checked, and bound by CI without elevation.
+    $helperSource = Resolve-ServiceHelper
+    if ($helperSource -ne $registerHelper) {
+        Copy-Item -LiteralPath $helperSource -Destination $registerHelper -Force
     }
-    if ((Get-Service -Name `$serviceName -ErrorAction SilentlyContinue).Status -ne 'Stopped') {
-      throw "Service `$serviceName did not stop within 60 seconds. Close the AI apps using it and run the installer again."
-    }
-  }
-  Copy-Item -LiteralPath `$sourceIndexer -Destination `$serviceIndexer -Force
-  & cmd.exe /d /c `$serviceCommand | Out-Null
-  if (`$LASTEXITCODE -ne 0) { throw "sc.exe config failed for service `$serviceName." }
-} else {
-  Copy-Item -LiteralPath `$sourceIndexer -Destination `$serviceIndexer -Force
-  `$serviceCommand = 'sc.exe create "' + `$serviceName + '" binPath= "\"' + `$serviceIndexer + '\" service" start= auto'
-  & cmd.exe /d /c `$serviceCommand | Out-Null
-  if (`$LASTEXITCODE -ne 0) { throw "sc.exe create failed for service `$serviceName." }
-}
-`$environment = @("INSTANT_FS_INDEX_MODE=`$indexMode", "INSTANT_FS_CONTENT_INDEX=`$contentMode")
-`$serviceKey = "HKLM:\SYSTEM\CurrentControlSet\Services\`$serviceName"
-`$oldEnvironment = @((Get-ItemProperty -Path `$serviceKey -Name Environment -ErrorAction SilentlyContinue).Environment)
-`$preserved = @(`$oldEnvironment | Where-Object { `$_ -and `$_ -notmatch '^INSTANT_FS_(INDEX_MODE|CONTENT_INDEX)=' })
-New-ItemProperty -Path `$serviceKey -Name Environment -PropertyType MultiString -Value (@(`$preserved + `$environment)) -Force | Out-Null
-Start-Service -Name `$serviceName
-`$started = Get-Service -Name `$serviceName
-`$started.WaitForStatus([System.ServiceProcess.ServiceControllerStatus]::Running, [TimeSpan]::FromSeconds(120))
-"@
-    Set-Content -LiteralPath $registerHelper -Value $helper -Encoding UTF8
+    $helperArgs = @(
+        '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$registerHelper`"",
+        '-SourceIndexer', "`"$resolved`"",
+        '-ServiceIndexer', "`"$serviceIndexer`"",
+        '-ServiceName', "`"$serviceName`"",
+        '-IndexMode', $IndexMode,
+        '-ContentMode', $ContentMode
+    )
+    $helperCommand = 'powershell -NoProfile -ExecutionPolicy Bypass -File "' + $registerHelper + '" -SourceIndexer "' + $resolved + '" -ServiceIndexer "' + $serviceIndexer + '" -ServiceName "' + $serviceName + '" -IndexMode ' + $IndexMode + ' -ContentMode ' + $ContentMode
 
     if ($elevated) {
-        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $registerHelper
+        & powershell.exe @helperArgs
         if ($LASTEXITCODE -ne 0) { throw "Indexer service registration failed (exit $LASTEXITCODE)." }
         $svc = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
         if ($svc -and $svc.Status -eq 'Running') {
@@ -1163,13 +1141,13 @@ Start-Service -Name `$serviceName
 
     if ($SkipElevation) {
         Write-Host 'WARN: not running elevated and -SkipElevation was set, so the indexer service was NOT registered. Searches will use the Fallback Engine until you register it. When you are ready, run this elevated:' -ForegroundColor Yellow
-        Write-Host "  powershell -NoProfile -ExecutionPolicy Bypass -File `"$registerHelper`"" -ForegroundColor Gray
+        Write-Host "  $helperCommand" -ForegroundColor Gray
         return
     }
 
     Write-Host 'The native indexer service needs administrator rights. A UAC prompt will appear - click Yes.' -ForegroundColor Yellow
     try {
-        $elevatedProcess = Start-Process -FilePath powershell.exe -Verb RunAs -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$registerHelper`"" -Wait -PassThru -ErrorAction Stop
+        $elevatedProcess = Start-Process -FilePath powershell.exe -Verb RunAs -ArgumentList $helperArgs -Wait -PassThru -ErrorAction Stop
         if ($elevatedProcess.ExitCode -ne 0) {
             throw "elevated service helper exited with code $($elevatedProcess.ExitCode)."
         }
@@ -1183,12 +1161,12 @@ Start-Service -Name `$serviceName
             Write-Host "PASS: indexer service '$serviceName' installed and started (auto-start)." -ForegroundColor Green
         } else {
             Write-Host "WARN: elevation did not leave the '$serviceName' service running. Run the helper elevated manually:" -ForegroundColor Yellow
-            Write-Host "  powershell -NoProfile -ExecutionPolicy Bypass -File `"$registerHelper`"" -ForegroundColor Gray
+            Write-Host "  $helperCommand" -ForegroundColor Gray
         }
     } catch {
         Write-Host "WARN: elevation was cancelled or failed: $($_.Exception.Message)" -ForegroundColor Yellow
         Write-Host "Run this elevated when ready:" -ForegroundColor Yellow
-        Write-Host "  powershell -NoProfile -ExecutionPolicy Bypass -File `"$registerHelper`"" -ForegroundColor Gray
+        Write-Host "  $helperCommand" -ForegroundColor Gray
     }
 }
 

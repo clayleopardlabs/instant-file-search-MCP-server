@@ -200,4 +200,23 @@ Build with `cargo build --release` from the workspace root.
 - Linux: fanotify lumps CREATE/MODIFY/CLOSE_WRITE into a single "WRITE" reason. The `recent_changes` "created" filter is a synonym for "modified" — there is no way to distinguish file creation from modification via fanotify alone.
 - Linux: `/tmp` is typically tmpfs (not a real disk) and is excluded from the indexer scan. Use paths on real disk volumes for test files.
 
+## Pre-release checks
+
+Run these before tagging, in this order:
+
+1. `cargo test --workspace` — unit tests plus `tests/mcp_handshake.rs`, which
+   spawns the built binary and asserts the real `initialize` handshake
+   advertises `capabilities.tools` and that `tools/list` returns the five
+   tools. A unit test on `get_info()` cannot catch that class of bug; the wire
+   can.
+2. `scripts/parity.ps1` (Windows, indexer service running) — the differential
+   battery that compares native counts against the Everything engine. It needs
+   live engines, so CI cannot run it and it is `#[ignore]`d by default.
+3. `scripts/doctor.ps1 -RequireNative` — must report 0 failures.
+
+`scripts/install.ps1` delegates the admin-only half to
+`scripts/register-indexer-service.ps1`, which ships as a release asset and has a
+`-Validate` switch that binds its parameters without touching a service, so CI
+checks it on every PR.
+
 See `docs/` for architecture, build instructions, tool reference, and development notes.

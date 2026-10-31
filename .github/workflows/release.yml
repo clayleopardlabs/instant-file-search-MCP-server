@@ -96,6 +96,7 @@ jobs:
             plugin/package.json
             plugin/package-lock.json
             scripts/doctor.ps1
+            scripts/register-indexer-service.ps1
           if-no-files-found: error
 
   release:
@@ -123,6 +124,7 @@ jobs:
           cp plugin/package.json release-files/instant-file-search-mcp-plugin-package.json
           cp plugin/package-lock.json release-files/instant-file-search-mcp-plugin-package-lock.json
           cp scripts/doctor.ps1 release-files/doctor.ps1
+          cp scripts/register-indexer-service.ps1 release-files/register-indexer-service.ps1
 
       - name: Publish release
         uses: softprops/action-gh-release@v2
