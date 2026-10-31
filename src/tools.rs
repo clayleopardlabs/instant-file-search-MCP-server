@@ -138,3 +138,65 @@ pub struct RecentChangesParams {
     /// Only return events with these reasons. Comma-separated subset of: created, modified, renamed, deleted. Default: all. USE THIS to skip delete noise (e.g. reasons=created,modified).
     pub reasons: Option<String>,
 }
+
+/// Tool-level default type filter: `find_files` and `count_files` return files.
+///
+/// Directories are indexed and carry the aggregate size of everything beneath
+/// them, so an unqualified `size:>1gb` ranked `C:` and `Users` above every real
+/// file. Models ask a file search for files, so the default appends the `file:`
+/// type token - which both the native engine and the Everything fallback parse,
+/// keeping their counts in step.
+///
+/// A query that already chooses a type is left untouched: `is:file`,
+/// `is:folder`, `file:`, `folder:`, or any `attrib:` filter (that is how a
+/// caller asks for directories, e.g. `attrib:d` or `is:hidden`).
+pub fn default_to_files(query: &str) -> String {
+    let explicit_type = query.split_whitespace().any(|word| {
+        let word = word.to_ascii_lowercase();
+        word.starts_with("is:")
+            || word.starts_with("file:")
+            || word.starts_with("folder:")
+            || word.starts_with("attrib:")
+    });
+    if explicit_type {
+        return query.to_string();
+    }
+    if query.trim().is_empty() {
+        return "file:".to_string();
+    }
+    format!("{query} file:")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::default_to_files;
+
+    #[test]
+    fn adds_the_file_filter_when_no_type_is_given() {
+        assert_eq!(default_to_files("*.rs"), "*.rs file:");
+        assert_eq!(default_to_files("size:>1gb"), "size:>1gb file:");
+        assert_eq!(default_to_files("content:\"fn main\""), "content:\"fn main\" file:");
+        assert_eq!(default_to_files(""), "file:");
+        assert_eq!(default_to_files("   "), "file:");
+    }
+
+    #[test]
+    fn leaves_an_explicit_type_alone() {
+        for query in [
+            "is:folder",
+            "*.rs is:file",
+            "folder:src",
+            "file:*.log",
+            "attrib:d",
+            "size:>1gb attrib:h",
+        ] {
+            assert_eq!(default_to_files(query), query, "query {query} must not be rewritten");
+        }
+    }
+
+    #[test]
+    fn a_word_that_merely_contains_a_token_is_not_a_type() {
+        // "this:" and "relist:" must not be mistaken for "is:".
+        assert_eq!(default_to_files("relist:today"), "relist:today file:");
+    }
+}
