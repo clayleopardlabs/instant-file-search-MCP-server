@@ -24,6 +24,7 @@ param(
     [string[]]$DshPresets,
     [switch]$SelfTest,
     [switch]$NonInteractive,
+    [switch]$Uninstall,
     [switch]$PruneOldVersions,
     [int]$NativeWaitSec = 180,
     [int]$ElevationTimeoutSec = 120,
@@ -825,6 +826,13 @@ function Invoke-InstallerSelfTest {
     Assert-Equality ($edit.Text.Contains("`r`n")) $true 'CRLF patch keeps CRLF line endings'
     Assert-Equality ($edit.Text.Contains("`n") -and (($edit.Text -replace "`r`n", '').Contains("`n"))) $false 'CRLF patch does not gain bare LF endings'
 
+    # 10. Uninstall removes the registrations but keeps unrelated patch content.
+    $removal = Remove-DshServerRows $healed
+    Assert-Equality $removal.Removed 2 'uninstall removes both registrations'
+    $info = Get-DshPatchInfo $removal.Text
+    Assert-Equality $info.ServerRows.Count 0 'uninstall leaves no registration rows behind'
+    Assert-Equality ($removal.Text.Contains('preset-reverse-engineering')) $true 'uninstall keeps unrelated preset definitions'
+    Assert-Equality ($removal.Text.Contains('mcp-instant-file-search')) $false 'uninstall removes the instant row ids'
     if ($script:selfTestFailures -gt 0) {
         Write-Host "Self-test FAILED: $($script:selfTestFailures) failure(s)." -ForegroundColor Red
         return 1
@@ -2071,6 +2079,258 @@ function Test-Installation {
     return $ok
 }
 
+# --- Uninstall --------------------------------------------------------------
+# Removes the registrations and files this installer created. Client configs are
+# edited in place with the same backups the install path takes.
+
+function Remove-TomlMcpSection {
+    param([string]$Text, [string]$Name)
+    $pattern = '^\s*\[mcp_servers\.' + [regex]::Escape($Name) + '(\.[^\]]+)?\]\s*$'
+    $lines = [string[]]($Text -split "\r?\n")
+    $out = [System.Collections.Generic.List[string]]::new()
+    $skip = $false
+    foreach ($line in $lines) {
+        if ($line -match '^\s*\[mcp_servers\.') {
+            $skip = ($line -match $pattern)
+            if ($skip) { continue }
+        } elseif ($line -match '^\s*\[') {
+            $skip = $false
+        }
+        if (-not $skip) { $out.Add($line) }
+    }
+    return ($out -join "`n")
+}
+
+function Remove-HermesMcpEntry {
+    param([string]$Text, [string]$Name)
+    $lines = [string[]]($Text -split "\r?\n")
+    $out = [System.Collections.Generic.List[string]]::new()
+    $skip = $false
+    foreach ($line in $lines) {
+        if ($line -match ('^  ' + [regex]::Escape($Name) + ':\s*$')) { $skip = $true; continue }
+        if ($skip -and $line -match '^  \S') { $skip = $false }
+        if (-not $skip) { $out.Add($line) }
+    }
+    return ($out -join "`n")
+}
+
+function Remove-JsonMcpKey {
+    param([string]$Path, [string[]]$Names, [string]$Container)
+    if (-not (Test-Path -LiteralPath $Path)) { return $false }
+    $cfg = $null
+    try { $cfg = Read-JsonConfig $Path } catch { return $false }
+    if (-not $cfg) { return $false }
+    $containerObject = $cfg.PSObject.Properties[$Container].Value
+    if (-not $containerObject) { return $false }
+    $removed = $false
+    foreach ($name in $Names) {
+        if ($containerObject.PSObject.Properties[$name]) {
+            $containerObject.PSObject.Properties.Remove($name)
+            $removed = $true
+        }
+    }
+    if ($removed) { Write-JsonConfig $Path $cfg }
+    return $removed
+}
+
+# Remove every row that registers our server. A top-level `- insert:` entry that
+# exists only for this server is removed whole; inside a preset only the child
+# row goes, leaving the rest of the preset intact.
+function Remove-DshServerRows {
+    param([string]$Text)
+    $info = Get-DshPatchInfo $Text
+    if ($info.ServerRows.Count -eq 0) { return [pscustomobject]@{ Text = $Text; Removed = 0 } }
+
+    $serverStarts = @($info.ServerRows | ForEach-Object { $_.Start })
+    $ranges = @()
+    foreach ($row in $info.ServerRows) {
+        $entry = @($info.Entries | Where-Object { $row.Start -ge $_.Start -and $row.Start -le $_.End }) | Select-Object -First 1
+        $otherRowsInEntry = @()
+        if ($entry) {
+            $otherRowsInEntry = @($info.Rows | Where-Object {
+                $_.Start -ge $entry.Start -and $_.Start -le $entry.End -and ($serverStarts -notcontains $_.Start)
+            })
+        }
+        if ($entry -and $otherRowsInEntry.Count -eq 0) {
+            $ranges += [pscustomobject]@{ Start = $entry.Start; End = $entry.End }
+        } else {
+            $ranges += [pscustomobject]@{ Start = $row.Start; End = $row.End }
+        }
+    }
+
+    $split = Split-TextIntoLines $Text
+    $lines = [System.Collections.Generic.List[string]]::new()
+    $lines.AddRange([string[]]$split.Lines)
+    $endings = [System.Collections.Generic.List[string]]::new()
+    $endings.AddRange([string[]]$split.Endings)
+    $removedLines = 0
+    foreach ($range in ($ranges | Sort-Object Start -Descending)) {
+        $count = $range.End - $range.Start + 1
+        if ($count -le 0) { continue }
+        $lines.RemoveRange($range.Start, $count)
+        $endings.RemoveRange($range.Start, $count)
+        $removedLines += $count
+    }
+    # Keep the file newline-terminated if it was before.
+    if ($lines.Count -gt 0 -and $endings.Count -gt 0 -and [string]::IsNullOrEmpty($endings[$endings.Count - 1])) {
+        $endings[$endings.Count - 1] = Get-DominantNewline ([string[]]$split.Endings)
+    }
+    return [pscustomobject]@{ Text = (Join-TextFromLines -Lines ([string[]]$lines) -Endings ([string[]]$endings)); Removed = $info.ServerRows.Count }
+}
+
+function Invoke-Uninstall {
+    Write-Host 'Instant File Search MCP uninstaller' -ForegroundColor Green
+    Write-Host 'Close any AI app that uses this server (DeepSeek Harness, Codex, OpenCode, Claude, Hermes) first: a running MCP server process keeps its binary locked.' -ForegroundColor Gray
+    $names = @($serverName, 'everything', 'instant-file-search')
+
+    # 1) DeepSeek Harness registrations.
+    if (Test-DshInstalled) {
+        $target = $null
+        try { $target = Resolve-DshProfile -Profile $DshProfile }
+        catch { Write-Host "WARN: $($_.Exception.Message)" -ForegroundColor Yellow }
+        if ($target) {
+            if ($DryRun) {
+                Write-Action "Remove '$serverName' registration row(s) from DeepSeek Harness profile '$($target.Name)'"
+            } else {
+                $text = Read-TextFile $target.Patch
+                $result = Remove-DshServerRows $text
+                if ($result.Removed -gt 0) {
+                    Backup-Config $target.Patch
+                    Write-TextFile -Path $target.Patch -Text $result.Text -WithBom (Test-TextFileHasBom $target.Patch)
+                    Write-Host "PASS: removed $($result.Removed) DeepSeek Harness registration row(s) from '$($target.Patch)'." -ForegroundColor Green
+                } else {
+                    Write-Host 'DeepSeek Harness has no registration for this server; nothing to remove.' -ForegroundColor Gray
+                }
+            }
+        }
+    }
+
+    # 2) User environment variables used by the OpenCode adapter.
+    foreach ($variableName in @('INSTANT_FS_MCP_BINARY', 'EVERYTHING_MCP_BINARY')) {
+        if ([Environment]::GetEnvironmentVariable($variableName, 'User')) {
+            if ($DryRun) {
+                Write-Action "Clear user environment variable $variableName"
+            } else {
+                [Environment]::SetEnvironmentVariable($variableName, $null, 'User')
+                Write-Host "PASS: cleared $variableName." -ForegroundColor Green
+            }
+        }
+    }
+
+    # 3) Client configs.
+    foreach ($client in @($UninstallClients)) {
+        switch ($client) {
+            'codex' {
+                $codexConfig = Join-Path $env:USERPROFILE '.codex\config.toml'
+                if (Test-Path -LiteralPath $codexConfig) {
+                    if ($DryRun) { Write-Action "Remove the instant MCP sections from '$codexConfig'" }
+                    else {
+                        $codexText = Read-TextFile $codexConfig
+                        $cleaned = $codexText
+                        foreach ($name in $names) { $cleaned = Remove-TomlMcpSection $cleaned $name }
+                        if ($cleaned -ne $codexText) {
+                            Backup-Config $codexConfig
+                            Write-TextFile -Path $codexConfig -Text $cleaned -WithBom (Test-TextFileHasBom $codexConfig)
+                            Write-Host "PASS: removed '$serverName' from Codex config." -ForegroundColor Green
+                        }
+                    }
+                }
+            }
+            'opencode' {
+                $openConfig = Resolve-OpenCodeConfig
+                if ($openConfig) {
+                    if ($DryRun) { Write-Action "Remove '$serverName' (and legacy keys) from '$openConfig'" }
+                    elseif (Remove-JsonMcpKey -Path $openConfig -Names $names -Container 'mcp') {
+                        Write-Host "PASS: removed '$serverName' from '$openConfig'." -ForegroundColor Green
+                    }
+                }
+            }
+            'claude' {
+                if (Test-Path -LiteralPath $claudeConfig) {
+                    if ($DryRun) { Write-Action "Remove '$serverName' (and legacy keys) from '$claudeConfig'" }
+                    elseif (Remove-JsonMcpKey -Path $claudeConfig -Names $names -Container 'mcpServers') {
+                        Write-Host "PASS: removed '$serverName' from Claude Desktop config." -ForegroundColor Green
+                    }
+                }
+            }
+            'hermes' {
+                if (Test-Path -LiteralPath $hermesConfig) {
+                    if ($DryRun) { Write-Action "Remove '$serverName' (and legacy keys) from '$hermesConfig'" }
+                    else {
+                        $hermesText = Read-TextFile $hermesConfig
+                        $cleaned = $hermesText
+                        foreach ($name in $names) { $cleaned = Remove-HermesMcpEntry $cleaned $name }
+                        if ($cleaned -ne $hermesText) {
+                            Backup-Config $hermesConfig
+                            Write-TextFile -Path $hermesConfig -Text $cleaned -WithBom (Test-TextFileHasBom $hermesConfig)
+                            Write-Host "PASS: removed '$serverName' from Hermes config." -ForegroundColor Green
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    # 4) The indexer service (admin).
+    $service = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
+    if ($service) {
+        $helperCandidates = @()
+        if ($versionRoot) { $helperCandidates += (Join-Path (Join-Path $versionRoot 'indexer') 'register-indexer-service.ps1') }
+        if ($repoRoot) { $helperCandidates += (Join-Path $repoRoot 'scripts\register-indexer-service.ps1') }
+        $helper = @($helperCandidates | Where-Object { Test-Path -LiteralPath $_ }) | Select-Object -First 1
+        if ($DryRun) {
+            Write-Action "Stop and delete service '$serviceName'"
+        } elseif ($NonInteractive -and -not $elevated) {
+            Write-Host 'WARN: the indexer service needs administrator rights. Run this elevated:' -ForegroundColor Yellow
+            if ($helper) { Write-Host "  powershell -NoProfile -ExecutionPolicy Bypass -File `"$helper`" -Uninstall -ServiceName $serviceName" -ForegroundColor Gray }
+            else { Write-Host "  sc.exe delete $serviceName" -ForegroundColor Gray }
+            $script:incomplete = $true
+        } else {
+            $helperArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$helper`"", '-Uninstall', '-ServiceName', $serviceName)
+            $removeProcess = if ($elevated) {
+                Start-Process -FilePath powershell.exe -ArgumentList $helperArgs -PassThru -NoNewWindow -Wait
+            } else {
+                Start-Process -FilePath powershell.exe -Verb RunAs -ArgumentList $helperArgs -PassThru
+            }
+            if ($elevated -and $removeProcess.ExitCode -ne 0) {
+                Write-Host "WARN: service removal helper exited with code $($removeProcess.ExitCode)." -ForegroundColor Yellow
+                $script:incomplete = $true
+            }
+        }
+    }
+
+    # 5) Installed files.
+    if (Test-Path -LiteralPath $InstallRoot) {
+        if ($DryRun) {
+            Write-Action "Remove install directory '$InstallRoot'"
+        } else {
+            try {
+                Remove-Item -LiteralPath $InstallRoot -Recurse -Force -ErrorAction Stop
+                Write-Host "PASS: removed '$InstallRoot'." -ForegroundColor Green
+            } catch {
+                Write-Host "WARN: could not remove '$InstallRoot': $($_.Exception.Message). Close the AI app that runs the server and run -Uninstall again." -ForegroundColor Yellow
+                $script:incomplete = $true
+            }
+        }
+    }
+
+    $dataDir = Join-Path $env:PROGRAMDATA 'ClayLeopardLabs\instant-file-search'
+    if (Test-Path -LiteralPath $dataDir) {
+        Write-Host "NOTE: the index database is still at '$dataDir'; remove it as administrator if you want that space back (sc.exe delete the service first if it is running)." -ForegroundColor Gray
+    }
+
+    if ($DryRun) {
+        Write-Host "`nDRY RUN complete: nothing was removed." -ForegroundColor Yellow
+        return 0
+    }
+    if ($script:incomplete) {
+        Write-Host "`nUninstall finished, but the items above still need attention." -ForegroundColor Yellow
+        return 2
+    }
+    Write-Host "`nUninstall complete." -ForegroundColor Green
+    return 0
+}
+
 # Pure-function regression tests for the patch editor; never touches a real profile.
 if ($SelfTest) { exit (Invoke-InstallerSelfTest) }
 
@@ -2080,6 +2340,11 @@ if ($isCheckout) { Write-Host 'Source: local checkout' -ForegroundColor Gray }
 else { Write-Host "Source: GitHub release ($ReleaseBase)" -ForegroundColor Gray }
 
 $elevated = Test-Elevated
+if ($Uninstall) {
+    $uninstallClients = if ($Clients -and ($Clients -notcontains 'all')) { @($Clients) } else { @(Get-DetectedClients) }
+    if ($Clients -contains 'all') { $uninstallClients = @(Get-DetectedClients) }
+    exit (Invoke-Uninstall -UninstallClients $uninstallClients)
+}
 
 $selected = @(Select-InstallClients)
 if ($SkipCodex) { $selected = @($selected | Where-Object { $_ -ne 'codex' }) }

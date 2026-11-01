@@ -23,12 +23,13 @@ pwsh -File .\register-indexer-service.ps1 -Validate -SourceIndexer x -ServiceInd
 #>
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory = $true)][string]$SourceIndexer,
-    [Parameter(Mandatory = $true)][string]$ServiceIndexer,
+    [string]$SourceIndexer,
+    [string]$ServiceIndexer,
     [string]$ServiceName = 'instant-file-search-indexer',
     [ValidateSet('memory', 'disk')][string]$IndexMode = 'disk',
     [ValidateSet('auto', 'off', 'memory', 'disk')][string]$ContentMode = 'auto',
-    [switch]$Validate
+    [switch]$Validate,
+    [switch]$Uninstall
 )
 
 $ErrorActionPreference = 'Stop'
@@ -44,6 +45,31 @@ if ($Validate) {
     exit 0
 }
 
+if ($Uninstall) {
+    $existing = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
+    if (-not $existing) {
+        Write-Host "Service '$ServiceName' is not installed."
+        exit 0
+    }
+    if ($existing.Status -ne 'Stopped') {
+        try { Stop-Service -Name $ServiceName -Force -ErrorAction Stop } catch { }
+        $deadline = (Get-Date).AddSeconds(60)
+        while ((Get-Service -Name $ServiceName -ErrorAction SilentlyContinue).Status -ne 'Stopped' -and (Get-Date) -lt $deadline) {
+            Start-Sleep -Milliseconds 500
+        }
+        if ((Get-Service -Name $ServiceName -ErrorAction SilentlyContinue).Status -ne 'Stopped') {
+            throw "Service $ServiceName did not stop within 60 seconds."
+        }
+    }
+    & cmd.exe /d /c ('sc.exe delete "' + $ServiceName + '"') | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "sc.exe delete failed for service $ServiceName." }
+    Write-Host "Service '$ServiceName' removed."
+    exit 0
+}
+
+if (-not $SourceIndexer -or -not $ServiceIndexer) {
+    throw 'SourceIndexer and ServiceIndexer are required unless -Validate or -Uninstall is used.'
+}
 foreach ($path in @($SourceIndexer, $ServiceIndexer)) {
     if (-not (Test-Path -LiteralPath $path) -and -not (Test-Path -LiteralPath (Split-Path -Parent $path))) {
         throw "Neither '$path' nor its parent directory exists."
