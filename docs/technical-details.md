@@ -23,6 +23,10 @@ For a very large server, file count matters more than the total number of bytes 
 
 ## Detailed Installation Reference
 
+Every Windows installer flag, the DeepSeek Harness registration model (root and
+preset scopes), verification exit codes, stale-client checks, and uninstall are
+documented in [installer.md](installer.md).
+
 The one-line installer command shown in Install on Windows is the recommended method. Notes for agents and power users:
 
 - The installer downloads the MCP server, the native indexer, and the `instant-file-search-fallback-engine` from the latest release on GitHub. The Rust toolchain is not required; the installer does not compile files. It also installs the OpenCode plug-in automatically so sub-agents can use the same search tools.
@@ -184,6 +188,7 @@ cargo test
 ```
 
 Unit tests cover sorting, field parsing, timestamp formatting, and attribute formatting.
+The Windows installer has its own pure-function suite: `powershell -File scripts/install.ps1 -SelfTest` (also run by CI).
 
 More detail lives in `docs/`: `architecture.md`, `build.md`, `development.md`, `tools.md`, `parity.md`, `build-linux.md`, `linux-support.md`, `linux-port-plan.md`, `build-macos.md`, and `macos-support.md`.
 

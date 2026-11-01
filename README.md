@@ -52,7 +52,8 @@ Detects a bunch of common programs like Codex, Opencode and DeepSeek Harness (an
    ```
 
 3. Approve the Windows permission prompt.
-4. Restart your AI app.
+4. Start your AI app. DeepSeek Harness hot-applies its profile patch, so the
+   tools appear on the next agent turn; other clients need a restart.
 
 
 To check the installation from a repository checkout:
@@ -62,6 +63,30 @@ To check the installation from a repository checkout:
 ```
 
 If the check fails because Windows blocked the administrator step, the installation is incomplete. Approve the prompt and run the installer again.
+
+### DeepSeek Harness
+
+DeepSeek Harness is configured through its per-profile `cordis.patch.yml`
+(`%USERPROFILE%\.dsh\profiles\<profile>\cordis.patch.yml`). The installer:
+
+- registers the server at the patch root and repoints **every** existing
+  registration row on upgrade, so no scope is left on an old binary path;
+- restores the root row if it went missing, and can mount the server inside
+  agent presets with `-DshPresets standard,reverse-engineering`;
+- detects the profile from `DSH_PROFILE`/the running harness and refuses to
+  guess when several profiles exist (pass `-DshProfile <name>`);
+- preserves UTF-8 and each line's LF/CRLF ending when editing the patch.
+
+The patch is hot-applied: after a successful install the `mcp__instant__*` tools
+appear on the next agent turn and no restart is required (restart only if they do
+not). The install is verified end to end, including a `dsh --dump-config` check
+that the target profile really composes the server, and exits `0` (complete),
+`1` (verification failed), or `2` (native indexer still needs one elevated run).
+
+Unattended runs use `-Clients dsh -NonInteractive`; an incomplete admin step then
+prints the exact elevated command instead of waiting on UAC. `-Uninstall` removes
+the registrations, service, and files again. Full flag reference:
+[docs/installer.md](docs/installer.md).
 
 ## Linux - Automatic installer 
 

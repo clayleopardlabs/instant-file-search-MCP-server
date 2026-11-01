@@ -73,7 +73,7 @@ instant-file-search-MCP-server/             # repo name; binary: instant-file-se
 │   └── src/index.ts
 ├── vendor/everything/      # Bundled portable Fallback Engine (zip + ini + LICENSE); Windows-only
 ├── scripts/
-│   ├── install.ps1         # Windows installer: build, bundle deploy, indexer service registration
+│   ├── install.ps1         # Windows installer: build, bundle deploy, indexer service, client MCP registration, verification, uninstall
 │   ├── install-linux.sh    # Linux installer: build, systemd unit, client registration
 │   ├── doctor.ps1          # Windows diagnostics: binary, bundle, service, registrations
 │   └── fetch-everything.ps1# Re-fetch pinned portable Fallback Engine zip (SHA256-verified)
@@ -209,14 +209,18 @@ Run these before tagging, in this order:
    advertises `capabilities.tools` and that `tools/list` returns the five
    tools. A unit test on `get_info()` cannot catch that class of bug; the wire
    can.
-2. `scripts/parity.ps1` (Windows, indexer service running) — the differential
+2. `powershell -File scripts/install.ps1 -SelfTest` — pure-function regression
+   tests for the DeepSeek Harness patch editor (root/preset/override scopes,
+   mixed line endings, UTF-8 round trips, preset mounts, uninstall row removal).
+   CI runs this on every push; it never touches a profile or a service.
+3. `scripts/parity.ps1` (Windows, indexer service running) — the differential
    battery that compares native counts against the Everything engine. It needs
    live engines, so CI cannot run it and it is `#[ignore]`d by default.
-3. `scripts/doctor.ps1 -RequireNative` — must report 0 failures.
+4. `scripts/doctor.ps1 -RequireNative` — must report 0 failures.
 
 `scripts/install.ps1` delegates the admin-only half to
 `scripts/register-indexer-service.ps1`, which ships as a release asset and has a
 `-Validate` switch that binds its parameters without touching a service, so CI
 checks it on every PR.
 
-See `docs/` for architecture, build instructions, tool reference, and development notes.
+See `docs/` for architecture, build instructions, tool reference, and development notes. `docs/installer.md` is the full Windows installer reference, including the DeepSeek Harness registration model (root and preset scopes, hot reload, `-DshProfile`/`-DshPresets`), verification exit codes, stale-client checks, and uninstall.
