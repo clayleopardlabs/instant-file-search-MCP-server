@@ -1937,7 +1937,11 @@ if (-not $selected) {
 if (-not $elevated -and (Get-Service -Name $serviceName -ErrorAction SilentlyContinue) -eq $null) {
     Write-Host 'NOTE: the native indexer service is not registered yet (needs admin). Searches work now via the Fallback Engine; to enable the fast native indexer, run the printed elevated command or re-run this installer elevated.' -ForegroundColor Yellow
 }
-Write-Host 'Restart your AI app (or start a new session) so it reloads the MCP configuration.'
+if ($selected -contains 'dsh' -and (Test-DshHostRunning)) {
+    Write-Host 'DeepSeek Harness is running: this profile patch is hot-applied, so the new tools appear on the next agent turn. Restart it only if they do not.'
+} else {
+    Write-Host 'Start (or restart) your AI app so it reloads the MCP configuration.'
+}
 
 if (-not $verifyOk) {
     Write-Host "`nThe installer finished, but the post-install verification failed. Run the diagnostics script for details:" -ForegroundColor Red
