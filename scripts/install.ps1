@@ -23,6 +23,8 @@ param(
     [string]$DshProfile,
     [string[]]$DshPresets,
     [switch]$SelfTest,
+    [switch]$NonInteractive,
+    [int]$ElevationTimeoutSec = 120,
     [switch]$DryRun
 )
 
@@ -851,6 +853,7 @@ function Select-InstallClients {
     }
 
     Write-Host "Detected clients: $(if($detected){$detected -join ', '}else{'none'})" -ForegroundColor Green
+    if ($NonInteractive) { throw 'No -Clients was supplied and this run is non-interactive. Pass -Clients dsh (or another comma-separated client list).' }
     Write-Host 'Choose clients to configure: [A]ll detected, or enter a comma-separated list: codex, opencode, claude, hermes, dsh'
     $answer = Read-Host 'Selection (default A)'
     if ([string]::IsNullOrWhiteSpace($answer)) { return $detected }
@@ -1737,12 +1740,29 @@ function Install-NativeService {
     if ($SkipElevation) {
         Write-Host 'WARN: not running elevated and -SkipElevation was set, so the indexer service was NOT registered. Searches will use the Fallback Engine until you register it. When you are ready, run this elevated:' -ForegroundColor Yellow
         Write-Host "  $helperCommand" -ForegroundColor Gray
+        $script:incomplete = $true
+        return
+    }
+
+    if ($NonInteractive) {
+        Write-Host 'WARN: not elevated and -NonInteractive was set, so the indexer service was NOT registered. Searches will use the Fallback Engine until it is registered. Run this elevated:' -ForegroundColor Yellow
+        Write-Host "  $helperCommand" -ForegroundColor Gray
+        $script:incomplete = $true
         return
     }
 
     Write-Host 'The native indexer service needs administrator rights. A UAC prompt will appear - click Yes.' -ForegroundColor Yellow
     try {
-        $elevatedProcess = Start-Process -FilePath powershell.exe -Verb RunAs -ArgumentList $helperArgs -Wait -PassThru -ErrorAction Stop
+        $elevatedProcess = Start-Process -FilePath powershell.exe -Verb RunAs -ArgumentList $helperArgs -PassThru -ErrorAction Stop
+        $timedOut = $false
+        if ($ElevationTimeoutSec -gt 0) { $timedOut = -not $elevatedProcess.WaitForExit($ElevationTimeoutSec * 1000) }
+        else { $elevatedProcess.WaitForExit() }
+        if ($timedOut) {
+            Write-Host "WARN: the UAC prompt was not answered within $ElevationTimeoutSec s. The installer continues without the native indexer; approve the prompt, or run the helper elevated:" -ForegroundColor Yellow
+            Write-Host "  $helperCommand" -ForegroundColor Gray
+            $script:incomplete = $true
+            return
+        }
         if ($elevatedProcess.ExitCode -ne 0) {
             throw "elevated service helper exited with code $($elevatedProcess.ExitCode)."
         }
@@ -1756,10 +1776,12 @@ function Install-NativeService {
             Write-Host "PASS: indexer service '$serviceName' installed and started (auto-start)." -ForegroundColor Green
         } else {
             Write-Host "WARN: elevation did not leave the '$serviceName' service running. Run the helper elevated manually:" -ForegroundColor Yellow
+            $script:incomplete = $true
             Write-Host "  $helperCommand" -ForegroundColor Gray
         }
     } catch {
         Write-Host "WARN: elevation was cancelled or failed: $($_.Exception.Message)" -ForegroundColor Yellow
+        $script:incomplete = $true
         Write-Host "Run this elevated when ready:" -ForegroundColor Yellow
         Write-Host "  $helperCommand" -ForegroundColor Gray
     }
