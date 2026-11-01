@@ -812,7 +812,7 @@ function Invoke-InstallerSelfTest {
     $mounted = Add-DshPresetRow -Text $presetOnly -PresetId 'reverse-engineering' -CommandPath 'C:/new/instant.exe'
     Assert-Equality $mounted.Added $true 'preset mount is added'
     $info = Get-DshPatchInfo $mounted.Text
-    Assert-Equality (($info.PresetRows | Where-Object { $_.PresetId -eq 'reverse-engineering' }).Count) 1 'mounted preset has exactly one row'
+    Assert-Equality (@($info.PresetRows | Where-Object { $_.PresetId -eq 'reverse-engineering' }).Count) 1 'mounted preset has exactly one row'
     Assert-Equality (($info.ServerRows | Where-Object { $_.Scope -eq 'root' }).Count) 0 'preset mount does not create a root row'
     $mountedAgain = Add-DshPresetRow -Text $mounted.Text -PresetId 'reverse-engineering' -CommandPath 'C:/new/instant.exe'
     Assert-Equality $mountedAgain.Added $false 'repeated preset mount is a no-op'
