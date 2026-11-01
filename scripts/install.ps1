@@ -20,6 +20,9 @@ param(
     [switch]$SkipClaude,
     [switch]$SkipHermes,
     [switch]$SkipDsh,
+    [string]$DshProfile,
+    [string[]]$DshPresets,
+    [switch]$SelfTest,
     [switch]$DryRun
 )
 
@@ -36,6 +39,10 @@ $stableBinary = $null
 $stableIndexer = $null
 $installVersion = $null
 $downloadRoot = Join-Path (Join-Path $InstallRoot 'downloads') $PID
+
+# Set when the install is functionally complete but a step still needs attention
+# (for example the native indexer service needs an elevated run).
+$incomplete = $false
 
 # Keep an existing choice during upgrades unless the caller supplies a new one.
 $statePath = Join-Path $InstallRoot 'current.json'
@@ -68,6 +75,30 @@ $claudeConfig = if ($simulateRoot) { Join-Path $simulateRoot 'claude-desktop-con
 function Write-Step([string]$Message) { Write-Host "`n==> $Message" -ForegroundColor Cyan }
 function Write-Action([string]$Message) { if ($DryRun) { Write-Host "DRY RUN: $Message" -ForegroundColor Yellow } }
 
+# Read/write user text files through .NET with an explicit UTF-8 decode. Windows
+# PowerShell 5.1 falls back to the ANSI code page for Get-Content -Raw when a
+# file has no BOM, which silently corrupts non-ASCII text (the Cordis preset
+# patches contain em dashes and CJK) on the way back out. Read once here and
+# write with the same BOM state the file had.
+function Read-TextFile([string]$Path) {
+    if (-not (Test-Path -LiteralPath $Path)) { return '' }
+    $bytes = [System.IO.File]::ReadAllBytes($Path)
+    if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) {
+        return [System.Text.Encoding]::UTF8.GetString($bytes, 3, $bytes.Length - 3)
+    }
+    return [System.Text.Encoding]::UTF8.GetString($bytes)
+}
+
+function Test-TextFileHasBom([string]$Path) {
+    if (-not (Test-Path -LiteralPath $Path)) { return $false }
+    $bytes = [System.IO.File]::ReadAllBytes($Path)
+    return ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF)
+}
+
+function Write-TextFile([string]$Path, [string]$Text, [bool]$WithBom = $false) {
+    $encoding = New-Object System.Text.UTF8Encoding($WithBom)
+    [System.IO.File]::WriteAllText($Path, $Text, $encoding)
+}
 function Test-Elevated {
     return ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 }
@@ -99,138 +130,702 @@ function Test-HermesInstalled {
 
 # --- DeepSeek Harness -------------------------------------------------------
 # DSH composes one Cordis plugin tree per profile; the user-owned layer is
-# `cordis.patch.yml` under <DSH_HOME>\profiles\<profile>\. An MCP server is one
-# `- insert:` entry naming @deepseek-ai/dsh-mcp-client, so registering here is
-# the same edit a user would make by hand.
+# `cordis.patch.yml` under <DSH_HOME>\profiles\<profile>\. The file is a flat
+# top-level YAML array: `- insert:` entries carry rows, and
+# `@deepseek-ai/dsh-agent-preset` entries carry a `plugins:` list that is a
+# separate agent scope. A row registering our MCP client can therefore live at
+# the root (directly under a top-level insert entry) or inside a preset, and a
+# profile may contain many rows for the same server name.
+#
+# This section parses that shape with line arithmetic rather than a YAML parser,
+# because the one-liner install ships only this file. Every edit stays
+# scope-correct: all existing rows are repointed to the installed binary, a
+# missing root row is restored, and preset rows are only added on request.
+# The running harness hot-applies this file, so a successful edit does not need
+# a restart; `mcp__instant__*` tools appear on the next agent turn.
+
 function Get-DshHome {
     if ($env:DSH_HOME) { return $env:DSH_HOME }
     return (Join-Path $env:USERPROFILE '.dsh')
 }
 
-function Resolve-DshPatch {
+function Get-DshProfileCandidates {
     $profilesRoot = Join-Path (Get-DshHome) 'profiles'
-    if (-not (Test-Path -LiteralPath $profilesRoot)) { return $null }
-    $wanted = if ($env:DSH_PROFILE) { $env:DSH_PROFILE } else { 'desktop' }
-    $preferred = Join-Path $profilesRoot (Join-Path $wanted 'cordis.patch.yml')
-    if (Test-Path -LiteralPath $preferred) { return $preferred }
-    return (Get-ChildItem -LiteralPath $profilesRoot -Directory -ErrorAction SilentlyContinue |
-        ForEach-Object { Join-Path $_.FullName 'cordis.patch.yml' } |
-        Where-Object { Test-Path -LiteralPath $_ } |
-        Select-Object -First 1)
+    if (-not (Test-Path -LiteralPath $profilesRoot)) { return @() }
+    return @(Get-ChildItem -LiteralPath $profilesRoot -Directory -ErrorAction SilentlyContinue |
+        ForEach-Object {
+            $candidatePatch = Join-Path $_.FullName 'cordis.patch.yml'
+            [pscustomobject]@{
+                Name     = $_.Name
+                Dir      = $_.FullName
+                Patch    = $candidatePatch
+                HasPatch = (Test-Path -LiteralPath $candidatePatch)
+            }
+        })
+}
+
+function Find-RunningDshProfile {
+    # The command line of a running host is the best hint when the caller did not
+    # inherit DSH_PROFILE (a plain PowerShell, or an agent shell started outside
+    # DSH). Only an explicit --profile flag can be trusted here.
+    foreach ($proc in @(Get-CimInstance Win32_Process -Filter "Name='node.exe'" -ErrorAction SilentlyContinue)) {
+        $cmd = $proc.CommandLine
+        if (-not $cmd) { continue }
+        if ($cmd -notmatch '[\\/]dsh[\\/]' -or $cmd -notmatch 'bin\.js') { continue }
+        if ($cmd -match '--profile[\s=]+["'']?(?<profile>[A-Za-z0-9._-]+)') { return $Matches['profile'] }
+    }
+    return $null
+}
+
+function Test-DshHostRunning {
+    foreach ($proc in @(Get-CimInstance Win32_Process -Filter "Name='node.exe'" -ErrorAction SilentlyContinue)) {
+        $cmd = $proc.CommandLine
+        if ($cmd -and $cmd -match '[\\/]dsh[\\/]' -and $cmd -match 'bin\.js') { return $true }
+    }
+    return $false
+}
+
+# Resolve the one profile to edit. Never guess between several profiles: editing
+# the wrong profile looks like a successful install and silently configures an
+# app the user did not select.
+function Resolve-DshProfile {
+    param([string]$Profile)
+
+    $candidates = @(Get-DshProfileCandidates)
+    if ($candidates.Count -eq 0) { return $null }
+
+    $requested = $Profile
+    $source = '-DshProfile'
+    if (-not $requested) {
+        $requested = $env:DSH_PROFILE
+        $source = 'DSH_PROFILE'
+    }
+    if (-not $requested) {
+        $requested = Find-RunningDshProfile
+        $source = 'the running harness'
+    }
+
+    if ($requested) {
+        $matches = @($candidates | Where-Object { $_.Name -eq $requested })
+        if ($matches.Count -eq 0) {
+            $known = @($candidates | Where-Object HasPatch | ForEach-Object Name) -join ', '
+            throw ("DeepSeek Harness profile '$requested' (from $source) was not found. " +
+                "Profiles with a cordis.patch.yml: $known. Pass -DshProfile <name>.")
+        }
+        if (-not $matches[0].HasPatch) {
+            throw "DeepSeek Harness profile '$requested' exists but has no cordis.patch.yml, so there is nothing to edit."
+        }
+        return $matches[0]
+    }
+
+    $withPatch = @($candidates | Where-Object HasPatch)
+    if ($withPatch.Count -eq 1) { return $withPatch[0] }
+    if ($withPatch.Count -eq 0) { return $null }
+    throw ("Multiple DeepSeek Harness profiles were found (" + (($withPatch | ForEach-Object Name) -join ', ') +
+        "). Set DSH_PROFILE or pass -DshProfile <name> so the installer does not edit the wrong profile.")
 }
 
 function Test-DshInstalled {
-    return [bool](Resolve-DshPatch)
-}
-
-# Server names this plugin has used, newest first. The installer registers
-# `instant` everywhere; `instant-file-search` was the pre-1.0.4 name, so an
-# entry under either one is ours to update rather than duplicate.
-function Get-DshServerNames([string]$Text) {
-    return @([regex]::Matches($Text, 'serverName:\s*[''"]?([A-Za-z0-9_-]+)') |
-        ForEach-Object { $_.Groups[1].Value })
+    return (@(Get-DshProfileCandidates | Where-Object HasPatch).Count -gt 0)
 }
 
 function Get-DshBinaryPath {
     return ($stableBinary -replace '\\', '/')
 }
 
-function New-DshEntryText {
-    return @(
-        '- insert:'
-        '    - id: mcp-instant-file-search'
-        '      name: ''@deepseek-ai/dsh-mcp-client'''
-        '      config:'
-        "        serverName: $serverName"
-        '        transport: stdio'
-        "        command: `"$(Get-DshBinaryPath)`""
-        '        failOnStartupError: true'
-    ) -join "`n"
+# Parse the patch into top-level entries, rows, presets, and our server rows.
+# A row is any `- id:` line below a top-level entry. Its range ends at the next
+# row with the same or a lower indent, so nested plugin rows stay inside their
+# parent row.
+# Keep each line's own terminator: Cordis patches written by different tools are
+# often mixed LF/CRLF, and normalising them would rewrite the whole file.
+function Split-TextIntoLines {
+    param([string]$Text)
+    $parts = [regex]::Split($Text, "(\r?\n)")
+    $lineList = [System.Collections.Generic.List[string]]::new()
+    $endingList = [System.Collections.Generic.List[string]]::new()
+    for ($i = 0; $i -lt $parts.Count; $i += 2) {
+        $lineList.Add($parts[$i])
+        if ($i + 1 -lt $parts.Count) { $endingList.Add($parts[$i + 1]) } else { $endingList.Add('') }
+    }
+    return [pscustomobject]@{ Lines = [string[]]$lineList; Endings = [string[]]$endingList }
 }
 
-# Point an existing entry's `command:` at the freshly installed binary. Works on
-# lines so the rest of the user's patch (model settings, UI flags) is untouched.
-function Set-DshCommandPath([string]$Text, [string]$Path) {
-    $lines = [System.Collections.Generic.List[string]]::new()
-    $lines.AddRange([string[]]($Text -split "`r?`n"))
-    $entryStart = -1
+function Join-TextFromLines {
+    param([string[]]$Lines, [string[]]$Endings)
+    $sb = New-Object System.Text.StringBuilder
+    for ($i = 0; $i -lt $Lines.Count; $i++) {
+        [void]$sb.Append($Lines[$i])
+        $ending = if ($i -lt $Endings.Count) { $Endings[$i] } else { '' }
+        [void]$sb.Append($ending)
+    }
+    return $sb.ToString()
+}
+
+function Get-DominantNewline {
+    param([string[]]$Endings)
+    $crlf = 0
+    $lf = 0
+    foreach ($ending in $Endings) {
+        if ($ending -eq "`r`n") { $crlf++ }
+        elseif ($ending -eq "`n") { $lf++ }
+    }
+    if ($lf -gt $crlf) { return "`n" }
+    return "`r`n"
+}
+
+function Get-DshPatchInfo {
+    param([string]$Text)
+
+    $split = Split-TextIntoLines $Text
+    $lines = [string[]]$split.Lines
+    $entryStarts = @()
     for ($i = 0; $i -lt $lines.Count; $i++) {
-        if ($lines[$i] -match '^\s*-\s+id:') { $entryStart = $i }
-        if ($lines[$i] -match 'serverName:\s*[''"]?(instant|instant-file-search)[''"]?\s*$') {
-            $from = if ($entryStart -ge 0) { $entryStart } else { 0 }
-            for ($j = $from; $j -lt $lines.Count; $j++) {
-                if ($j -gt $from -and $lines[$j] -match '^\s*-\s+id:') { break }
-                if ($lines[$j] -match '^(\s*)command:\s*.+$') {
-                    $indent = $Matches[1]
-                    $lines[$j] = "$indent`command: `"$Path`""
-                    return ($lines -join "`n")
-                }
+        if ($lines[$i] -match '^-\s') { $entryStarts += $i }
+    }
+
+    $entries = @()
+    for ($e = 0; $e -lt $entryStarts.Count; $e++) {
+        $start = $entryStarts[$e]
+        $end = if ($e + 1 -lt $entryStarts.Count) { $entryStarts[$e + 1] - 1 } else { $lines.Count - 1 }
+        $entries += [pscustomobject]@{ Start = $start; End = $end }
+    }
+
+    $rows = @()
+    foreach ($entry in $entries) {
+        $rowStarts = @()
+        for ($i = $entry.Start; $i -le $entry.End; $i++) {
+            if ($lines[$i] -match '^(?<indent>\s*)- id:\s*(?<id>\S+)') {
+                $rowStarts += [pscustomobject]@{ Line = $i; Indent = $Matches['indent'].Length; Id = $Matches['id'] }
             }
-            break
         }
+        for ($r = 0; $r -lt $rowStarts.Count; $r++) {
+            $rowStart = $rowStarts[$r]
+            $rowEnd = $entry.End
+            # Own body ends at the first nested row: a preset row's config and
+            # plugins: key are its own, its child plugin rows are not.
+            $ownEnd = $entry.End
+            for ($n = $r + 1; $n -lt $rowStarts.Count; $n++) {
+                if ($rowStarts[$n].Indent -le $rowStart.Indent) { $rowEnd = $rowStarts[$n].Line - 1; break }
+                if ($ownEnd -eq $entry.End) { $ownEnd = $rowStarts[$n].Line - 1 }
+            }
+            if ($ownEnd -gt $rowEnd) { $ownEnd = $rowEnd }
+            $ownBody = if ($ownEnd -ge $rowStart.Line) { @($lines[$rowStart.Line..$ownEnd]) } else { @() }
+            $body = if ($rowEnd -ge $rowStart.Line) { @($lines[$rowStart.Line..$rowEnd]) } else { @() }
+            $ownText = $ownBody -join "`n"
+            $rowName = $null
+            if ($ownText -match '(?m)^\s*name:\s*[''"]?([^''"\s]+)') { $rowName = $Matches[1] }
+            $rows += [pscustomobject]@{
+                Start   = $rowStart.Line
+                End     = $rowEnd
+                OwnEnd  = $ownEnd
+                Indent  = $rowStart.Indent
+                Id      = $rowStart.Id
+                Name    = $rowName
+                Text    = ($body -join "`n")
+                OwnText = $ownText
+            }
+        }
+    }
+
+    $presets = @()
+    foreach ($presetRow in $rows) {
+        # Presets appear in two shapes: an inserted row naming the package, or a
+        # top-level override (id preset-<name>) whose plugins list comes from the
+        # row it overrides. Both are recognised by their plugins list + config id.
+        $isPresetRow = ($presetRow.Name -eq '@deepseek-ai/dsh-agent-preset')
+        if (-not $isPresetRow -and
+            $presetRow.OwnText -match '(?m)^\s+plugins:\s*$' -and
+            $presetRow.OwnText -match '(?m)^\s+id:\s*\S+') {
+            $isPresetRow = $true
+        }
+        if (-not $isPresetRow) { continue }
+        $presetId = $null
+        if ($presetRow.OwnText -match '(?m)^\s+id:\s*[''"]?([^''"\s]+)') { $presetId = $Matches[1] }
+        if (-not $presetId) { $presetId = $presetRow.Id }
+        $presets += [pscustomobject]@{
+            Id     = $presetId
+            RowId  = $presetRow.Id
+            Start  = $presetRow.Start
+            End    = $presetRow.End
+            Indent = $presetRow.Indent
+        }
+    }
+
+    $serverRows = @()
+    foreach ($row in $rows) {
+        if ($row.OwnText -notmatch '(?m)^\s*serverName:\s*[''"]?(instant|instant-file-search)[''"]?\s*$') { continue }
+        $ownerPreset = $null
+        foreach ($preset in $presets) {
+            if ($row.Start -gt $preset.Start -and $row.Start -le $preset.End) { $ownerPreset = $preset.Id }
+        }
+        $commandLines = @()
+        $hasUrl = $false
+        for ($i = $row.Start; $i -le $row.OwnEnd; $i++) {
+            if ($lines[$i] -match '^\s*command:\s*.+$') { $commandLines += $i }
+            if ($lines[$i] -match '^\s*url:\s*.+$') { $hasUrl = $true }
+        }
+        $serverRows += [pscustomobject]@{
+            Start        = $row.Start
+            End          = $row.End
+            Indent       = $row.Indent
+            Id           = $row.Id
+            Scope        = if ($ownerPreset) { 'preset' } else { 'root' }
+            PresetId     = $ownerPreset
+            CommandLines = $commandLines
+            HasUrl       = $hasUrl
+        }
+    }
+
+    $presetMounts = @()
+    foreach ($preset in $presets) {
+        $presetMounts += [pscustomobject]@{
+            Id      = $preset.Id
+            Mounted = (@($serverRows | Where-Object { $_.PresetId -eq $preset.Id }).Count -gt 0)
+        }
+    }
+
+    return [pscustomobject]@{
+        Lines        = $lines
+        Endings      = [string[]]$split.Endings
+        Entries      = $entries
+        Rows         = $rows
+        Presets      = $presets
+        PresetMounts = $presetMounts
+        ServerRows   = $serverRows
+        RootRows     = @($serverRows | Where-Object { $_.Scope -eq 'root' })
+        PresetRows   = @($serverRows | Where-Object { $_.Scope -eq 'preset' })
+    }
+}
+
+# Repoint every row that registers our server, wherever it lives. Rewriting only
+# the first match used to leave a stale command behind in whichever scope came
+# later in the file.
+# Repoint every row that registers our server, wherever it lives. Rewriting only
+# the first match used to leave a stale command behind in whichever scope came
+# later in the file. Unchanged lines keep their original line endings.
+function Set-DshServerCommand {
+    param([string]$Text, [string]$CommandPath)
+
+    $info = Get-DshPatchInfo $Text
+    $lines = [System.Collections.Generic.List[string]]::new()
+    $lines.AddRange([string[]]$info.Lines)
+
+    $updated = 0
+    $missing = @()
+    $seen = @{}
+    foreach ($row in $info.ServerRows) {
+        if ($row.CommandLines.Count -eq 0) { $missing += $row; continue }
+        $changedHere = $false
+        foreach ($lineIndex in $row.CommandLines) {
+            if ($seen.ContainsKey($lineIndex)) { continue }
+            $seen[$lineIndex] = $true
+            $indent = [regex]::Match($lines[$lineIndex], '^(\s*)').Groups[1].Value
+            $desired = $indent + 'command: "' + $CommandPath + '"'
+            if ($lines[$lineIndex] -ne $desired) {
+                $lines[$lineIndex] = $desired
+                $changedHere = $true
+            }
+        }
+        if ($changedHere) { $updated++ }
+    }
+
+    $newText = if ($updated -gt 0) { Join-TextFromLines -Lines ([string[]]$lines) -Endings ([string[]]$info.Endings) } else { $Text }
+    return [pscustomobject]@{
+        Text               = $newText
+        Updated            = $updated
+        RowsWithoutCommand = @($missing)
+    }
+}
+
+function New-DshClientRowLines {
+    param([string]$CommandPath, [int]$Indent = 10, [string]$Id = 'mcp-instant-file-search')
+    $pad = ' ' * $Indent
+    $field = ' ' * ($Indent + 2)
+    $cfg = ' ' * ($Indent + 4)
+    return @(
+        ($pad + '- id: ' + $Id)
+        ($field + "name: '@deepseek-ai/dsh-mcp-client'")
+        ($field + 'config:')
+        ($cfg + 'serverName: ' + $serverName)
+        ($cfg + 'transport: stdio')
+        ($cfg + 'command: "' + $CommandPath + '"')
+        ($cfg + 'failOnStartupError: true')
+    )
+}
+
+function New-DshRootEntryLines {
+    param([string]$CommandPath)
+    return @('- insert:') + @(New-DshClientRowLines -CommandPath $CommandPath -Indent 4)
+}
+
+# Restore the root-scope row. It is what a plain (non-preset) agent sees; if a
+# later edit or another tool moves the registration into presets only, the
+# running session silently loses the tools until this row comes back.
+# Restore the root-scope row. It is what a plain (non-preset) agent sees; if a
+# later edit or another tool moves the registration into presets only, the
+# running session silently loses the tools until this row comes back.
+function Add-DshRootRow {
+    param([string]$Text, [string]$CommandPath)
+    $split = Split-TextIntoLines $Text
+    $newline = Get-DominantNewline $split.Endings
+    $entry = (New-DshRootEntryLines -CommandPath $CommandPath) -join $newline
+    if ([string]::IsNullOrWhiteSpace($Text)) { return $entry + $newline }
+    $trimmed = $Text.TrimEnd()
+    return $trimmed + $newline + $newline + $entry + $newline
+}
+
+# A profile that loads the server from an installed bundle must not also get a
+# patch row: two registrations of the same server name in one scope is a load
+# error. Report the bundle that owns it instead of writing anything.
+# Mount the server inside one agent preset by appending a child row to its
+# plugins list. Only used when the caller asks for it with -DshPresets.
+function Add-DshPresetRow {
+    param([string]$Text, [string]$PresetId, [string]$CommandPath)
+
+    $info = Get-DshPatchInfo $Text
+    $preset = @($info.Presets | Where-Object { $_.Id -eq $PresetId -or $_.RowId -eq $PresetId })
+    if ($preset.Count -eq 0) {
+        return [pscustomobject]@{ Text = $Text; Added = $false; Reason = "preset '$PresetId' was not found in the profile patch" }
+    }
+    $preset = $preset[0]
+    $mount = @($info.PresetMounts | Where-Object { $_.Id -eq $preset.Id })
+    if ($mount.Count -gt 0 -and $mount[0].Mounted) {
+        return [pscustomobject]@{ Text = $Text; Added = $false; Reason = "preset '$PresetId' already mounts $serverName" }
+    }
+
+    $split = Split-TextIntoLines $Text
+    $lines = [System.Collections.Generic.List[string]]::new()
+    $lines.AddRange([string[]]$split.Lines)
+    $endings = [System.Collections.Generic.List[string]]::new()
+    $endings.AddRange([string[]]$split.Endings)
+    $newline = Get-DominantNewline ([string[]]$split.Endings)
+
+    # Child indent: follow an existing plugin entry, else the plugins: key + 2.
+    $childIndent = $null
+    for ($i = $preset.Start + 1; $i -le $preset.End; $i++) {
+        if ($lines[$i] -match '^(?<indent>\s+)- id:') { $childIndent = $Matches['indent'].Length; break }
+    }
+    if ($null -eq $childIndent) {
+        for ($i = $preset.Start; $i -le $preset.End; $i++) {
+            if ($lines[$i] -match '^(?<indent>\s+)plugins:\s*$') { $childIndent = $Matches['indent'].Length + 2; break }
+        }
+    }
+    if ($null -eq $childIndent) {
+        return [pscustomobject]@{ Text = $Text; Added = $false; Reason = "preset '$PresetId' has no plugins list" }
+    }
+
+    # Avoid a duplicate child id inside this preset scope.
+    $existingIds = @($info.Rows | Where-Object { $_.Start -gt $preset.Start -and $_.Start -le $preset.End } | ForEach-Object { $_.Id })
+    $rowId = 'mcp-instant-file-search'
+    $suffix = 2
+    while ($existingIds -contains $rowId) { $rowId = "mcp-instant-file-search-$suffix"; $suffix++ }
+
+    $insertAt = $preset.End
+    while ($insertAt -gt $preset.Start -and [string]::IsNullOrWhiteSpace($lines[$insertAt])) { $insertAt-- }
+    $newLines = New-DshClientRowLines -CommandPath $CommandPath -Indent $childIndent -Id $rowId
+    $lines.InsertRange($insertAt + 1, [string[]]$newLines)
+    $newEndings = @()
+    for ($i = 0; $i -lt $newLines.Count; $i++) { $newEndings += $newline }
+    $endings.InsertRange($insertAt + 1, [string[]]$newEndings)
+    if ($insertAt -lt $endings.Count -and [string]::IsNullOrEmpty($endings[$insertAt])) { $endings[$insertAt] = $newline }
+    return [pscustomobject]@{ Text = (Join-TextFromLines -Lines ([string[]]$lines) -Endings ([string[]]$endings)); Added = $true; Reason = "mounted in preset '$PresetId'" }
+}
+
+function Find-DshBundleWithServer {
+    param([string]$ProfileDir)
+    $profilePackage = Join-Path $ProfileDir 'package.json'
+    if (-not (Test-Path -LiteralPath $profilePackage)) { return $null }
+    $bundles = @()
+    try { $bundles = @((Read-TextFile $profilePackage | ConvertFrom-Json).dsh.profile.bundles) } catch { return $null }
+    foreach ($bundle in $bundles) {
+        if (-not $bundle) { continue }
+        $bundlePatch = Join-Path $ProfileDir (Join-Path 'node_modules' (Join-Path $bundle 'cordis.patch.yml'))
+        if (-not (Test-Path -LiteralPath $bundlePatch)) { continue }
+        if ((Read-TextFile $bundlePatch) -match 'serverName:\s*[''"]?(instant|instant-file-search)') { return $bundle }
     }
     return $null
 }
 
 function Install-Dsh {
     Write-Step 'Configuring DeepSeek Harness'
-    $patch = Resolve-DshPatch
-    if (-not $patch) {
+
+    $target = $null
+    try {
+        $target = Resolve-DshProfile -Profile $DshProfile
+    } catch {
+        Write-Host "WARN: $($_.Exception.Message)" -ForegroundColor Yellow
+        Write-Host "      DeepSeek Harness was left unchanged." -ForegroundColor Yellow
+        $script:incomplete = $true
+        return
+    }
+    if (-not $target) {
         Write-Host 'WARN: no DeepSeek Harness profile found (no cordis.patch.yml under the DSH home); skipping DSH registration.' -ForegroundColor Yellow
         return
     }
 
-    $text = if (Test-Path -LiteralPath $patch) { Get-Content -LiteralPath $patch -Raw } else { '' }
-    $names = Get-DshServerNames $text
-    $inProfilePatch = ($names -contains $serverName) -or ($names -contains 'instant-file-search')
-
-    # A profile that loads the server from an installed bundle must not also get
-    # a patch row: two entries with the same serverName in one scope is a load
-    # error. Report which bundle owns the row instead of writing anything.
-    $bundleName = $null
-    if (-not $inProfilePatch) {
-        $profileJson = Join-Path (Split-Path -Parent $patch) 'package.json'
-        if (Test-Path -LiteralPath $profileJson) {
-            $bundlesText = Get-Content -LiteralPath $profileJson -Raw
-            if ($bundlesText -match '"(@[^"]*/)?[^"]*instant[^"]*"') { $bundleName = $Matches[0].Trim('"') }
-        }
-    }
+    $patch = $target.Patch
+    $text = Read-TextFile $patch
+    $command = Get-DshBinaryPath
+    $before = Get-DshPatchInfo $text
+    $bundleOwner = Find-DshBundleWithServer -ProfileDir $target.Dir
+    $presetGaps = @($before.PresetMounts | Where-Object { -not $_.Mounted } | ForEach-Object { $_.Id })
 
     if ($DryRun) {
-        if ($inProfilePatch) {
-            Write-Action "Update the DeepSeek Harness entry in '$patch' to command '$(Get-DshBinaryPath)'"
-        } elseif ($bundleName) {
-            Write-Action "NOTE: DeepSeek Harness loads this server from bundle '$bundleName'; that bundle's cordis.patch.yml needs command '$(Get-DshBinaryPath)' (nothing written here)"
+        Write-Action "DeepSeek Harness profile '$($target.Name)' -> '$patch'"
+        if ($before.RootRows.Count -gt 0) {
+            Write-Action "Root row: present; would repoint to '$command'"
+        } elseif ($bundleOwner) {
+            Write-Action "Root row: absent, but bundle '$bundleOwner' already registers '$serverName' (nothing to write)"
         } else {
-            Write-Action "Register MCP server '$serverName' for DeepSeek Harness in '$patch' (command: '$(Get-DshBinaryPath)')"
+            Write-Action "Root row: missing; would append a root '- insert:' entry"
         }
+        if ($before.PresetRows.Count -gt 0) { Write-Action "Preset rows: $($before.PresetRows.Count); would repoint each" }
+        if ($presetGaps.Count -gt 0) { Write-Action "Presets without '$serverName': $($presetGaps -join ', ')" }
         return
     }
 
-    if ($inProfilePatch) {
-        $updated = Set-DshCommandPath $text (Get-DshBinaryPath)
-        if (-not $updated) {
-            Write-Host "WARN: '$patch' registers '$serverName' but its command line could not be located; update it to '$(Get-DshBinaryPath)' by hand." -ForegroundColor Yellow
-            return
-        }
-        Backup-Config $patch
-        [System.IO.File]::WriteAllText($patch, $updated + "`n", (New-Object System.Text.UTF8Encoding($false)))
-        Write-Host "PASS: DeepSeek Harness entry updated in '$patch'." -ForegroundColor Green
-    } elseif ($bundleName) {
-        Write-Host "NOTE: DeepSeek Harness loads this server from the bundle '$bundleName'." -ForegroundColor Yellow
-        Write-Host "      Update that bundle's cordis.patch.yml command to '$(Get-DshBinaryPath)' instead of adding a second entry." -ForegroundColor Yellow
+    if ($before.ServerRows.Count -eq 0 -and $bundleOwner) {
+        Write-Host "NOTE: DeepSeek Harness loads '$serverName' from bundle '$bundleOwner'; nothing to write in '$patch'." -ForegroundColor Yellow
+        Write-Host "      Update that bundle's cordis.patch.yml command to '$command' instead of adding a second entry." -ForegroundColor Yellow
         return
+    }
+
+    $original = $text
+    $updated = 0
+    $withoutCommand = @()
+    if ($before.ServerRows.Count -gt 0) {
+        $repoint = Set-DshServerCommand -Text $text -CommandPath $command
+        $text = $repoint.Text
+        $updated = $repoint.Updated
+        $withoutCommand = @($repoint.RowsWithoutCommand)
+    }
+    $addedRoot = $false
+    if ($before.RootRows.Count -eq 0) {
+        $text = Add-DshRootRow -Text $text -CommandPath $command
+        $addedRoot = $true
+    }
+
+    if ($text -ne $original) {
+        Backup-Config $patch
+        Write-TextFile -Path $patch -Text $text -WithBom (Test-TextFileHasBom $patch)
+    }
+
+    $after = Get-DshPatchInfo $text
+    if ($text -ne $original) {
+        $parts = @()
+        if ($updated -gt 0) { $parts += "repointed $updated row(s)" }
+        if ($addedRoot) { $parts += 'added the missing root row' }
+        if ($parts.Count -eq 0) { $parts += 'normalised the patch text' }
+        Write-Host ("PASS: DeepSeek Harness profile '$($target.Name)': " + ($parts -join '; ') + '.') -ForegroundColor Green
     } else {
-        Backup-Config $patch
-        $separator = if ($text.TrimEnd().Length -gt 0) { "`n" } else { '' }
-        [System.IO.File]::WriteAllText($patch, $text.TrimEnd() + $separator + (New-DshEntryText) + "`n", (New-Object System.Text.UTF8Encoding($false)))
-        Write-Host "PASS: DeepSeek Harness MCP server '$serverName' registered in '$patch'." -ForegroundColor Green
+        Write-Host "PASS: DeepSeek Harness profile '$($target.Name)' already registers '$serverName' with the current binary." -ForegroundColor Green
     }
 
-    $running = Get-Process -Name 'DeepSeek Harness' -ErrorAction SilentlyContinue
-    if ($running) {
-        Write-Host '      Restart DeepSeek Harness so it composes the new entry (live reload is not guaranteed).' -ForegroundColor Gray
+    if ($withoutCommand.Count -gt 0) {
+        Write-Host "WARN: $($withoutCommand.Count) row(s) declare '$serverName' without a 'command:' line (a URL transport, for example); left unchanged." -ForegroundColor Yellow
     }
+    $remainingGaps = @($after.PresetMounts | Where-Object { -not $_.Mounted } | ForEach-Object { $_.Id })
+    if ($remainingGaps.Count -gt 0) {
+        Write-Host ("NOTE: this profile also defines agent presets that do not mount '$serverName': " + ($remainingGaps -join ', ') + '. Add them with -DshPresets <name> if those agents need file search.') -ForegroundColor Gray
+    }
+    if (Test-DshHostRunning) {
+        Write-Host 'PASS: DeepSeek Harness is running and hot-applies this patch; the tools appear in the next agent turn (restart only if they do not).' -ForegroundColor Green
+    } else {
+        Write-Host 'NOTE: start DeepSeek Harness to load the new server.' -ForegroundColor Gray
+    }
+}
+
+# Pure-function regression tests for the patch editor. CI runs
+# `install.ps1 -SelfTest`; it never touches a real profile or service.
+function Invoke-InstallerSelfTest {
+    $script:selfTestFailures = 0
+
+    function Assert-Equality($Actual, $Expected, [string]$What) {
+        $a = if ($null -eq $Actual) { '' } else { "$Actual" }
+        $e = if ($null -eq $Expected) { '' } else { "$Expected" }
+        if ($a -ne $e) {
+            $script:selfTestFailures++
+            Write-Host ("  FAIL: $What`n        expected: $e`n        actual:   $a") -ForegroundColor Red
+        } else {
+            Write-Host "  PASS: $What" -ForegroundColor Green
+        }
+    }
+
+    $rootOnly = @'
+- id: ui-settings-general
+  name: "@deepseek-ai/dsh-client-ui-settings-general"
+  config:
+    welcomeNoticeVersion: 2026-09-28.1
+- insert:
+    - id: mcp-instant-file-search
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: instant
+        transport: stdio
+        command: "C:/old/instant-file-search-mcp-server.exe"
+        failOnStartupError: true
+'@
+
+    $presetOnly = @'
+- insert:
+    - id: preset-standard
+      name: '@deepseek-ai/dsh-agent-preset'
+      config:
+        id: standard
+        plugins:
+          - id: persona
+            name: '@deepseek-ai/dsh-persona'
+          - id: mcp-instant-file-search
+            name: '@deepseek-ai/dsh-mcp-client'
+            config:
+              serverName: "instant"
+              transport: "stdio"
+              command: "C:/old/instant-file-search-mcp-server.exe"
+              failOnStartupError: true
+- insert:
+    - id: preset-reverse-engineering
+      name: '@deepseek-ai/dsh-agent-preset'
+      config:
+        id: reverse-engineering
+        plugins:
+          - id: persona
+            name: '@deepseek-ai/dsh-persona'
+'@
+
+    $urlRow = @'
+- insert:
+    - id: mcp-instant-file-search
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: instant
+        transport: streamable-http
+        url: "http://127.0.0.1:9999/mcp"
+'@
+
+    Write-Host 'Self-test: DSH patch editor' -ForegroundColor Cyan
+
+    # 1. Root-only patch: one row, updated in place, no extra row added.
+    $info = Get-DshPatchInfo $rootOnly
+    Assert-Equality $info.ServerRows.Count 1 'root-only fixture has one server row'
+    Assert-Equality $info.RootRows.Count 1 'root-only fixture row is root-scoped'
+    Assert-Equality $info.Presets.Count 0 'root-only fixture has no presets'
+    $edit = Set-DshServerCommand -Text $rootOnly -CommandPath 'C:/new/instant.exe'
+    Assert-Equality $edit.Updated 1 'root-only fixture repoints one row'
+    Assert-Equality (($edit.Text -match 'C:/new/instant\.exe').Count) 1 'root-only fixture writes the new command'
+    $again = Set-DshServerCommand -Text $edit.Text -CommandPath 'C:/new/instant.exe'
+    Assert-Equality $again.Updated 0 'root-only fixture is idempotent'
+
+    # 2. Preset-only patch: nothing is root-scoped, and the root row is restored.
+    $info = Get-DshPatchInfo $presetOnly
+    Assert-Equality $info.ServerRows.Count 1 'preset-only fixture has one server row'
+    Assert-Equality $info.RootRows.Count 0 'preset-only fixture has no root row'
+    Assert-Equality $info.PresetRows.Count 1 'preset-only fixture row is preset-scoped'
+    Assert-Equality $info.PresetRows[0].PresetId 'standard' 'preset-only fixture row belongs to the standard preset'
+    $gaps = @($info.PresetMounts | Where-Object { -not $_.Mounted } | ForEach-Object { $_.Id })
+    Assert-Equality ($gaps -join ',') 'reverse-engineering' 'preset-only fixture reports the unmounted preset'
+    $healed = Add-DshRootRow -Text $presetOnly -CommandPath 'C:/new/instant.exe'
+    $info = Get-DshPatchInfo $healed
+    Assert-Equality $info.RootRows.Count 1 'root row is restored after healing'
+    Assert-Equality $info.ServerRows.Count 2 'healing keeps the preset row and adds the root row'
+    $repoint = Set-DshServerCommand -Text $healed -CommandPath 'C:/new/instant.exe'
+    Assert-Equality $repoint.Updated 1 'healing repoints the stale preset row (the restored root row is already current)'
+    Assert-Equality (([regex]::Matches($repoint.Text, 'C:/new/instant\.exe')).Count) 2 'every server row carries the new command'
+
+    # 3. A row without command: line is reported, never rewritten.
+    $edit = Set-DshServerCommand -Text $urlRow -CommandPath 'C:/new/instant.exe'
+    Assert-Equality $edit.Updated 0 'URL-transport row is not rewritten'
+    Assert-Equality $edit.RowsWithoutCommand.Count 1 'URL-transport row is reported as missing a command'
+    Assert-Equality $edit.Text $urlRow 'URL-transport row text is unchanged'
+
+    # 5. Other servers and unrelated text are not touched.
+    $other = "- id: x`n  config:`n    serverName: somebody-else`n"
+    $info = Get-DshPatchInfo $other
+    Assert-Equality $info.ServerRows.Count 0 'unrelated serverName is ignored'
+    $edit = Set-DshServerCommand -Text $other -CommandPath 'C:/new/instant.exe'
+    Assert-Equality $edit.Text $other 'unrelated patch text is unchanged'
+
+    # 5b. A preset declared as a top-level override (id preset-<name>) with a
+    # plugins list must still be recognised, or its child row is mistaken for a
+    # root row and the preset looks unmounted.
+    $overridePreset = @(
+        "- id: preset-standard"
+        "  config:"
+        "    id: standard"
+        "    name: `"Standard`""
+        "    plugins:"
+        "      - id: persona"
+        "        name: '@deepseek-ai/dsh-persona'"
+        "      - id: mcp-instant-file-search"
+        "        name: '@deepseek-ai/dsh-mcp-client'"
+        "        config:"
+        "          serverName: `"instant`""
+        "          transport: stdio"
+        "          command: `"C:/old/instant.exe`""
+    ) -join "`r`n"
+    $info = Get-DshPatchInfo $overridePreset
+    Assert-Equality $info.Presets.Count 1 'top-level preset override is recognised'
+    Assert-Equality $info.Presets[0].Id 'standard' 'override preset id is read from its config'
+    Assert-Equality $info.RootRows.Count 0 'override preset child row is not root-scoped'
+    Assert-Equality $info.PresetMounts[0].Mounted $true 'override preset reports its child row as mounted'
+
+    # 6. UTF-8 round trip. The patch contains em dashes and CJK in the wild, and
+    # Windows PowerShell 5.1 read them as ANSI before this helper existed.
+    $tempFile = Join-Path $env:TEMP ("ifs-selftest-" + $PID + ".yml")
+    try {
+        $cjk = ([string][char]0x9884) + ([char]0x8BBE)
+        $unicode = "id: test`r`nname: `"em dash " + ([char]0x2014) + " and CJK $cjk`"`r`n"
+        Write-TextFile -Path $tempFile -Text $unicode -WithBom $false
+        Assert-Equality (Test-TextFileHasBom $tempFile) $false 'UTF-8 writer omits the BOM by default'
+        $roundTrip = Read-TextFile $tempFile
+        Assert-Equality ($roundTrip.Contains([char]0x2014)) $true 'UTF-8 round trip keeps the em dash'
+        Assert-Equality ($roundTrip.Contains($cjk)) $true 'UTF-8 round trip keeps CJK text'
+        Write-TextFile -Path $tempFile -Text $unicode -WithBom $true
+        Assert-Equality (Test-TextFileHasBom $tempFile) $true 'UTF-8 writer can preserve a BOM'
+        Assert-Equality ((Read-TextFile $tempFile).Contains($cjk)) $true 'UTF-8 reader keeps content after a BOM'
+    } finally {
+        Remove-Item -LiteralPath $tempFile -Force -ErrorAction SilentlyContinue
+    }
+    # 7. Mixed LF/CRLF patches keep every line's terminator, so an unrelated
+    # repoint does not rewrite (or re-encode) the whole file.
+    $mixedLines = @(
+        "- insert:`r`n"
+        "    - id: mcp-instant-file-search`n"
+        "      name: '@deepseek-ai/dsh-mcp-client'`n"
+        "      config:`r`n"
+        "        serverName: instant`n"
+        "        command: `"C:/old/instant.exe`"`n"
+    )
+    $mixed = ($mixedLines -join '')
+    $edit = Set-DshServerCommand -Text $mixed -CommandPath 'C:/new/instant.exe'
+    Assert-Equality (([regex]::Matches($edit.Text, "`r`n")).Count) 2 'mixed patch keeps its CRLF endings'
+    Assert-Equality (([regex]::Matches($edit.Text, "(?<!`r)`n")).Count) 4 'mixed patch keeps its LF endings'
+    Assert-Equality ($edit.Text.Contains('C:/new/instant.exe')) $true 'mixed patch repoints the command'
+
+    # 8. Preset mount: appended inside the right scope, and repeated calls do not duplicate.
+    $mounted = Add-DshPresetRow -Text $presetOnly -PresetId 'reverse-engineering' -CommandPath 'C:/new/instant.exe'
+    Assert-Equality $mounted.Added $true 'preset mount is added'
+    $info = Get-DshPatchInfo $mounted.Text
+    Assert-Equality (($info.PresetRows | Where-Object { $_.PresetId -eq 'reverse-engineering' }).Count) 1 'mounted preset has exactly one row'
+    Assert-Equality (($info.ServerRows | Where-Object { $_.Scope -eq 'root' }).Count) 0 'preset mount does not create a root row'
+    $mountedAgain = Add-DshPresetRow -Text $mounted.Text -PresetId 'reverse-engineering' -CommandPath 'C:/new/instant.exe'
+    Assert-Equality $mountedAgain.Added $false 'repeated preset mount is a no-op'
+    Assert-Equality (([regex]::Matches($mountedAgain.Text, 'serverName:\s*[''"]?instant[''"]?')).Count) 2 'repeated preset mount does not duplicate the row'
+    $mountNew = Add-DshPresetRow -Text $presetOnly -PresetId 'no-such-preset' -CommandPath 'C:/new/instant.exe'
+    Assert-Equality $mountNew.Added $false 'unknown preset is reported, not created'
+
+    # 9. CRLF-only patch keeps CRLF.
+    $crlf = $rootOnly -replace "`n", "`r`n"
+    $edit = Set-DshServerCommand -Text $crlf -CommandPath 'C:/new/instant.exe'
+    Assert-Equality ($edit.Text.Contains("`r`n")) $true 'CRLF patch keeps CRLF line endings'
+    Assert-Equality ($edit.Text.Contains("`n") -and (($edit.Text -replace "`r`n", '').Contains("`n"))) $false 'CRLF patch does not gain bare LF endings'
+
+    if ($script:selfTestFailures -gt 0) {
+        Write-Host "Self-test FAILED: $($script:selfTestFailures) failure(s)." -ForegroundColor Red
+        return 1
+    }
+    Write-Host 'Self-test passed.' -ForegroundColor Green
+    return 0
 }
 
 function Get-DetectedClients {
@@ -557,7 +1152,7 @@ function ConvertFrom-JsonC([string]$Text) {
 
 function Read-JsonConfig([string]$Path) {
     if (-not (Test-Path -LiteralPath $Path)) { return [pscustomobject]@{} }
-    $raw = Get-Content -LiteralPath $Path -Raw
+    $raw = Read-TextFile $Path
     if (-not $raw.Trim()) { return [pscustomobject]@{} }
     try { return ($raw | ConvertFrom-Json) }
     catch {
@@ -576,7 +1171,7 @@ function Write-JsonConfig([string]$Path, $Config) {
     $parent = Split-Path -Parent $Path
     New-Item -ItemType Directory -Path $parent -Force | Out-Null
     Backup-Config $Path
-    $Config | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $Path -Encoding UTF8
+    $Config | ConvertTo-Json -Depth 20 | ForEach-Object { Write-TextFile -Path $Path -Text $_ }
 }
 
 # Write the current MCP registration key over any legacy key (e.g. "everything"
@@ -605,13 +1200,13 @@ function Write-McpConfigPreserving([string]$Path) {
         return $true
     }
 
-    $raw = Get-Content -LiteralPath $Path -Raw
+    $raw = Read-TextFile $Path
     $migrated = Migrate-LegacyMcpKeys $raw
     if ($migrated -ne $raw) {
         # A legacy registration key exists. Rewrite the file with the current
         # key so the migration persists, then continue to refresh the entry.
         Backup-Config $Path
-        Set-Content -LiteralPath $Path -Value $migrated -Encoding UTF8
+        Write-TextFile -Path $Path -Text $migrated
         Write-Host "   MCP entry migrated to '$serverName' in '$Path'." -ForegroundColor Gray
         $raw = $migrated
     }
@@ -647,7 +1242,7 @@ function Write-McpConfigPreserving([string]$Path) {
         $inserted = Insert-McpEntryText $raw $stableBinary
         if ($inserted) {
             Backup-Config $Path
-            Set-Content -LiteralPath $Path -Value $inserted -Encoding UTF8
+            Write-TextFile -Path $Path -Text $inserted
             Write-Host "   MCP entry inserted into '$Path' (comments preserved)." -ForegroundColor Gray
             return $true
         }
@@ -821,11 +1416,11 @@ function Get-HermesMcpEntryLines([string]$BinaryPath) {
 function Write-HermesConfig {
     $desired = @(Get-HermesMcpEntryLines $stableBinary)
     $newline = if (Test-Path -LiteralPath $hermesConfig) {
-        $existingRaw = Get-Content -LiteralPath $hermesConfig -Raw
+        $existingRaw = Read-TextFile $hermesConfig
         if ($existingRaw.Contains("`r`n")) { "`r`n" } else { "`n" }
     } else { "`r`n" }
 
-    $raw = if (Test-Path -LiteralPath $hermesConfig) { Get-Content -LiteralPath $hermesConfig -Raw } else { '' }
+    $raw = Read-TextFile $hermesConfig
     $lines = if ($raw) { @($raw -split "`r?`n") } else { @() }
     $mcpIndex = -1
     for ($i = 0; $i -lt $lines.Count; $i++) {
@@ -892,7 +1487,7 @@ function Write-HermesConfig {
         $parent = Split-Path -Parent $hermesConfig
         New-Item -ItemType Directory -Path $parent -Force | Out-Null
         Backup-Config $hermesConfig
-        [System.IO.File]::WriteAllText($hermesConfig, ($lines -join $newline), [System.Text.UTF8Encoding]::new($false))
+        Write-TextFile -Path $hermesConfig -Text ($lines -join $newline) -WithBom (Test-TextFileHasBom $hermesConfig)
     }
     return $true
 }
@@ -1218,6 +1813,9 @@ function Test-Installation {
     return $ok
 }
 
+# Pure-function regression tests for the patch editor; never touches a real profile.
+if ($SelfTest) { exit (Invoke-InstallerSelfTest) }
+
 Write-Host 'Instant File Search MCP installer' -ForegroundColor Green
 Write-Host "Install root: $InstallRoot" -ForegroundColor Gray
 if ($isCheckout) { Write-Host 'Source: local checkout' -ForegroundColor Gray }
@@ -1248,6 +1846,22 @@ if ($DryRun) {
     Write-Action "Copy '$serverSource' to '$stableBinary'"
 } elseif ($serverSource -eq $stableBinary) {
     Write-Host "PASS: MCP server $installVersion is already in place at '$stableBinary'." -ForegroundColor Green
+} elseif (Test-Path -LiteralPath $stableBinary) {
+    # A same-version reinstall (a rebuilt binary, or a plain re-run) must not fail
+    # just because DeepSeek Harness respawns the MCP server as soon as it is
+    # stopped, which keeps the destination exe locked. Identical bytes need no copy.
+    $sameContent = $false
+    try {
+        $sourceHash = (Get-FileHash -LiteralPath $serverSource -Algorithm SHA256).Hash
+        $targetHash = (Get-FileHash -LiteralPath $stableBinary -Algorithm SHA256).Hash
+        $sameContent = ($sourceHash -eq $targetHash)
+    } catch {}
+    if ($sameContent) {
+        Write-Host "PASS: MCP server $installVersion is already current at '$stableBinary' (identical binary; copy skipped while a client may hold it)." -ForegroundColor Green
+    } else {
+        Install-ServerBinary $serverSource $stableBinary
+        Write-Host "PASS: MCP server $installVersion installed at '$stableBinary'." -ForegroundColor Green
+    }
 } else {
     Install-ServerBinary $serverSource $stableBinary
     Write-Host "PASS: MCP server $installVersion installed at '$stableBinary'." -ForegroundColor Green

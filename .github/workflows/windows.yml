@@ -56,6 +56,9 @@ jobs:
             -SourceIndexer 'C:\staging\instant-file-search-indexer.exe' `
             -ServiceIndexer 'C:\Program Files\ifs\instant-file-search-indexer.exe'
 
+      - name: Self-test the installer's DSH patch editor
+        shell: pwsh
+        run: ./scripts/install.ps1 -SelfTest
       - name: Parse-check the installer and doctor
         shell: pwsh
         run: |
