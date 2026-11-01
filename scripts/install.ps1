@@ -24,6 +24,7 @@ param(
     [string[]]$DshPresets,
     [switch]$SelfTest,
     [switch]$NonInteractive,
+    [int]$NativeWaitSec = 180,
     [int]$ElevationTimeoutSec = 120,
     [switch]$DryRun
 )
@@ -566,6 +567,7 @@ function Install-Dsh {
         return
     }
 
+    $script:dshProfileName = $target.Name
     $patch = $target.Patch
     $text = Read-TextFile $patch
     $command = Get-DshBinaryPath
@@ -1805,33 +1807,149 @@ function Install-Doctor {
     }
 }
 
+# Minimal MCP client probe: initialize, tools/list, then one real tool call.
+# Used by the install verification and exercised by the doctor-style checks.
+function Invoke-McpProbe {
+    param([string]$ExePath, [int]$TimeoutMs = 25000)
+
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = $ExePath
+    $psi.RedirectStandardInput = $true
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $psi.UseShellExecute = $false
+    $psi.CreateNoWindow = $true
+
+    $proc = $null
+    try {
+        $proc = [System.Diagnostics.Process]::Start($psi)
+        $deadline = (Get-Date).AddMilliseconds($TimeoutMs)
+
+        $send = {
+            param($obj)
+            $line = ($obj | ConvertTo-Json -Compress -Depth 10)
+            $proc.StandardInput.WriteLine($line)
+            $proc.StandardInput.Flush()
+        }
+        $readMatching = {
+            param([int]$id)
+            while ((Get-Date) -lt $deadline) {
+                $remaining = [int]($deadline - (Get-Date)).TotalMilliseconds
+                if ($remaining -le 0) { return $null }
+                $task = $proc.StandardOutput.ReadLineAsync()
+                if (-not $task.Wait([Math]::Max(1, $remaining))) { return $null }
+                $line = $task.Result
+                if ($null -eq $line) { return $null }
+                if ([string]::IsNullOrWhiteSpace($line)) { continue }
+                try { $msg = $line | ConvertFrom-Json } catch { continue }
+                if ($msg.id -eq $id) { return $msg }
+            }
+            return $null
+        }
+
+        & $send @{ jsonrpc = '2.0'; id = 1; method = 'initialize'; params = @{ protocolVersion = '2024-11-05'; capabilities = @{}; clientInfo = @{ name = 'installer'; version = '1.0' } } }
+        $init = & $readMatching 1
+        if (-not $init) { return $null }
+        & $send @{ jsonrpc = '2.0'; method = 'notifications/initialized'; params = @{} }
+        & $send @{ jsonrpc = '2.0'; id = 2; method = 'tools/list'; params = @{} }
+        $tools = & $readMatching 2
+        & $send @{ jsonrpc = '2.0'; id = 3; method = 'tools/call'; params = @{ name = 'search_status'; arguments = @{} } }
+        $status = & $readMatching 3
+
+        $statusText = $null
+        if ($status -and $status.result -and $status.result.content) { $statusText = $status.result.content[0].text }
+        return [pscustomobject]@{
+            ServerName = $init.result.serverInfo.name
+            Version    = $init.result.serverInfo.version
+            ToolNames  = @($tools.result.tools | ForEach-Object { $_.name })
+            StatusText = $statusText
+        }
+    } catch {
+        return $null
+    } finally {
+        if ($proc) {
+            try { $proc.StandardInput.Close() } catch {}
+            Start-Sleep -Milliseconds 200
+            if (-not $proc.HasExited) { try { $proc.Kill() } catch {} }
+        }
+    }
+}
+
+# The indexer creates its named pipe only after the first index build, which can
+# take minutes on large volumes. Poll instead of assuming the service start is enough.
+function Wait-NativeIndexer {
+    param([int]$TimeoutSec = 180)
+    if ((Get-Service -Name $serviceName -ErrorAction SilentlyContinue).Status -ne 'Running') { return $false }
+    $deadline = (Get-Date).AddSeconds($TimeoutSec)
+    while ((Get-Date) -lt $deadline) {
+        try {
+            $pipes = [System.IO.Directory]::GetFiles('\\.\pipe\')
+            if (@($pipes | Where-Object { $_ -match 'instant-file-search-indexer' }).Count -gt 0) { return $true }
+        } catch {}
+        Start-Sleep -Seconds 2
+    }
+    return $false
+}
+
 function Test-Installation {
     Write-Step 'Verifying the installation'
     if (-not (Test-Path -LiteralPath $stableBinary)) {
         Write-Host "FAIL: MCP server binary not found at '$stableBinary'." -ForegroundColor Red
         return $false
     }
-    $inFile = Join-Path $env:TEMP "installer-verify-in-$PID.txt"
-    $outFile = Join-Path $env:TEMP "installer-verify-out-$PID.txt"
-    '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"installer","version":"1.0"}}}' |
-        Set-Content -LiteralPath $inFile -Encoding UTF8
-    try {
-        $proc = Start-Process -FilePath $stableBinary -RedirectStandardInput $inFile -RedirectStandardOutput $outFile -PassThru -NoNewWindow -ErrorAction Stop
-        $alive = $proc.WaitForExit(4000)
-        if ($alive) {
-            $out = Get-Content -LiteralPath $outFile -Raw -ErrorAction SilentlyContinue
-            if ($out -match 'jsonrpc') { Write-Host 'PASS: MCP server starts and answers initialize.' -ForegroundColor Green; $ok = $true }
-            else { Write-Host 'WARN: MCP server started but produced no JSON-RPC output.' -ForegroundColor Yellow; $ok = $false }
-            if (-not $proc.HasExited) { $proc.Kill() }
-        } else {
-            Write-Host 'WARN: MCP server exited within 4s of startup. Enable EVERYTHING_MCP_LOG=debug to diagnose.' -ForegroundColor Yellow
-            $ok = $false
-        }
-    } catch {
-        Write-Host "WARN: could not start the MCP server for verification ($($_.Exception.Message))." -ForegroundColor Yellow
+    $ok = $true
+    $probe = Invoke-McpProbe -ExePath $stableBinary
+    if (-not $probe) {
+        Write-Host 'FAIL: the MCP server did not answer initialize/tools/list within the timeout.' -ForegroundColor Red
+        return $false
+    }
+    Write-Host ("PASS: MCP server {0} answers initialize and lists {1} tool(s)." -f $probe.Version, $probe.ToolNames.Count) -ForegroundColor Green
+    $expectedTools = @('find_files', 'count_files', 'search_status', 'recent_changes', 'aggregate_files')
+    $missingTools = @($expectedTools | Where-Object { $probe.ToolNames -notcontains $_ })
+    if ($missingTools.Count -gt 0) {
+        Write-Host ("FAIL: tools/list is missing: " + ($missingTools -join ', ')) -ForegroundColor Red
         $ok = $false
     }
-    Remove-Item $inFile, $outFile -Force -ErrorAction SilentlyContinue
+
+    $status = $null
+    if ($probe.StatusText) {
+        try { $status = $probe.StatusText | ConvertFrom-Json } catch {}
+    }
+    if ($status) {
+        $nativeOk = [bool]$status.native.ok
+        if ($nativeOk) {
+            Write-Host ("PASS: native indexer is serving ({0:N0} files indexed)." -f [double]$status.native.detail.indexed) -ForegroundColor Green
+        } else {
+            Write-Host "WARN: native indexer is not serving yet ($($status.native.error)); searches answer from the Fallback Engine until it is ready." -ForegroundColor Yellow
+        }
+        if ($status.everything -and $status.everything.ok) {
+            Write-Host 'PASS: Fallback Engine is connected.' -ForegroundColor Green
+        } elseif (-not $nativeOk) {
+            Write-Host 'FAIL: neither the native indexer nor the Fallback Engine is connected yet.' -ForegroundColor Red
+            $ok = $false
+        }
+    } else {
+        Write-Host 'WARN: search_status did not return a parsable result.' -ForegroundColor Yellow
+    }
+
+    # The profile patch only helps if the harness composes it. Reject a wrong
+    # profile or a malformed patch here instead of leaving the user with a
+    # successful install and no tools.
+    $dshProfileName = $script:dshProfileName
+    if (-not $dshProfileName) { $dshProfileName = $DshProfile }
+    if ($dshProfileName -and (Get-Command dsh -ErrorAction SilentlyContinue)) {
+        try {
+            $dump = (& dsh --profile $dshProfileName --dump-config 2>$null | Out-String)
+            if ($dump -match 'serverName:\s*[''"]?instant') {
+                Write-Host "PASS: DeepSeek Harness profile '$dshProfileName' composes the '$serverName' server." -ForegroundColor Green
+            } else {
+                Write-Host "FAIL: DeepSeek Harness profile '$dshProfileName' did not compose the '$serverName' server. Re-run with -DshProfile <name>." -ForegroundColor Red
+                $ok = $false
+            }
+        } catch {
+            Write-Host "WARN: could not run 'dsh --dump-config' to verify the profile: $($_.Exception.Message)" -ForegroundColor Yellow
+        }
+    }
     return $ok
 }
 
@@ -1903,7 +2021,23 @@ foreach ($client in $selected) {
     }
 }
 
+
 Install-NativeService
+
+# A service that just started may still be building its first index; wait for
+# the pipe so verification and the user both know when the native engine is live.
+if (-not $DryRun -and $NativeWaitSec -gt 0) {
+    $svcNow = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
+    if ($svcNow -and $svcNow.Status -eq 'Running') {
+        Write-Host "Waiting up to $NativeWaitSec s for the native indexer to start serving (the first build after an upgrade can take minutes)..." -ForegroundColor Gray
+        if (Wait-NativeIndexer -TimeoutSec $NativeWaitSec) {
+            Write-Host 'PASS: native indexer is accepting connections.' -ForegroundColor Green
+        } else {
+            Write-Host 'NOTE: the native indexer is still building its index; searches answer from the Fallback Engine until it is ready.' -ForegroundColor Gray
+        }
+    }
+}
+
 Write-InstallState (Join-Path (Join-Path $versionRoot 'indexer') $indexerName)
 Install-Doctor
 
@@ -1969,5 +2103,9 @@ if (-not $verifyOk) {
     Write-Host "`nThe installer finished, but the post-install verification failed. Run the diagnostics script for details:" -ForegroundColor Red
     Write-Host "  $((Join-Path $InstallRoot $doctorName))" -ForegroundColor Gray
     exit 1
+}
+if ($incomplete) {
+    Write-Host "`nInstallation is complete, but the native indexer service still needs one elevated run (see the command above). Searches work now through the Fallback Engine." -ForegroundColor Yellow
+    exit 2
 }
 exit 0
