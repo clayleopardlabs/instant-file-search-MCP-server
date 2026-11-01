@@ -30,6 +30,106 @@ function Pass([string]$Message) { Write-Host "PASS: $Message" -ForegroundColor G
 function Warn([string]$Message) { $script:warnings++; Write-Host "WARN: $Message" -ForegroundColor Yellow }
 function Fail([string]$Message) { $script:failures++; Write-Host "FAIL: $Message" -ForegroundColor Red }
 
+function Read-Utf8Text([string]$Path) {
+    if (-not (Test-Path -LiteralPath $Path)) { return '' }
+    $bytes = [System.IO.File]::ReadAllBytes($Path)
+    if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) {
+        return [System.Text.Encoding]::UTF8.GetString($bytes, 3, $bytes.Length - 3)
+    }
+    return [System.Text.Encoding]::UTF8.GetString($bytes)
+}
+
+# Line/scope parser for Cordis profile patches. It mirrors the installer's model
+# closely enough to tell a root row from a preset row and to read the command
+# each row points at, which is what "is this profile actually registered" means.
+function Get-DshPatchReport([string]$Text) {
+    $lines = [string[]](@($Text -split "\r?\n"))
+    $entryStarts = @()
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        if ($lines[$i] -match '^-\s') { $entryStarts += $i }
+    }
+    $entries = @()
+    for ($e = 0; $e -lt $entryStarts.Count; $e++) {
+        $end = if ($e + 1 -lt $entryStarts.Count) { $entryStarts[$e + 1] - 1 } else { $lines.Count - 1 }
+        $entries += [pscustomobject]@{ Start = $entryStarts[$e]; End = $end }
+    }
+
+    $rows = @()
+    foreach ($entry in $entries) {
+        $rowStarts = @()
+        for ($i = $entry.Start; $i -le $entry.End; $i++) {
+            if ($lines[$i] -match '^(?<indent>\s*)- id:\s*(?<id>\S+)') {
+                $rowStarts += [pscustomobject]@{ Line = $i; Indent = $Matches['indent'].Length; Id = $Matches['id'] }
+            }
+        }
+        for ($r = 0; $r -lt $rowStarts.Count; $r++) {
+            $rowStart = $rowStarts[$r]
+            $rowEnd = $entry.End
+            $ownEnd = $entry.End
+            for ($n = $r + 1; $n -lt $rowStarts.Count; $n++) {
+                if ($rowStarts[$n].Indent -le $rowStart.Indent) { $rowEnd = $rowStarts[$n].Line - 1; break }
+                if ($ownEnd -eq $entry.End) { $ownEnd = $rowStarts[$n].Line - 1 }
+            }
+            if ($ownEnd -gt $rowEnd) { $ownEnd = $rowEnd }
+            $ownText = if ($ownEnd -ge $rowStart.Line) { (@($lines[$rowStart.Line..$ownEnd]) -join "`n") } else { '' }
+            $rowName = $null
+            if ($ownText -match '(?m)^\s*name:\s*[''"]?([^''"\s]+)') { $rowName = $Matches[1] }
+            $rows += [pscustomobject]@{
+                Start   = $rowStart.Line
+                End     = $rowEnd
+                OwnEnd  = $ownEnd
+                Indent  = $rowStart.Indent
+                Id      = $rowStart.Id
+                Name    = $rowName
+                OwnText = $ownText
+            }
+        }
+    }
+
+    $presets = @()
+    foreach ($row in $rows) {
+        $isPreset = ($row.Name -eq '@deepseek-ai/dsh-agent-preset') -or
+            ($row.OwnText -match '(?m)^\s+plugins:\s*$' -and $row.OwnText -match '(?m)^\s+id:\s*\S+')
+        if (-not $isPreset) { continue }
+        $presetId = $row.Id
+        if ($row.OwnText -match '(?m)^\s+id:\s*[''"]?([^''"\s]+)') { $presetId = $Matches[1] }
+        $presets += [pscustomobject]@{ Id = $presetId; Start = $row.Start; End = $row.End }
+    }
+
+    $serverRows = @()
+    foreach ($row in $rows) {
+        if ($row.OwnText -notmatch '(?m)^\s*serverName:\s*[''"]?(instant|instant-file-search)[''"]?\s*$') { continue }
+        $presetId = $null
+        foreach ($preset in $presets) {
+            if ($row.Start -gt $preset.Start -and $row.Start -le $preset.End) { $presetId = $preset.Id }
+        }
+        $commandPath = $null
+        for ($i = $row.Start; $i -le $row.OwnEnd; $i++) {
+            if ($lines[$i] -match '^\s*command:\s*(?<value>.+)$') {
+                $commandPath = $Matches['value'].Trim().Trim('"').Trim("'")
+            }
+        }
+        $serverRows += [pscustomobject]@{
+            Scope       = if ($presetId) { 'preset' } else { 'root' }
+            PresetId    = $presetId
+            CommandPath = $commandPath
+        }
+    }
+
+    $gaps = @()
+    foreach ($preset in $presets) {
+        if (@($serverRows | Where-Object { $_.PresetId -eq $preset.Id }).Count -eq 0) { $gaps += $preset.Id }
+    }
+
+    return [pscustomobject]@{
+        Presets    = $presets
+        ServerRows = $serverRows
+        RootRows   = @($serverRows | Where-Object { $_.Scope -eq 'root' })
+        PresetGaps = $gaps
+    }
+}
+
+
 function Find-CodexCli {
     $candidates = @()
     if ($env:CODEX_CLI_PATH) { $candidates += $env:CODEX_CLI_PATH }
@@ -136,18 +236,48 @@ if ($installState) {
     Warn 'No current.json deployment state found; treating this as a legacy in-place install.'
 }
 
+# Codex: its config file is authoritative, and `codex mcp list` only proves a name
+# exists. Read [mcp_servers.<name>] blocks so a legacy duplicate section or a
+# command that still points at an old version is reported instead of "PASS".
 $codex = Find-CodexCli
+$codexConfig = Join-Path $env:USERPROFILE '.codex\config.toml'
+$codexEntries = @()
+if (Test-Path -LiteralPath $codexConfig) {
+    $codexLines = [string[]]((Read-Utf8Text $codexConfig) -split "\r?\n")
+    $currentName = $null
+    for ($i = 0; $i -lt $codexLines.Count; $i++) {
+        if ($codexLines[$i] -match '^\s*\[mcp_servers\.(?<name>[^\]]+)\]\s*$') { $currentName = $Matches['name']; continue }
+        if ($codexLines[$i] -match '^\s*\[') { $currentName = $null; continue }
+        if ($currentName -and $codexLines[$i] -match '^\s*command\s*=\s*[''"]?(?<command>.+?)[''"]?\s*$') {
+            $codexEntries += [pscustomobject]@{ Name = $currentName; Command = $Matches['command'].Trim().Trim('"').Trim("'") }
+        }
+    }
+}
+
 if (-not $codex) {
     Fail 'codex.exe is not on PATH.'
 } else {
     Pass "Codex found at '$($codex.FullName)'."
-    $listOutput = (& $codex.FullName mcp list 2>&1 | Out-String)
-    if ($LASTEXITCODE -ne 0) {
-        Fail 'Codex could not list MCP servers.'
-    } elseif ($listOutput -match ('(?im)\b' + [regex]::Escape($serverName) + '\b') -or $listOutput -match '(?im)\binstant-file-search\b' -or $listOutput -match '(?im)\beverything\b') {
-        Pass "Codex MCP server '$serverName' is registered."
+    $ownNames = @($serverName) + $legacyServerNames
+    $ownEntries = @($codexEntries | Where-Object { $ownNames -contains $_.Name })
+    if ($ownEntries.Count -eq 0) {
+        $listOutput = (& $codex.FullName mcp list 2>&1 | Out-String)
+        if ($listOutput -match ('(?im)\b' + [regex]::Escape($serverName) + '\b') -or $listOutput -match '(?im)\binstant-file-search\b' -or $listOutput -match '(?im)\beverything\b') {
+            Pass "Codex MCP server '$serverName' is registered."
+        } else {
+            Fail "Codex MCP server '$serverName' is not registered. Run .\scripts\install.ps1."
+        }
     } else {
-        Fail "Codex MCP server '$serverName' is not registered. Run .\scripts\install.ps1."
+        $legacy = @($ownEntries | Where-Object { $_.Name -ne $serverName })
+        if ($legacy.Count -gt 0) {
+            Warn ("Codex still has legacy MCP section(s) " + (($legacy | ForEach-Object { $_.Name }) -join ', ') + '; re-run .\scripts\install.ps1 -Clients codex to migrate them.')
+        }
+        $current = @($ownEntries | Where-Object { ($_.Command -replace '\\', '/') -eq ($stableBinary -replace '\\', '/') })
+        if ($current.Count -eq 0) {
+            Warn "Codex MCP server '$serverName' points at '$($ownEntries[0].Command)' instead of '$stableBinary'. Re-run .\scripts\install.ps1 -Clients codex."
+        } else {
+            Pass "Codex MCP server '$serverName' is registered with the current binary."
+        }
     }
 }
 
@@ -189,52 +319,74 @@ if ($hermes -or (Test-Path -LiteralPath $hermesConfig)) {
     }
 }
 
-# DeepSeek Harness: one Cordis patch layer per profile, <DSH_HOME>\profiles\<profile>\cordis.patch.yml.
-# The row can live in that patch or in an installed bundle the profile lists.
+# DeepSeek Harness: one Cordis patch layer per profile, and the same server can
+# be registered at the patch root and inside agent-preset plugin lists (or come
+# from an installed bundle). Check every row and the scope coverage, because a
+# stale row or a preset-only registration leaves some agents without the tools.
 $dshHome = if ($env:DSH_HOME) { $env:DSH_HOME } else { Join-Path $env:USERPROFILE '.dsh' }
-$dshProfiles = Join-Path $dshHome 'profiles'
-if (Test-Path -LiteralPath $dshProfiles) {
-    $dshProfile = if ($env:DSH_PROFILE) { $env:DSH_PROFILE } else { 'desktop' }
-    $dshProfileDir = Join-Path $dshProfiles $dshProfile
-    $dshPatch = Join-Path $dshProfileDir 'cordis.patch.yml'
-    if (-not (Test-Path -LiteralPath $dshPatch)) {
-        $dshPatch = Get-ChildItem -LiteralPath $dshProfiles -Directory -ErrorAction SilentlyContinue |
-            ForEach-Object { Join-Path $_.FullName 'cordis.patch.yml' } |
-            Where-Object { Test-Path -LiteralPath $_ } |
-            Select-Object -First 1
-        if ($dshPatch) { $dshProfileDir = Split-Path -Parent $dshPatch }
+$dshProfilesRoot = Join-Path $dshHome 'profiles'
+if (Test-Path -LiteralPath $dshProfilesRoot) {
+    $expected = $stableBinary -replace '\\', '/'
+    $dshCandidates = @(Get-ChildItem -LiteralPath $dshProfilesRoot -Directory -ErrorAction SilentlyContinue |
+        ForEach-Object {
+            $candidatePatch = Join-Path $_.FullName 'cordis.patch.yml'
+            [pscustomobject]@{ Name = $_.Name; Dir = $_.FullName; Patch = $candidatePatch; HasPatch = (Test-Path -LiteralPath $candidatePatch) }
+        } |
+        Where-Object { $_.HasPatch })
+
+    $dshProfile = $env:DSH_PROFILE
+    if (-not $dshProfile -and $dshCandidates.Count -eq 1) { $dshProfile = $dshCandidates[0].Name }
+    if (-not $dshProfile -and $dshCandidates.Count -gt 1) {
+        Warn ("Multiple DeepSeek Harness profiles (" + (($dshCandidates | ForEach-Object { $_.Name }) -join ', ') + '); set DSH_PROFILE to check the right one.')
     }
 
-    if ($dshPatch) {
-        $expected = $stableBinary -replace '\\', '/'
-        $sources = @()
-        $patchText = if (Test-Path -LiteralPath $dshPatch) { Get-Content -LiteralPath $dshPatch -Raw } else { '' }
-        if ($patchText -match 'serverName:\s*[''"]?(instant|instant-file-search)[''"]?') {
-            $sources += [pscustomobject]@{ Kind = 'profile patch'; Path = $dshPatch; Text = $patchText }
-        }
-        $profilePackage = Join-Path $dshProfileDir 'package.json'
+    $dshTarget = $null
+    if ($dshProfile) { $dshTarget = @($dshCandidates | Where-Object { $_.Name -eq $dshProfile }) | Select-Object -First 1 }
+    if ($dshProfile -and -not $dshTarget) {
+        Warn "DeepSeek Harness profile '$dshProfile' has no cordis.patch.yml."
+    } elseif ($dshTarget) {
+        $patchText = Read-Utf8Text $dshTarget.Patch
+        $report = Get-DshPatchReport $patchText
+
+        $bundleOwner = $null
+        $profilePackage = Join-Path $dshTarget.Dir 'package.json'
         if (Test-Path -LiteralPath $profilePackage) {
-            $bundles = @()
-            try { $bundles = @((Get-Content -LiteralPath $profilePackage -Raw | ConvertFrom-Json).dsh.profile.bundles) } catch {}
-            foreach ($bundle in $bundles) {
-                if (-not $bundle) { continue }
-                $bundlePatch = Join-Path $dshProfileDir (Join-Path 'node_modules' (Join-Path $bundle 'cordis.patch.yml'))
-                if (-not (Test-Path -LiteralPath $bundlePatch)) { continue }
-                $bundleText = Get-Content -LiteralPath $bundlePatch -Raw
-                if ($bundleText -match 'serverName:\s*[''"]?(instant|instant-file-search)[''"]?') {
-                    $sources += [pscustomobject]@{ Kind = "bundle '$bundle'"; Path = $bundlePatch; Text = $bundleText }
+            try {
+                $bundles = @((Read-Utf8Text $profilePackage | ConvertFrom-Json).dsh.profile.bundles)
+                foreach ($bundle in $bundles) {
+                    if (-not $bundle) { continue }
+                    $bundlePatch = Join-Path $dshTarget.Dir (Join-Path 'node_modules' (Join-Path $bundle 'cordis.patch.yml'))
+                    if (-not (Test-Path -LiteralPath $bundlePatch)) { continue }
+                    if ((Read-Utf8Text $bundlePatch) -match 'serverName:\s*[''"]?(instant|instant-file-search)') {
+                        $bundleOwner = $bundle
+                        break
+                    }
                 }
-            }
+            } catch {}
         }
 
-        if ($sources.Count -eq 0) {
-            Warn "DeepSeek Harness profile found at '$dshProfileDir', but MCP server '$serverName' is not registered. Run .\scripts\install.ps1 -Clients dsh."
+        if ($report.ServerRows.Count -eq 0 -and -not $bundleOwner) {
+            Warn "DeepSeek Harness profile '$($dshTarget.Name)' found, but '$serverName' is not registered. Run .\scripts\install.ps1 -Clients dsh."
+        } elseif ($report.ServerRows.Count -eq 0) {
+            Pass "DeepSeek Harness loads '$serverName' from bundle '$bundleOwner'."
         } else {
-            $current = @($sources | Where-Object { $_.Text -replace '\\', '/' -match [regex]::Escape($expected) })
-            if ($current.Count -gt 0) {
-                Pass "DeepSeek Harness MCP server '$serverName' is registered from $($current[0].Kind)."
-            } else {
-                Warn "DeepSeek Harness registers '$serverName' from $($sources[0].Kind) with an older binary path. Update it to '$expected'."
+            $stale = @($report.ServerRows | Where-Object {
+                -not $_.CommandPath -or ($_.CommandPath -replace '\\', '/') -ne $expected
+            })
+            foreach ($row in $stale) {
+                $scope = if ($row.Scope -eq 'root') { 'the patch root' } else { "preset '$($row.PresetId)'" }
+                Warn "DeepSeek Harness row in $scope points at '$($row.CommandPath)' instead of '$expected'."
+            }
+            if ($report.RootRows.Count -eq 0) {
+                Warn "DeepSeek Harness registers '$serverName' only inside presets; plain agents will not see it. Re-run .\scripts\install.ps1 -Clients dsh."
+            }
+            if ($report.PresetGaps.Count -gt 0) {
+                Warn ("DeepSeek Harness preset(s) do not mount '$serverName': " + ($report.PresetGaps -join ', ') + '. Add them with -DshPresets <name> if those agents need file search.')
+            }
+            if ($stale.Count -eq 0 -and $report.RootRows.Count -gt 0) {
+                Pass "DeepSeek Harness profile '$($dshTarget.Name)' registers '$serverName' with the current binary ($($report.ServerRows.Count) row(s), root row present)."
+            } elseif ($stale.Count -gt 0) {
+                Warn "DeepSeek Harness registers '$serverName' with a stale command path. Re-run .\scripts\install.ps1 -Clients dsh."
             }
         }
     }
@@ -350,7 +502,18 @@ if ($activeConfig) {
         if ($mcp -and $mcp.PSObject.Properties[$keyName]) { $mcpRegistered = $true; break }
     }
     if ($mcpRegistered) {
-        Pass "OpenCode MCP server '$serverName' is configured in '$activeConfig'."
+        $openEntry = $null
+        foreach ($keyName in @($serverName) + $legacyServerNames) {
+            if ($mcp -and $mcp.PSObject.Properties[$keyName]) { $openEntry = $mcp.PSObject.Properties[$keyName].Value; break }
+        }
+        $openCommand = if ($openEntry) { @($openEntry.command)[0] } else { $null }
+        if ($openCommand -and ($openCommand -replace '\\', '/') -eq ($stableBinary -replace '\\', '/')) {
+            Pass "OpenCode MCP server '$serverName' is configured with the current binary."
+        } elseif ($openCommand) {
+            Warn "OpenCode MCP server '$serverName' points at '$openCommand' instead of '$stableBinary'. Re-run .\scripts\install.ps1 -Clients opencode."
+        } else {
+            Pass "OpenCode MCP server '$serverName' is configured in '$activeConfig'."
+        }
     } else {
         Warn "'$serverName' is not in the OpenCode config '$activeConfig'. Run .\scripts\install.ps1."
     }
@@ -361,8 +524,18 @@ if ($activeConfig) {
 if (Test-Path -LiteralPath $claudeConfig) {
     try {
         $claude = Get-Content -LiteralPath $claudeConfig -Raw | ConvertFrom-Json
-        if ($claude.PSObject.Properties['mcpServers'].Value.PSObject.Properties[$serverName] -or $claude.PSObject.Properties['mcpServers'].Value.PSObject.Properties['instant-file-search'] -or $claude.PSObject.Properties['mcpServers'].Value.PSObject.Properties['everything']) {
-            Pass 'Claude Desktop MCP server is configured.'
+        $claudeServers = $claude.PSObject.Properties['mcpServers'].Value
+        $claudeEntry = $null
+        foreach ($keyName in @($serverName) + $legacyServerNames) {
+            if ($claudeServers -and $claudeServers.PSObject.Properties[$keyName]) { $claudeEntry = $claudeServers.PSObject.Properties[$keyName].Value; break }
+        }
+        if ($claudeEntry) {
+            $claudeCommand = if ($claudeEntry.PSObject.Properties['command']) { $claudeEntry.command } else { $null }
+            if ($claudeCommand -and ($claudeCommand -replace '\\', '/') -eq ($stableBinary -replace '\\', '/')) {
+                Pass 'Claude Desktop MCP server is configured with the current binary.'
+            } else {
+                Warn "Claude Desktop MCP server points at '$claudeCommand' instead of '$stableBinary'. Re-run .\scripts\install.ps1 -Clients claude."
+            }
         } else { Warn "Claude Desktop config exists but '$serverName' is not configured." }
     } catch { Warn "Claude Desktop config could not be parsed: $claudeConfig" }
 } else {

@@ -24,6 +24,7 @@ param(
     [string[]]$DshPresets,
     [switch]$SelfTest,
     [switch]$NonInteractive,
+    [switch]$PruneOldVersions,
     [int]$NativeWaitSec = 180,
     [int]$ElevationTimeoutSec = 120,
     [switch]$DryRun
@@ -1602,6 +1603,95 @@ function Install-Claude {
 # Detect oh-my-opencode-slim (OMO) and add instant-file-search to every
 # sub-agent's mcps array so the search tools are visible to subagents.
 # Orchestrators that already have mcps: ["*"] are left untouched.
+# Look for registrations that a *different* client still points at an old copy of
+# the server. The installer only updates the clients it was asked to, and a stale
+# Codex/Hermes/OpenCode/Claude entry then looks healthy from the outside.
+function Get-StaleClientReferences {
+    param([string]$ExpectedBinary)
+    $stale = @()
+    $expected = $ExpectedBinary -replace '\\', '/'
+    $knownNames = @($serverName, 'everything', 'instant-file-search')
+
+    $userBinary = [Environment]::GetEnvironmentVariable('INSTANT_FS_MCP_BINARY', 'User')
+    if ($userBinary -and ($userBinary -replace '\\', '/') -ne $expected) {
+        $stale += [pscustomobject]@{ Client = 'opencode'; Detail = "INSTANT_FS_MCP_BINARY points at '$userBinary'" }
+    }
+
+    $codexConfig = Join-Path $env:USERPROFILE '.codex\config.toml'
+    if (Test-Path -LiteralPath $codexConfig) {
+        $codexLines = [string[]]((Read-TextFile $codexConfig) -split "\r?\n")
+        $currentName = $null
+        for ($i = 0; $i -lt $codexLines.Count; $i++) {
+            if ($codexLines[$i] -match '^\s*\[mcp_servers\.(?<name>[^\]]+)\]\s*$') { $currentName = $Matches['name']; continue }
+            if ($codexLines[$i] -match '^\s*\[') { $currentName = $null; continue }
+            if (-not $currentName -or ($knownNames -notcontains $currentName)) { continue }
+            if ($codexLines[$i] -match '^\s*command\s*=\s*[''"]?(?<command>.+?)[''"]?\s*$') {
+                $command = $Matches['command'].Trim().Trim('"').Trim("'")
+                if ($currentName -ne $serverName) {
+                    $stale += [pscustomobject]@{ Client = 'codex'; Detail = "legacy mcp_servers.$currentName section" }
+                } elseif (($command -replace '\\', '/') -ne $expected) {
+                    $stale += [pscustomobject]@{ Client = 'codex'; Detail = "mcp_servers.$currentName points at '$command'" }
+                }
+            }
+        }
+    }
+
+    if (Test-Path -LiteralPath $hermesConfig) {
+        $hermesLines = [string[]]((Read-TextFile $hermesConfig) -split "\r?\n")
+        $hermesName = $null
+        for ($i = 0; $i -lt $hermesLines.Count; $i++) {
+            if ($hermesLines[$i] -match '^  (?<name>[A-Za-z0-9._-]+):\s*$') { $hermesName = $Matches['name']; continue }
+            if ($hermesLines[$i] -match '^\S') { $hermesName = $null; continue }
+            if (-not $hermesName -or ($knownNames -notcontains $hermesName)) { continue }
+            if ($hermesLines[$i] -match '^\s+command:\s*[''"]?(?<command>.+?)[''"]?\s*$') {
+                $command = $Matches['command'].Trim().Trim('"').Trim("'")
+                if ($hermesName -ne $serverName) {
+                    $stale += [pscustomobject]@{ Client = 'hermes'; Detail = "legacy mcp_servers.$hermesName entry" }
+                } elseif (($command -replace '\\', '/') -ne $expected) {
+                    $stale += [pscustomobject]@{ Client = 'hermes'; Detail = "mcp_servers.$hermesName points at '$command'" }
+                }
+                $hermesName = $null
+            }
+        }
+    }
+
+    $openConfig = Resolve-OpenCodeConfig
+    if ($openConfig) {
+        $openCfg = $null
+        try { $openCfg = Read-JsonConfig $openConfig } catch {}
+        $openMcp = if ($openCfg) { $openCfg.PSObject.Properties['mcp'].Value } else { $null }
+        foreach ($name in $knownNames) {
+            if (-not $openMcp -or -not $openMcp.PSObject.Properties[$name]) { continue }
+            $entry = $openMcp.PSObject.Properties[$name].Value
+            $command = if ($entry -and @($entry.command).Count -gt 0) { @($entry.command)[0] } else { $null }
+            if ($name -ne $serverName) {
+                $stale += [pscustomobject]@{ Client = 'opencode'; Detail = "legacy mcp.$name entry" }
+            } elseif ($command -and ($command -replace '\\', '/') -ne $expected) {
+                $stale += [pscustomobject]@{ Client = 'opencode'; Detail = "mcp.$name points at '$command'" }
+            }
+        }
+    }
+
+    if (Test-Path -LiteralPath $claudeConfig) {
+        try {
+            $claudeCfg = (Read-TextFile $claudeConfig) | ConvertFrom-Json
+            $claudeServers = $claudeCfg.PSObject.Properties['mcpServers'].Value
+            foreach ($name in $knownNames) {
+                if (-not $claudeServers -or -not $claudeServers.PSObject.Properties[$name]) { continue }
+                $entry = $claudeServers.PSObject.Properties[$name].Value
+                $command = if ($entry -and $entry.PSObject.Properties['command']) { $entry.command } else { $null }
+                if ($name -ne $serverName) {
+                    $stale += [pscustomobject]@{ Client = 'claude'; Detail = "legacy mcpServers.$name entry" }
+                } elseif ($command -and ($command -replace '\\', '/') -ne $expected) {
+                    $stale += [pscustomobject]@{ Client = 'claude'; Detail = "mcpServers.$name points at '$command'" }
+                }
+            }
+        } catch {}
+    }
+
+    return @($stale)
+}
+
 function Install-OmoMcpAccess {
     Write-Step 'Configuring oh-my-opencode-slim sub-agent MCP access'
     $omoConfig = Join-Path $openCodeConfigDir 'oh-my-opencode-slim.json'
@@ -1704,7 +1794,13 @@ function Install-NativeService {
     if ($DryRun) {
         Write-Action "Configure service environment: INSTANT_FS_INDEX_MODE=$IndexMode, INSTANT_FS_CONTENT_INDEX=$ContentMode"
         Write-Action "Copy '$resolved' to '$serviceIndexer'"
-        Write-Action "sc.exe create $serviceName binPath= `"$serviceIndexer service`" start= auto"
+        if (Get-Service -Name $serviceName -ErrorAction SilentlyContinue) {
+            Write-Action "Update existing service '$serviceName' to run '$serviceIndexer' (start= auto)"
+        } elseif ($elevated) {
+            Write-Action "sc.exe create $serviceName binPath= `"$serviceIndexer service`" start= auto"
+        } else {
+            Write-Action "Register service '$serviceName' (needs admin; a UAC prompt follows unless -SkipElevation or -NonInteractive is set)"
+        }
         return
     }
 
@@ -1809,6 +1905,10 @@ function Install-Doctor {
 
 # Minimal MCP client probe: initialize, tools/list, then one real tool call.
 # Used by the install verification and exercised by the doctor-style checks.
+# Minimal MCP client probe: initialize, tools/list, then one real tool call.
+# The reader runs on its own runspace because Process.StandardOutput forbids
+# concurrent ReadLineAsync calls, and a stale pending read would poison the
+# next response (that made the search_status check flaky).
 function Invoke-McpProbe {
     param([string]$ExePath, [int]$TimeoutMs = 25000)
 
@@ -1821,14 +1921,31 @@ function Invoke-McpProbe {
     $psi.CreateNoWindow = $true
 
     $proc = $null
+    $queue = $null
+    $readerPs = $null
+    $readerRs = $null
     try {
         $proc = [System.Diagnostics.Process]::Start($psi)
+        $queue = New-Object 'System.Collections.Concurrent.BlockingCollection[string]'
+
+        $readerRs = [runspacefactory]::CreateRunspace()
+        $readerRs.Open()
+        $readerPs = [powershell]::Create()
+        $readerPs.Runspace = $readerRs
+        [void]$readerPs.AddScript({
+            param($stream, $target)
+            try {
+                while (($line = $stream.ReadLine()) -ne $null) { $target.Add($line) }
+            } catch {}
+            try { $target.CompleteAdding() } catch {}
+        }).AddArgument($proc.StandardOutput).AddArgument($queue)
+        [void]$readerPs.BeginInvoke()
+
         $deadline = (Get-Date).AddMilliseconds($TimeoutMs)
 
         $send = {
-            param($obj)
-            $line = ($obj | ConvertTo-Json -Compress -Depth 10)
-            $proc.StandardInput.WriteLine($line)
+            param($payload)
+            $proc.StandardInput.WriteLine(($payload | ConvertTo-Json -Compress -Depth 10))
             $proc.StandardInput.Flush()
         }
         $readMatching = {
@@ -1836,10 +1953,8 @@ function Invoke-McpProbe {
             while ((Get-Date) -lt $deadline) {
                 $remaining = [int]($deadline - (Get-Date)).TotalMilliseconds
                 if ($remaining -le 0) { return $null }
-                $task = $proc.StandardOutput.ReadLineAsync()
-                if (-not $task.Wait([Math]::Max(1, $remaining))) { return $null }
-                $line = $task.Result
-                if ($null -eq $line) { return $null }
+                $line = $null
+                if (-not $queue.TryTake([ref]$line, $remaining)) { return $null }
                 if ([string]::IsNullOrWhiteSpace($line)) { continue }
                 try { $msg = $line | ConvertFrom-Json } catch { continue }
                 if ($msg.id -eq $id) { return $msg }
@@ -1872,8 +1987,11 @@ function Invoke-McpProbe {
             Start-Sleep -Milliseconds 200
             if (-not $proc.HasExited) { try { $proc.Kill() } catch {} }
         }
+        if ($readerPs) { try { $readerPs.Dispose() } catch {} }
+        if ($readerRs) { try { $readerRs.Dispose() } catch {} }
     }
 }
+
 
 # The indexer creates its named pipe only after the first index build, which can
 # take minutes on large volumes. Poll instead of assuming the service start is enough.
@@ -2082,6 +2200,34 @@ if (-not $DryRun) {
     }
 }
 
+if (-not $DryRun) {
+    $staleRefs = @(Get-StaleClientReferences -ExpectedBinary $stableBinary)
+    foreach ($staleRef in $staleRefs) {
+        Write-Host "WARN: $($staleRef.Client): $($staleRef.Detail); re-run with -Clients $($staleRef.Client) to update it." -ForegroundColor Yellow
+    }
+    if ($PruneOldVersions) {
+        $versionsDir = Join-Path $InstallRoot 'versions'
+        if (Test-Path -LiteralPath $versionsDir) {
+            $oldVersions = @(Get-ChildItem -LiteralPath $versionsDir -Directory -ErrorAction SilentlyContinue | Where-Object { $_.Name -ne $installVersion })
+            if ($oldVersions.Count -eq 0) {
+                Write-Host 'PASS: no old version directories to prune.' -ForegroundColor Green
+            } else {
+                foreach ($oldVersion in $oldVersions) {
+                    try {
+                        Remove-Item -LiteralPath $oldVersion.FullName -Recurse -Force -ErrorAction Stop
+                        Write-Host "PASS: pruned old version '$($oldVersion.Name)'." -ForegroundColor Green
+                    } catch {
+                        Write-Host "WARN: could not prune '$($oldVersion.Name)': $($_.Exception.Message)" -ForegroundColor Yellow
+                    }
+                }
+            }
+        }
+    }
+}
+if ($DryRun -and $PruneOldVersions) {
+    $oldVersions = @(Get-ChildItem -LiteralPath (Join-Path $InstallRoot 'versions') -Directory -ErrorAction SilentlyContinue | Where-Object { $_.Name -ne $installVersion })
+    foreach ($oldVersion in $oldVersions) { Write-Action "Prune old version directory '$($oldVersion.Name)'" }
+}
 Write-Host "`nInstalled version: $installVersion" -ForegroundColor Green
 Write-Host "Installed binary:  $stableBinary" -ForegroundColor Green
 Write-Host "Diagnostics:      $((Join-Path $InstallRoot $doctorName))" -ForegroundColor Gray
@@ -2099,12 +2245,16 @@ if ($selected -contains 'dsh' -and (Test-DshHostRunning)) {
     Write-Host 'Start (or restart) your AI app so it reloads the MCP configuration.'
 }
 
+if ($DryRun) {
+    Write-Host "`nDRY RUN complete: no files, services, or client configs were changed." -ForegroundColor Yellow
+    exit 0
+}
+
 if (-not $verifyOk) {
     Write-Host "`nThe installer finished, but the post-install verification failed. Run the diagnostics script for details:" -ForegroundColor Red
     Write-Host "  $((Join-Path $InstallRoot $doctorName))" -ForegroundColor Gray
     exit 1
-}
-if ($incomplete) {
+}if ($incomplete) {
     Write-Host "`nInstallation is complete, but the native indexer service still needs one elevated run (see the command above). Searches work now through the Fallback Engine." -ForegroundColor Yellow
     exit 2
 }
