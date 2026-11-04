@@ -1992,14 +1992,14 @@ pub fn aggregate(
     let mut files = 0usize;
     let mut folders = 0usize;
     let mut files_size = 0u64;
-    let mut folders_size = 0u64;
+    let mut dir_rows: Vec<(String, u64)> = Vec::new();
     let mut by_ext: HashMap<String, AggregateExt> = HashMap::new();
     let mut largest: Vec<AggregateLargest> = Vec::new();
 
     for e in &matched {
         if e.is_dir {
             folders += 1;
-            folders_size = folders_size.saturating_add(e.size);
+            dir_rows.push((e.path.clone(), e.size));
         } else {
             files += 1;
             files_size = files_size.saturating_add(e.size);
@@ -2040,7 +2040,7 @@ pub fn aggregate(
         total: matched.len(),
         files,
         folders,
-        total_file_size: if files > 0 { files_size } else { folders_size },
+        total_file_size: if files > 0 { files_size } else { union_folder_size(dir_rows) },
         largest,
         by_extension,
         by_extension_omitted,
@@ -2071,7 +2071,7 @@ pub fn aggregate_iter(
     let mut files = 0usize;
     let mut folders = 0usize;
     let mut files_size = 0u64;
-    let mut folders_size = 0u64;
+    let mut dir_rows: Vec<(String, u64)> = Vec::new();
     let mut by_ext: HashMap<String, AggregateExt> = HashMap::new();
     let mut largest: Vec<AggregateLargest> = Vec::new();
     for e in entries {
@@ -2081,7 +2081,7 @@ pub fn aggregate_iter(
         total += 1;
         if e.is_dir {
             folders += 1;
-            folders_size = folders_size.saturating_add(e.size);
+            dir_rows.push((e.path.clone(), e.size));
         } else {
             files += 1;
             files_size = files_size.saturating_add(e.size);
@@ -2129,11 +2129,41 @@ pub fn aggregate_iter(
         total,
         files,
         folders,
-        total_file_size: if files > 0 { files_size } else { folders_size },
+        total_file_size: if files > 0 { files_size } else { union_folder_size(dir_rows) },
         largest,
         by_extension,
         by_extension_omitted,
     }
+}
+
+/// Sum matched folder sizes without double counting nested folders.
+///
+/// A folder's size is its whole subtree, so `is:folder` over overlapping
+/// depths counts the same bytes repeatedly: an 11 GB tree once reported 26 GB
+/// through this field. Sorting by path puts an ancestor before its descendants,
+/// so a single pass can skip any folder already covered by one already counted.
+fn union_folder_size(mut dirs: Vec<(String, u64)>) -> u64 {
+    dirs.sort_by(|a, b| a.0.cmp(&b.0));
+    let mut total = 0u64;
+    let mut covered_by: Option<String> = None;
+    for (path, size) in dirs {
+        let covered = match &covered_by {
+            Some(parent) => {
+                path.len() > parent.len()
+                    && path.as_bytes()[..parent.len()].eq_ignore_ascii_case(parent.as_bytes())
+                    && matches!(
+                        path.as_bytes().get(parent.len()),
+                        Some(b'\\') | Some(b'/')
+                    )
+            }
+            None => false,
+        };
+        if !covered {
+            total = total.saturating_add(size);
+            covered_by = Some(path);
+        }
+    }
+    total
 }
 
 fn cmp_ci(a: &[u8], b: &[u8]) -> std::cmp::Ordering {
@@ -3128,5 +3158,33 @@ mod tests {
         let both = run("*", false);
         assert_eq!(both.total, 2);
         assert_eq!(both.total_file_size, 100, "folder rows must not be summed");
+    }
+
+    #[test]
+    fn nested_folder_rows_do_not_double_count_the_total() {
+        // Regression: listing a folder and its child together summed the
+        // subtree twice, so `is:folder` reported 26 GB for an 11 GB tree.
+        let mut outer = entry(r"B:\p\outer", true, 1_700_000_000);
+        outer.size = 100;
+        let mut inner = entry(r"B:\p\outer\inner", true, 1_700_000_000);
+        inner.size = 60;
+        let map: HashMap<String, IndexedFile> = HashMap::from([
+            ("outer".to_string(), outer),
+            ("inner".to_string(), inner),
+        ]);
+        let r = aggregate(
+            &map,
+            &AggregateOptions {
+                query: "is:folder".to_string(),
+                path: Some(r"B:\p".to_string()),
+                depth: None,
+                ..Default::default()
+            },
+        );
+        assert_eq!(r.folders, 2);
+        assert_eq!(
+            r.total_file_size, 100,
+            "a folder already covered by its ancestor must not be added again"
+        );
     }
 }
