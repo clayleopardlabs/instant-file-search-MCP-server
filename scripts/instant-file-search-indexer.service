@@ -1,4 +1,4 @@
-# Instant File Search Indexer — systemd unit (Linux native backend)
+# Instant File Search Indexer: systemd unit (Linux native backend)
 #
 # The indexer needs CAP_SYS_ADMIN for fanotify FAN_MARK_FILESYSTEM volume
 # marks (fanotify_init/fanotify_mark). CAP_DAC_OVERRIDE and CAP_DAC_READ_SEARCH

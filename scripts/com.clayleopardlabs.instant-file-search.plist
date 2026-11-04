@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!--
-  com.clayleopardlabs.instant-file-search.plist — launchd LaunchDaemon for the
+  com.clayleopardlabs.instant-file-search.plist: launchd LaunchDaemon for the
   Instant File Search native indexer (macOS backend).
 
   Unlike systemd (Type=notify), launchd has no readiness notification
@@ -11,7 +11,7 @@
   Full Disk Access (TCC): root does NOT imply FDA. After install, grant Full
   Disk Access to the deployed binary (or a signed app bundle around it) in
   System Settings > Privacy & Security > Full Disk Access. Grants are
-  silently revocable by OS upgrades — see docs/macos-support.md.
+  silently revocable by OS upgrades. See docs/macos-support.md.
 
   Install:
     sudo cp com.clayleopardlabs.instant-file-search.plist /Library/LaunchDaemons/

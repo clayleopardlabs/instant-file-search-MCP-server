@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-register-linux-client.py — register the instant-file-search MCP server as a
+register-linux-client.py: register the instant-file-search MCP server as a
 client for OpenCode on Linux, mirroring what scripts/install.ps1 does on
 Windows:
 
