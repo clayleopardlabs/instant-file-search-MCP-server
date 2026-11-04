@@ -34,7 +34,7 @@ pub struct EverythingHandler;
 
 #[tool_router]
 impl EverythingHandler {
-    #[tool(description = "Find files instantly across ALL indexed drives. USE THIS instead of glob, grep, or Get-ChildItem. Query examples: '*.rs', 'content:handler', 'dm:lastweek size:>1mb', 'attrib:h'. Supports wildcards, regex, content search, date/size filters, path scoping, and sorting. For broad patterns, call count_files first to gauge size. Results are files only; add 'is:folder' to include directories, which carry aggregate sizes and are marked by is_dir. NOTE: content: search is bounded. Memory mode uses up to 256 MB of RAM; disk mode can persist content in SQLite. Use it for targeted searches, not exhaustive scans.")]
+    #[tool(description = "Find files instantly across ALL indexed drives. USE THIS instead of glob, grep, or Get-ChildItem. Query examples: '*.rs', 'content:handler', 'dm:lastweek size:>1mb', 'attrib:h'. Supports wildcards, regex, content search, date/size filters, path scoping, and sorting. For broad patterns, call count_files first to gauge size. Results are files only; add 'is:folder' to include directories, which carry aggregate sizes and are marked by is_dir. NOTE: content: search is bounded. Memory mode uses up to 256 MB of RAM; disk mode can persist content in SQLite. Use it for targeted searches, not exhaustive scans. Default excludes node_modules, .git, WinSxS — pass include_all=true to search everything. OR is '|' (not 'OR'). Scope with the `path` param, not path: inside the query. Multi-extension: ext:lsv,d2s.")]
     async fn find_files(
         &self,
         Parameters(params): Parameters<SearchParams>,
@@ -73,7 +73,7 @@ impl EverythingHandler {
         Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
 
-    #[tool(description = "Count files matching a query instantly across ALL indexed drives. USE THIS instead of Get-ChildItem -Recurse | Measure-Object or shell wc/find commands. Examples: '*.json path:C:/Users', '*.log'. Returns just the count, no file data. For broad patterns, always use this before find_files. Counts files only, matching find_files; add 'is:folder' to count directories. NOTE: use forward slashes in paths (C:/Users) to avoid JSON escaping issues.")]
+    #[tool(description = "Count files matching a query instantly across ALL indexed drives. USE THIS instead of Get-ChildItem -Recurse | Measure-Object or shell wc/find commands. Examples: '*.json path:C:/Users', '*.log'. Returns just the count, no file data. For broad patterns, always use this before find_files. Counts files only, matching find_files; add 'is:folder' to count directories. NOTE: use forward slashes in paths (C:/Users) to avoid JSON escaping issues. Default excludes node_modules, .git, WinSxS — pass include_all=true for a true count. OR is '|' (not 'OR'); scope with the `path` param.")]
     async fn count_files(
         &self,
         Parameters(params): Parameters<CountParams>,
@@ -107,7 +107,7 @@ impl EverythingHandler {
         Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
 
-    #[tool(description = "Get disk usage stats for files matching a query: total count, total size, per-extension breakdown, and largest files. USE THIS instead of manually summing file sizes. Examples: '*.log', '*.tmp path:C:\\Windows'. Returns aggregate stats, not individual files.")]
+    #[tool(description = "Disk usage stats: total count and size, per-extension breakdown, and largest files. ALWAYS pass query=\"file:\" — a bare \"*\" also matches folders, and a folder's size is its entire subtree, which inflates total_size roughly 4x. Pass include_all=true for a true disk total (default excludes node_modules, .git, WinSxS). Examples: 'file:', '*.iso file: size:>1gb'. Returns aggregate stats, not individual files. USE THIS instead of manually summing file sizes.")]
     async fn aggregate_files(
         &self,
         Parameters(params): Parameters<AggregateParams>,
@@ -203,10 +203,14 @@ impl ServerHandler for EverythingHandler {
         // official SDK check `capabilities.tools === undefined`); Codex,
         // OpenCode and Hermes call `tools/list` without checking, so they were
         // unaffected. Guarded by `initialize_advertises_tools_capability`.
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().build()).with_server_info(
-            Implementation::new("instant-file-search", crate::APP_VERSION)
-                .with_title("Instant File Search"),
-        )
+        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+            .with_server_info(
+                Implementation::new("instant-file-search", crate::APP_VERSION)
+                    .with_title("Instant File Search"),
+            )
+            // The rules an agent needs are shipped in the handshake rather than
+            // left in docs/ that nobody is asked to read mid-task.
+            .with_instructions(crate::tools::AGENT_INSTRUCTIONS)
     }
 }
 
