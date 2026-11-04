@@ -33,6 +33,10 @@ pub struct QueryOptions {
     /// folder" is not expressible and folder listings return every nested
     /// directory. Ignored when `path` is unset.
     pub depth: Option<usize>,
+    /// Reject entries smaller than this many bytes. Equivalent to a `size:>=`
+    /// token, but as an argument, because callers reach for `min_size` before
+    /// they discover the query token.
+    pub min_size: Option<u64>,
     /// Lowercase paths allowed by a `content:"..."` constraint. When set,
     /// only entries whose lowercased path appears here pass the filter.
     /// Populated by the pipe layer from the ContentStore.
@@ -76,6 +80,8 @@ pub struct AggregateOptions {
     /// Maximum depth below `path`, where 1 means direct children only. This is
     /// what makes "which subfolders is this folder made of" a single call.
     pub depth: Option<usize>,
+    /// Reject entries smaller than this many bytes, applied query-wide.
+    pub min_size: Option<u64>,
     /// Lowercase paths allowed by a `content:"..."` constraint.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub content_paths: Option<Vec<String>>,
@@ -1658,6 +1664,9 @@ struct EntryFilter<'a> {
     /// query. Left inside, `is:folder` bound only to the branch it sat in, so
     /// `*a* is:folder | *b*` returned files from the second branch.
     type_gate: Vec<TypeFilter>,
+    /// Minimum entry size in bytes, applied to the whole query like the type
+    /// gate so it cannot bind to one side of a pipe.
+    min_size: Option<u64>,
     scope_lower: String,
     exclude_parts: Vec<String>,
     compiled: HashMap<String, (regex::Regex, bool)>,
@@ -1699,6 +1708,7 @@ impl<'a> EntryFilter<'a> {
             opts,
             tokens,
             type_gate,
+            min_size: opts.min_size,
             scope_lower,
             exclude_parts,
             compiled,
@@ -1717,6 +1727,11 @@ impl<'a> EntryFilter<'a> {
                 TypeFilter::Files if entry.is_dir => return false,
                 TypeFilter::Folders if !entry.is_dir => return false,
                 _ => {}
+            }
+        }
+        if let Some(min) = self.min_size {
+            if entry.size < min {
+                return false;
             }
         }
         if !self.scope_lower.is_empty() {
@@ -1996,7 +2011,7 @@ pub fn aggregate(
         exclude_path: opts.exclude_path.clone(),
         include_all: opts.include_all,
         files_only: opts.files_only,
-        depth: opts.depth,
+        depth: opts.depth, min_size: opts.min_size,
         match_path: opts.match_path,
         regex: opts.regex,
         match_case: opts.match_case,
@@ -2074,7 +2089,7 @@ pub fn aggregate_iter(
         exclude_path: opts.exclude_path.clone(),
         include_all: opts.include_all,
         files_only: opts.files_only,
-        depth: opts.depth,
+        depth: opts.depth, min_size: opts.min_size,
         match_path: opts.match_path,
         regex: opts.regex,
         match_case: opts.match_case,
@@ -3247,6 +3262,29 @@ mod tests {
         assert!(run(2, 99).largest.is_empty());
         // Paging must not change the totals.
         assert_eq!(run(2, 2).total_file_size, 100);
+    }
+
+    #[test]
+    fn min_size_drops_entries_below_the_threshold() {
+        let mut small = entry(r"B:\p\small.bin", false, 1_700_000_000);
+        small.size = 10;
+        let mut big = entry(r"B:\p\big.bin", false, 1_700_000_000);
+        big.size = 5_000;
+        let map: HashMap<String, IndexedFile> = HashMap::from([
+            ("s".to_string(), small),
+            ("b".to_string(), big),
+        ]);
+        let r = aggregate(
+            &map,
+            &AggregateOptions {
+                query: "*".to_string(),
+                min_size: Some(1_000),
+                ..Default::default()
+            },
+        );
+        assert_eq!(r.files, 1, "only the large entry should survive");
+        assert_eq!(r.total_file_size, 5_000);
+        assert_eq!(r.largest.len(), 1);
     }
 
     #[test]

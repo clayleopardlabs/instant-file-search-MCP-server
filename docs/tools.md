@@ -228,3 +228,5 @@ That asymmetry is what `PIPE_FILTER_SCOPE` warns about, and the fix it suggests 
 still the right one: repeat the filter on each side.
 
 Passing `top: 0` is treated as omitted and returns 20 entries. It does not suppress the list, which is worth stating because it is the opposite of what a zero suggests.
+
+All three query tools also accept `min_size` in bytes, which is equivalent to a `size:>=N` token but harder to get wrong. It is applied query-wide, so it cannot bind to one side of a pipe.

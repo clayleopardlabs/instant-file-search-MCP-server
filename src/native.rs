@@ -188,7 +188,7 @@ fn options_from_search(params: &SearchParams) -> serde_json::Value {
         "match_case": params.match_case.unwrap_or(false),
         "match_whole_word": params.match_whole_word.unwrap_or(false),
         "match_path": params.match_path.unwrap_or(false),
-        "depth": params.depth,
+        "depth": params.depth, "min_size": params.min_size,
         "max_results": max_results,
         "offset": params.offset.unwrap_or(0) as usize,
         "sort": params.sort,
@@ -205,7 +205,7 @@ fn options_from_count(params: &CountParams) -> serde_json::Value {
         "regex": params.regex.unwrap_or(false),
         "match_case": params.match_case.unwrap_or(false),
         "match_whole_word": params.match_whole_word.unwrap_or(false),
-        "depth": params.depth,
+        "depth": params.depth, "min_size": params.min_size,
         "max_results": 0,
         "offset": 0,
         "sort": None::<String>,
@@ -354,7 +354,7 @@ fn options_from_aggregate(params: &AggregateParams) -> serde_json::Value {
         "match_whole_word": params.match_whole_word.unwrap_or(false),
         "top": params.top.unwrap_or(20) as usize,
         "offset": params.offset.unwrap_or(0) as usize,
-        "depth": params.depth,
+        "depth": params.depth, "min_size": params.min_size,
         // Same files-by-default rule as find_files and count_files, so the
         // three tools report the same `total` for the same query. An explicit
         // `is:folder` / `folder:` / `attrib:d` opts directories back in.

@@ -23,15 +23,14 @@ Agents triaging several known folders drop to PowerShell because there is no
 "sum these N paths" operation. It is the most cited reason for leaving the MCP
 surface.
 
-### 3. No `min_size` first-class argument (low)
-
-`size:>5mb` works and is documented, but several agents reached for a `min_size`
-argument first. Consider an alias.
-
 ---
 
 ## Recently closed, for context
 
+- No `min_size` argument: `size:>5mb` worked and was documented, but callers
+  reached for the argument first. All three query tools now take `min_size` in
+  bytes and apply it query-wide, covered by
+  `min_size_drops_entries_below_the_threshold`.
 - `top: 0` is treated as omitted and returns 20 entries, verified against the
   running indexer rather than assumed. An agent had reported that 0 suppressed the
   largest list; it does not, so the behaviour was documented instead of changed.

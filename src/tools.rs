@@ -84,6 +84,8 @@ pub struct SearchParams {
     pub path: Option<String>,
     /// Maximum depth below `path`: 1 means direct children only. Use this to see what is loose in a folder without also matching every nested file.
     pub depth: Option<u32>,
+    /// Reject entries smaller than this many bytes. Use this instead of writing a `size:>5mb` token.
+    pub min_size: Option<u64>,
     /// Comma-separated list of fields to return: filename, path, size, date_modified, date_created, date_accessed, attributes, extension, run_count, date_run, date_recently_changed.
     pub fields: Option<String>,
     /// Directories to exclude from results. Supports Everything ! prefix syntax. Pass one or more paths separated by `;`. Example: "C:\\Windows\\WinSxS;C:\\Program Files" skips both directories. Can also be a partial path like "node_modules" to exclude all folders with that name anywhere.
@@ -101,6 +103,8 @@ pub struct CountParams {
     pub path: Option<String>,
     /// Maximum depth below `path`: 1 means direct children only.
     pub depth: Option<u32>,
+    /// Reject entries smaller than this many bytes.
+    pub min_size: Option<u64>,
     pub regex: Option<bool>,
     /// Enable case-sensitive matching (default: case-insensitive).
     pub match_case: Option<bool>,
@@ -121,6 +125,8 @@ pub struct AggregateParams {
     pub path: Option<String>,
     /// Maximum depth below `path`: 1 means direct children only. Pair with is:folder to total each subfolder of a directory in one call.
     pub depth: Option<u32>,
+    /// Reject entries smaller than this many bytes.
+    pub min_size: Option<u64>,
     pub regex: Option<bool>,
     /// Enable case-sensitive matching (default: case-insensitive).
     pub match_case: Option<bool>,

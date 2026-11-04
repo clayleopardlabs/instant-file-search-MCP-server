@@ -365,7 +365,7 @@ fn sample_index(n: usize, path: Option<&str>) -> anyhow::Result<crate::verify::V
         match_path: None,
         sort: None,
         path: path.map(|p| p.to_string()),
-        depth: None,
+        depth: None, min_size: None,
         fields: None,
         exclude_path: None,
         include_all: Some(true),
