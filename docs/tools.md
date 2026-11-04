@@ -8,7 +8,7 @@
 | `count_files` | Fast count — returns total only, no file data | Call this FIRST for broad patterns to gauge result size |
 | `search_status` | Check engine health (native indexer + Everything fallback) | Call when tools fail unexpectedly |
 | `recent_changes` | List files changed recently (USN change journal), newest first | Pass `hours=N` for a time window; `reasons=` to filter; `limit` caps (default 100) |
-| `aggregate_files` | Roll-up stats: total count/size, per-extension breakdown, largest files | USE THIS for disk-usage questions instead of summing results manually |
+| `aggregate_files` | Roll-up stats: total count/size, per-extension breakdown, largest files | USE THIS for disk-usage questions instead of summing results manually. Prefer `query="file:"`; a bare `*` also matches folders and a folder's size is its whole subtree, so `total_size` double-counts. `total_file_size` is always files-only |
 
 ## Key behaviors
 
@@ -17,6 +17,16 @@
 - **Default scope**: ALL indexed drives. Narrow with `path` (forward slashes like `C:/Users` work; the engine normalizes them)
 - **`find_files` and `count_files` return files, not directories.** Directories are indexed and carry the aggregate size of everything under them, so an unqualified `size:>1gb` used to rank `C:` above every real file; the tools now append the `file:` type token unless the query already chooses a type. Add `is:folder`, `folder:`, or an `attrib:` filter (`attrib:d`) to include them — `aggregate_files` still reports files and folders separately.
 - Every result carries `is_dir`, so a caller can filter either way without re-querying.
+- `aggregate_files` returns **two** size totals. `total_size` sums every matched
+  entry, and because a folder's size is its entire subtree it double-counts
+  whenever the query also matches folders (`query="*"` reported ~4x the real
+  figure on a real profile). `total_file_size` sums matched files only and is the
+  number to use for disk usage. Query `file:` and the two agree.
+- Files-by-default for `find_files`/`count_files` is applied as a `files_only`
+  option on the native engine, **not** by rewriting the query string. Appending
+  `file:` to the query silently broke `regex:` and `regex: true` (see 8252786,
+  68a1c23); the Everything fallback still appends the token because that is how
+  its engine expresses a type filter.
 - Response includes `total` (all matches), `returned` (current page count), `offset` (page position), and `note` (exclusion info)
 
 ## find_files result fields

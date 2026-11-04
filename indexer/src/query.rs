@@ -76,8 +76,14 @@ pub struct AggregateResult {
     /// Matched folder count.
     pub folders: usize,
     /// Sum of sizes over all matched entries (files' own size; folders'
-    /// recursive tree-summed size).
+    /// recursive tree-summed size). Because a folder's size is its whole
+    /// subtree, this double-counts when the query also matches folders — e.g.
+    /// `query="*"` reports ~4x the real disk usage. Prefer `total_file_size`
+    /// for disk-usage answers, or query `file:` so folders are not matched.
     pub total_size: u64,
+    /// Sum of sizes of matched FILES only. This is the number to use for disk
+    /// usage; it is never inflated by folder rows.
+    pub total_file_size: u64,
     /// The `top` largest matched entries by size.
     pub largest: Vec<AggregateLargest>,
     /// Per-extension counts and size totals over matched files.
@@ -1950,6 +1956,7 @@ pub fn aggregate(
     let mut files = 0usize;
     let mut folders = 0usize;
     let mut total_size = 0u64;
+    let mut total_file_size = 0u64;
     let mut by_ext: HashMap<String, AggregateExt> = HashMap::new();
     let mut largest: Vec<AggregateLargest> = Vec::new();
 
@@ -1961,6 +1968,7 @@ pub fn aggregate(
         }
         total_size = total_size.saturating_add(e.size);
         if !e.is_dir {
+            total_file_size = total_file_size.saturating_add(e.size);
             let ext = e.extension.as_deref().unwrap_or("").to_ascii_lowercase();
             let slot = by_ext.entry(ext.clone()).or_insert_with(|| AggregateExt {
                 extension: ext,
@@ -1993,6 +2001,7 @@ pub fn aggregate(
         files,
         folders,
         total_size,
+        total_file_size,
         largest,
         by_extension,
     }
@@ -2020,6 +2029,7 @@ pub fn aggregate_iter(
     let mut files = 0usize;
     let mut folders = 0usize;
     let mut total_size = 0u64;
+    let mut total_file_size = 0u64;
     let mut by_ext: HashMap<String, AggregateExt> = HashMap::new();
     let mut largest: Vec<AggregateLargest> = Vec::new();
     for e in entries {
@@ -2032,6 +2042,7 @@ pub fn aggregate_iter(
             folders += 1;
         } else {
             files += 1;
+            total_file_size = total_file_size.saturating_add(e.size);
             let ext = e.extension.as_deref().unwrap_or("").to_ascii_lowercase();
             let slot = by_ext.entry(ext.clone()).or_insert_with(|| AggregateExt {
                 extension: ext,
@@ -2071,6 +2082,7 @@ pub fn aggregate_iter(
         files,
         folders,
         total_size,
+        total_file_size,
         largest,
         by_extension,
     }
@@ -3018,5 +3030,41 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(names(all), vec!["docs", "readme.md"]);
+    }
+
+    #[test]
+    fn aggregate_reports_files_only_total() {
+        // A folder's size is its whole subtree, so summing every matched entry
+        // double-counts. `total_file_size` must never be inflated by folder
+        // rows; `total_size` keeps its documented meaning.
+        let mut file = entry(r"B:\p\d\a.txt", false, 1_700_000_000);
+        file.size = 100;
+        let mut dir = entry(r"B:\p\d", true, 1_700_000_000);
+        dir.size = 100; // a folder carries the size of everything beneath it
+        let map: HashMap<String, IndexedFile> =
+            HashMap::from([("a".to_string(), file), ("d".to_string(), dir)]);
+        let run = |q: &str| {
+            aggregate(
+                &map,
+                &AggregateOptions {
+                    query: q.to_string(),
+                    ..Default::default()
+                },
+            )
+        };
+        let all = run("*");
+        assert_eq!(all.files, 1);
+        assert_eq!(all.folders, 1);
+        assert_eq!(all.total_size, 200, "documented double-count for '*'");
+        assert_eq!(
+            all.total_file_size, 100,
+            "files-only total must not double-count"
+        );
+        // Querying `file:` avoids the double-count entirely.
+        let files = run("file:");
+        assert_eq!(files.files, 1);
+        assert_eq!(files.folders, 0);
+        assert_eq!(files.total_size, 100);
+        assert_eq!(files.total_file_size, 100);
     }
 }
