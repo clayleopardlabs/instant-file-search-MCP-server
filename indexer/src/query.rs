@@ -1654,6 +1654,10 @@ fn filter_matches<'a>(
 struct EntryFilter<'a> {
     opts: &'a QueryOptions,
     tokens: Vec<Token>,
+    /// Type filters hoisted out of the branch tree so they gate the whole
+    /// query. Left inside, `is:folder` bound only to the branch it sat in, so
+    /// `*a* is:folder | *b*` returned files from the second branch.
+    type_gate: Vec<TypeFilter>,
     scope_lower: String,
     exclude_parts: Vec<String>,
     compiled: HashMap<String, (regex::Regex, bool)>,
@@ -1661,7 +1665,8 @@ struct EntryFilter<'a> {
 
 impl<'a> EntryFilter<'a> {
     fn new(opts: &'a QueryOptions) -> Self {
-        let tokens = tokenize(&opts.query, opts);
+        let mut type_gate: Vec<TypeFilter> = Vec::new();
+        let tokens = hoist_type_gates(tokenize(&opts.query, opts), &mut type_gate);
         let scope_raw = opts.path.as_deref().unwrap_or("");
         let scope = crate::platform::normalize_path(scope_raw);
         let scope_lower =
@@ -1693,6 +1698,7 @@ impl<'a> EntryFilter<'a> {
         Self {
             opts,
             tokens,
+            type_gate,
             scope_lower,
             exclude_parts,
             compiled,
@@ -1705,6 +1711,13 @@ impl<'a> EntryFilter<'a> {
         }
         if self.opts.files_only && entry.is_dir {
             return false;
+        }
+        for gate in &self.type_gate {
+            match gate {
+                TypeFilter::Files if entry.is_dir => return false,
+                TypeFilter::Folders if !entry.is_dir => return false,
+                _ => {}
+            }
         }
         if !self.scope_lower.is_empty() {
             let lp = entry.lower_path.as_str();
@@ -2150,6 +2163,26 @@ pub fn aggregate_iter(
 ///
 /// `top` alone capped a listing with no way to see the rest, so an agent could
 /// not enumerate more folders than the cap without subtraction tricks.
+/// Pull type filters out of the branch tree so they gate the whole query.
+///
+/// A pipe splits the query into independent groups, so `is:folder` used to bind
+/// only to the branch it appeared in and the other branch matched files as well.
+/// Type filters are structural, not value filters: there is no useful reading in
+/// which they should apply to one alternative only.
+fn hoist_type_gates(tokens: Vec<Token>, gate: &mut Vec<TypeFilter>) -> Vec<Token> {
+    tokens
+        .into_iter()
+        .filter_map(|t| match t {
+            Token::TypeFilter(tf) => {
+                gate.push(tf);
+                None
+            }
+            Token::Or(inner) => Some(Token::Or(hoist_type_gates(inner, gate))),
+            other => Some(other),
+        })
+        .collect()
+}
+
 fn page(rows: &mut Vec<AggregateLargest>, offset: usize, top: usize) {
     if offset > 0 {
         let drop_n = offset.min(rows.len());
@@ -3214,6 +3247,34 @@ mod tests {
         assert!(run(2, 99).largest.is_empty());
         // Paging must not change the totals.
         assert_eq!(run(2, 2).total_file_size, 100);
+    }
+
+    #[test]
+    fn type_filter_applies_to_every_pipe_branch() {
+        // Regression: `is:folder` sat inside one branch, so the other branch
+        // matched files as well. An agent counting folders this way reported
+        // 1,415 instead of 97.
+        let map: HashMap<String, IndexedFile> = HashMap::from([
+            ("ad".to_string(), entry(r"B:\p\alpha_dir", true, 1_700_000_000)),
+            ("af".to_string(), entry(r"B:\p\alpha.txt", false, 1_700_000_000)),
+            ("bd".to_string(), entry(r"B:\p\beta_dir", true, 1_700_000_000)),
+            ("bf".to_string(), entry(r"B:\p\beta.txt", false, 1_700_000_000)),
+        ]);
+        let r = aggregate(
+            &map,
+            &AggregateOptions {
+                query: "*alpha* is:folder | *beta*".to_string(),
+                // The MCP layer clears files_only when the query names a type,
+                // so the gate is what has to do the work here.
+                files_only: false,
+                ..Default::default()
+            },
+        );
+        assert_eq!(r.folders, 2, "both folder branches should match");
+        assert_eq!(
+            r.files, 0,
+            "the second branch must not leak files through the pipe"
+        );
     }
 
     #[test]

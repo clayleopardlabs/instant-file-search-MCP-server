@@ -214,3 +214,15 @@ will now get an error rather than a working call.
 `aggregate_files` accepts `offset` alongside `top`, so a long folder listing can be
 paged with repeated calls. It applies to `largest`; `by_extension` remains capped
 by `top` and is not paged.
+
+### Type filters are query-wide
+
+`is:folder`, `is:file`, `file:`, `folder:` and `is:directory` gate the whole
+query, including every branch of a `|`. They are structural rather than value
+filters, so `*a* is:folder | *b*` cannot return files from the second branch.
+Before this was enforced, the filter bound only to the branch it appeared in and a
+folder count came back more than ten times too high.
+
+Other filters (`size:`, `dm:`, `attrib:`) still bind to the branch they appear in.
+That asymmetry is what `PIPE_FILTER_SCOPE` warns about, and the fix it suggests is
+still the right one: repeat the filter on each side.
