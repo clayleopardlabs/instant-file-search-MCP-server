@@ -72,7 +72,7 @@ fn annotate(
 
 #[tool_router]
 impl EverythingHandler {
-    #[tool(description = "Find files instantly across ALL indexed drives. USE THIS instead of glob, grep, or Get-ChildItem. Query examples: '*.rs', 'content:handler', 'dm:lastweek size:>1mb', 'attrib:h'. Supports wildcards, regex, content search, date/size filters, path scoping, and sorting. For broad patterns, call count_files first to gauge size. Results are files only; add 'is:folder' to include directories, which carry aggregate sizes and are marked by is_dir. NOTE: content: search is bounded. Memory mode uses up to 256 MB of RAM; disk mode can persist content in SQLite. Use it for targeted searches, not exhaustive scans. Default excludes node_modules, .git, WinSxS — pass include_all=true to search everything. OR is '|' (not 'OR'). Scope with the `path` param, not path: inside the query. Multi-extension: ext:lsv,d2s.")]
+    #[tool(description = "Find files instantly across ALL indexed drives. USE THIS instead of glob, grep, or Get-ChildItem. Query examples: '*.rs', 'content:handler', 'dm:lastweek size:>1mb', 'attrib:h'. Supports wildcards, regex, content search, date/size filters, path scoping, and sorting. For broad patterns, call count_files first to gauge size. Results are files only; add 'is:folder' to include directories, which carry aggregate sizes and are marked by is_dir. NOTE: content: search is bounded. Memory mode uses up to 256 MB of RAM; disk mode can persist content in SQLite. Use it for targeted searches, not exhaustive scans. Default excludes node_modules, .git, WinSxS, $Recycle.Bin, System Volume Information — pass include_all=true to search everything. OR is '|' (not 'OR'). Scope with the `path` param, not path: inside the query. Multi-extension: ext:lsv,d2s.")]
     async fn find_files(
         &self,
         Parameters(params): Parameters<SearchParams>,
@@ -110,14 +110,14 @@ impl EverythingHandler {
 
         let value = serde_json::to_value(&result)
             .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
-        let value = annotate(value, &query, include_all, false);
+        let value = annotate(value, &query, include_all, true);
         let text = serde_json::to_string_pretty(&value)
             .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
 
         Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
 
-    #[tool(description = "Count files matching a query instantly across ALL indexed drives. USE THIS instead of Get-ChildItem -Recurse | Measure-Object or shell wc/find commands. Examples: '*.json path:C:/Users', '*.log'. Returns just the count, no file data. For broad patterns, always use this before find_files. Counts files only, matching find_files; add 'is:folder' to count directories. NOTE: use forward slashes in paths (C:/Users) to avoid JSON escaping issues. Default excludes node_modules, .git, WinSxS — pass include_all=true for a true count. OR is '|' (not 'OR'); scope with the `path` param.")]
+    #[tool(description = "Count files matching a query instantly across ALL indexed drives. USE THIS instead of Get-ChildItem -Recurse | Measure-Object or shell wc/find commands. Examples: '*.json path:C:/Users', '*.log'. Returns just the count, no file data. For broad patterns, always use this before find_files. Counts files only, matching find_files; add 'is:folder' to count directories. NOTE: use forward slashes in paths (C:/Users) to avoid JSON escaping issues. Default excludes node_modules, .git, WinSxS, $Recycle.Bin, System Volume Information — pass include_all=true for a true count. OR is '|' (not 'OR'); scope with the `path` param.")]
     async fn count_files(
         &self,
         Parameters(params): Parameters<CountParams>,
@@ -153,13 +153,13 @@ impl EverythingHandler {
         let text = serde_json::json!({ "total": count, "note": note }).to_string();
         let value: serde_json::Value = serde_json::from_str(&text)
             .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
-        let value = annotate(value, &query, include_all, false);
+        let value = annotate(value, &query, include_all, true);
         let text = serde_json::to_string_pretty(&value)
             .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
         Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
 
-    #[tool(description = "Disk usage stats: total count and size, per-extension breakdown, and largest files. ALWAYS pass query=\"file:\" — a bare \"*\" also matches folders, and a folder's size is its entire subtree, which inflates total_size roughly 4x. Pass include_all=true for a true disk total (default excludes node_modules, .git, WinSxS). Examples: 'file:', '*.iso file: size:>1gb'. Returns aggregate stats, not individual files. USE THIS instead of manually summing file sizes.")]
+    #[tool(description = "Disk usage stats: total count and size, per-extension breakdown, and largest files. ALWAYS pass query=\"file:\" — a bare \"*\" also matches folders, and a folder's size is its entire subtree, which inflates total_size roughly 4x. Pass include_all=true for a true disk total (default excludes node_modules, .git, WinSxS, $Recycle.Bin, System Volume Information). Examples: 'file:', '*.iso file: size:>1gb'. Returns aggregate stats, not individual files. USE THIS instead of manually summing file sizes.")]
     async fn aggregate_files(
         &self,
         Parameters(params): Parameters<AggregateParams>,

@@ -14,7 +14,18 @@
 use serde::Serialize;
 
 /// Directories the indexer skips unless `include_all` is set.
-pub const DEFAULT_EXCLUDES: [&str; 3] = ["node_modules", ".git", "WinSxS"];
+///
+/// Kept in step with `indexer/src/query.rs` DEFAULT_EXCLUDES. Under-reporting
+/// this list is a correctness bug, not cosmetics: an agent told about only
+/// three exclusions concludes that the recycle bin and System Volume
+/// Information are empty, when both are indexed and reachable via include_all.
+pub const DEFAULT_EXCLUDES: [&str; 5] = [
+    "node_modules",
+    ".git",
+    "WinSxS",
+    "$Recycle.Bin",
+    "System Volume Information",
+];
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Warning {
@@ -161,9 +172,10 @@ fn filter_kind(token: &str) -> Option<&'static str> {
 
 /// Warnings for a query, given how it will actually be executed.
 ///
-/// `wants_folders` is true when the caller asked for directories, which is the
-/// only case where folder rows in an aggregate are intended.
-pub fn analyze(query: &str, include_all: bool, wants_folders: bool) -> Vec<Warning> {
+/// `folders_are_fine` is true when folder rows cannot distort the answer — true
+/// for find_files/count_files (which apply `files_only`), false for
+/// aggregate_files unless the caller explicitly asked for directories.
+pub fn analyze(query: &str, include_all: bool, folders_are_fine: bool) -> Vec<Warning> {
     let mut warnings = Vec::new();
 
     // `OR` is not an operator here; the pipe is. An uppercase OR silently
@@ -273,7 +285,7 @@ pub fn analyze(query: &str, include_all: bool, wants_folders: bool) -> Vec<Warni
     if !include_all {
         warnings.push(Warning::new(
             "DEFAULT_EXCLUDES_ACTIVE",
-            "node_modules, .git and WinSxS are excluded from these results. Pass include_all=true for a true total.",
+            "node_modules, .git, WinSxS, $Recycle.Bin and System Volume Information are excluded from these results. Pass include_all=true for a true total.",
             Some("include_all=true".to_string()),
         ));
     }
@@ -281,7 +293,7 @@ pub fn analyze(query: &str, include_all: bool, wants_folders: bool) -> Vec<Warni
     // A bare `*` in an aggregate also matches folders, whose size is their whole
     // subtree, so totals come out several times too high.
     let bare_star = query.trim() == "*" || query.trim() == "**";
-    if bare_star && !wants_folders {
+    if bare_star && !folders_are_fine {
         warnings.push(Warning::new(
             "FOLDERS_INCLUDED",
             "A bare '*' also matches folders, and a folder's size is its entire subtree, so total_size is inflated. Query \"file:\" for a real disk total.",

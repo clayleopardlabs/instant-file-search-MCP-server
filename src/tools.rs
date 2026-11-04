@@ -61,7 +61,7 @@ impl SortOrder {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
-#[schemars(description = "Find files instantly across ALL indexed drives. Supports wildcards (*.txt, *.rs), content search (content:text), date filters (dm:lastweek), size filters (size:>1mb), regex, path scoping, sorting, and pagination. Default excludes node_modules, .git, WinSxS. Pass include_all=true to search everything.")]
+#[schemars(description = "Find files instantly across ALL indexed drives. Supports wildcards (*.txt, *.rs), content search (content:text), date filters (dm:lastweek), size filters (size:>1mb), regex, path scoping, sorting, and pagination. Default excludes node_modules, .git, WinSxS, $Recycle.Bin, System Volume Information. Pass include_all=true to search everything.")]
 pub struct SearchParams {
     pub query: String,
     pub max_results: Option<u32>,
@@ -194,8 +194,8 @@ Instant File Search — rules that prevent silent wrong answers.
 1. aggregate_files: pass query=\"file:\". A bare \"*\" also matches folders, and a
    folder's size is its whole subtree, so total_size comes out ~4x too high.
    Use is:folder only when you actually want folder rows.
-2. Default excludes are ON: node_modules, .git, WinSxS. For any disk-usage
-   question, or when comparing against du/Get-ChildItem, pass include_all=true.
+2. Default excludes are ON: node_modules, .git, WinSxS, $Recycle.Bin, System Volume Information. For any disk-usage
+   question, or when comparing against du/Get-ChildItem, pass include_all=true; those folders ARE indexed, so a zero result without it means excluded, not absent.
 3. OR is the pipe: '*.a | *.b'. Writing 'OR' is treated as a literal name term
    and returns zero results.
 4. Scope with the `path` parameter (C:/Users/x). Do NOT put path:... inside the

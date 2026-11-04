@@ -12,7 +12,7 @@
 
 ## Key behaviors
 
-- **Default auto-exclusions** (skip unless `include_all=true`): `node_modules`, `.git`, `WinSxS`
+- **Default auto-exclusions** (skip unless `include_all=true`): `node_modules`, `.git`, `WinSxS`, `$Recycle.Bin`, `System Volume Information`
 - **`exclude_path` separator**: `;` (semicolon), not comma
 - **Default scope**: ALL indexed drives. Narrow with `path` (forward slashes like `C:/Users` work; the engine normalizes them)
 - **`find_files` and `count_files` return files, not directories.** Directories are indexed and carry the aggregate size of everything under them, so an unqualified `size:>1gb` used to rank `C:` above every real file; the tools now append the `file:` type token unless the query already chooses a type. Add `is:folder`, `folder:`, or an `attrib:` filter (`attrib:d`) to include them — `aggregate_files` still reports files and folders separately.
