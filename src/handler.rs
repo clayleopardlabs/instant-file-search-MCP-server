@@ -215,6 +215,33 @@ impl EverythingHandler {
             ErrorData::internal_error(format!("task join failed: {e}"), None)
         })?;
 
+        // A client and indexer built from different revisions is a real source of
+        // confusing behaviour: a bug that was fixed still present on the wire, or
+        // a new option silently ignored because the indexer predates it. Surface
+        // it instead of leaving the reader to diff two version strings.
+        let mut warnings: Vec<serde_json::Value> = Vec::new();
+        if let Ok(detail) = &native_result {
+            let iv = detail.get("version").and_then(|v| v.as_str()).unwrap_or("");
+            let ic = detail.get("commit").and_then(|v| v.as_str()).unwrap_or("");
+            if !iv.is_empty() && iv != crate::APP_VERSION {
+                warnings.push(serde_json::json!({
+                    "code": "BUILD_MISMATCH",
+                    "message": format!(
+                        "The MCP server is {} but the running indexer is {}. The indexer may not contain fixes the client relies on. Redeploy both with scripts/install.ps1.",
+                        crate::APP_VERSION, iv
+                    ),
+                }));
+            } else if !ic.is_empty() && ic != crate::BUILD_COMMIT {
+                warnings.push(serde_json::json!({
+                    "code": "COMMIT_MISMATCH",
+                    "message": format!(
+                        "Server commit {} differs from indexer commit {}. Redeploy both from the same build.",
+                        crate::BUILD_COMMIT, ic
+                    ),
+                }));
+            }
+        }
+
         let native_status = match native_result {
             Ok(v) => serde_json::json!({ "ok": true, "detail": v }),
             // A missing pipe usually means the service is still building its
@@ -235,6 +262,7 @@ impl EverythingHandler {
             "server": { "version": crate::APP_VERSION, "commit": crate::BUILD_COMMIT },
             "native": native_status,
             "everything": everything_status,
+            "warnings": warnings,
         });
         let text = serde_json::to_string_pretty(&json)
             .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
