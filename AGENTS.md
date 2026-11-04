@@ -262,3 +262,10 @@ Work down this ladder, in order:
 6. **Consider that your own recent change is the cause.** Before hunting a
    long-standing defect, re-read today's diff. An hour-old regression looks
    identical to an old bug, and it is far more likely.
+
+## Open work
+
+`docs/backlog.md` lists known defects and gaps, each with a reproduction. Start
+there rather than re-auditing. The highest severity item is that unknown tool
+arguments are accepted silently, so a caller typo returns a confident answer to a
+different question.
