@@ -8,20 +8,21 @@
 | `count_files` | Fast count: returns total only, no file data | Call this FIRST for broad patterns to gauge result size |
 | `search_status` | Check engine health (native indexer + Everything fallback) | Call when tools fail unexpectedly |
 | `recent_changes` | List files changed recently (USN change journal), newest first | Pass `hours=N` for a time window; `reasons=` to filter; `limit` caps (default 100) |
-| `aggregate_files` | Roll-up stats: total count/size, per-extension breakdown, largest files | USE THIS for disk-usage questions instead of summing results manually. Prefer `query="file:"`; a bare `*` also matches folders and a folder's size is its whole subtree, so `total_size` double-counts. `total_file_size` is always files-only |
+| `aggregate_files` | Roll-up stats: total count/size, per-extension breakdown, largest files | USE THIS for disk-usage questions instead of summing results manually. `total_file_size` is the sum of matched file sizes and is files-only; a bare `*` is safe. Pass `is:folder` for directory rows |
 
 ## Key behaviors
 
 - **Default auto-exclusions** (skip unless `include_all=true`): `node_modules`, `.git`, `WinSxS`, `$Recycle.Bin`, `System Volume Information`
 - **`exclude_path` separator**: `;` (semicolon), not comma
 - **Default scope**: ALL indexed drives. Narrow with `path` (forward slashes like `C:/Users` work; the engine normalizes them)
-- **`find_files` and `count_files` return files, not directories.** Directories are indexed and carry the aggregate size of everything under them, so an unqualified `size:>1gb` used to rank `C:` above every real file. The native engine applies this as a `files_only` option rather than by rewriting the query: appending a `file:` token to the query string silently broke `regex:` and `regex: true` (8252786, 68a1c23). Add `is:folder`, `folder:`, or an `attrib:` filter (`attrib:d`) to include them, `aggregate_files` still reports files and folders separately.
+- **`find_files` and `count_files` return files, not directories.** Directories are indexed and carry the aggregate size of everything under them, so an unqualified `size:>1gb` used to rank `C:` above every real file. The native engine applies this as a `files_only` option rather than by rewriting the query: appending a `file:` token to the query string silently broke `regex:` and `regex: true` (8252786, 68a1c23). Add `is:folder`, `folder:`, or an `attrib:` filter (`attrib:d`) to include them. `aggregate_files` applies the same rule, so all three tools report the same `total` for the same query.
 - Every result carries `is_dir`, so a caller can filter either way without re-querying.
-- `aggregate_files` returns **two** size totals. `total_size` sums every matched
-  entry, and because a folder's size is its entire subtree it double-counts
-  whenever the query also matches folders (`query="*"` reported ~4x the real
-  figure on a real profile). `total_file_size` sums matched files only and is the
-  number to use for disk usage. Query `file:` and the two agree.
+- `aggregate_files` reports one size field, `total_file_size`: the sum of
+  matched file sizes. Folder rows never contribute, because a folder's size is
+  the sum of everything beneath it, so summing them would double-count. There is
+  deliberately no second, larger total for a caller to choose between, and
+  `aggregate_files` applies the same files-by-default rule as the other tools so
+  all three report the same `total` for the same query.
 - Files-by-default for `find_files`/`count_files` is applied as a `files_only`
   option on the native engine, **not** by rewriting the query string. Appending
   `file:` to the query silently broke `regex:` and `regex: true` (see 8252786,
@@ -129,7 +130,6 @@ Every `find_files`, `count_files` and `aggregate_files` response carries two ext
 | `PIPE_FILTER_SCOPE` | a filter applies to only one side of a `\|`; the other side is unfiltered |
 | `INVALID_FILTER` | a filter token that can never match, returned as an error, not as a result |
 | `DEFAULT_EXCLUDES_ACTIVE` | the five default exclusions are in force; `include_all=true` for a true total |
-| `FOLDERS_INCLUDED` | a bare `*` in `aggregate_files` also matched folders, inflating `total_size` |
 
 Correctly written queries produce no warnings, so a clean response means the numbers are what they appear to be.
 

@@ -1300,7 +1300,10 @@ mod tests {
         let reopened = DiskIndex::open(path.clone()).unwrap();
         assert_eq!(reopened.len(), 1);
         assert_eq!(reopened.checkpoints().unwrap(), vec![("C:\\".into(), 9, 200)]);
-        assert_eq!(reopened.aggregate(&AggregateOptions::default()).total_size, 20);
+        assert_eq!(
+            reopened.aggregate(&AggregateOptions::default()).total_file_size,
+            20
+        );
         // Replaying the same update is idempotent, not a duplicate row.
         reopened
             .upsert(IndexedFile::new(

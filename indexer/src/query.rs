@@ -59,6 +59,12 @@ pub struct AggregateOptions {
     pub match_whole_word: bool,
     /// How many of the largest entries to return (default 20).
     pub top: usize,
+    /// Exclude directories, matching the files-by-default rule the other tools
+    /// use. Without this, `aggregate_files` reports a larger `total` than
+    /// `count_files` for the same query, and a folder outranks the files it
+    /// contains in `largest`. Set from the query: an explicit `is:folder`,
+    /// `folder:` or `attrib:d` opts back in to directories.
+    pub files_only: bool,
     /// Lowercase paths allowed by a `content:"..."` constraint.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub content_paths: Option<Vec<String>>,
@@ -75,14 +81,11 @@ pub struct AggregateResult {
     pub files: usize,
     /// Matched folder count.
     pub folders: usize,
-    /// Sum of sizes over all matched entries (files' own size; folders'
-    /// recursive tree-summed size). Because a folder's size is its whole
-    /// subtree, this double-counts when the query also matches folders, e.g.
-    /// `query="*"` reports ~4x the real disk usage. Prefer `total_file_size`
-    /// for disk-usage answers, or query `file:` so folders are not matched.
-    pub total_size: u64,
-    /// Sum of sizes of matched FILES only. This is the number to use for disk
-    /// usage; it is never inflated by folder rows.
+    /// Sum of sizes of matched FILES. This answers "how much space do these
+    /// take". Folder rows never contribute, because a folder's size is the sum
+    /// of everything beneath it, so summing folder rows double-counts. There is
+    /// deliberately no second, larger total: an agent should never have to pick
+    /// between two numbers.
     pub total_file_size: u64,
     /// The `top` largest matched entries by size.
     pub largest: Vec<AggregateLargest>,
@@ -1945,6 +1948,7 @@ pub fn aggregate(
         path: opts.path.clone(),
         exclude_path: opts.exclude_path.clone(),
         include_all: opts.include_all,
+        files_only: opts.files_only,
         match_path: opts.match_path,
         regex: opts.regex,
         match_case: opts.match_case,
@@ -1955,7 +1959,6 @@ pub fn aggregate(
 
     let mut files = 0usize;
     let mut folders = 0usize;
-    let mut total_size = 0u64;
     let mut total_file_size = 0u64;
     let mut by_ext: HashMap<String, AggregateExt> = HashMap::new();
     let mut largest: Vec<AggregateLargest> = Vec::new();
@@ -1965,9 +1968,6 @@ pub fn aggregate(
             folders += 1;
         } else {
             files += 1;
-        }
-        total_size = total_size.saturating_add(e.size);
-        if !e.is_dir {
             total_file_size = total_file_size.saturating_add(e.size);
             let ext = e.extension.as_deref().unwrap_or("").to_ascii_lowercase();
             let slot = by_ext.entry(ext.clone()).or_insert_with(|| AggregateExt {
@@ -2000,7 +2000,6 @@ pub fn aggregate(
         total: matched.len(),
         files,
         folders,
-        total_size,
         total_file_size,
         largest,
         by_extension,
@@ -2017,6 +2016,7 @@ pub fn aggregate_iter(
         path: opts.path.clone(),
         exclude_path: opts.exclude_path.clone(),
         include_all: opts.include_all,
+        files_only: opts.files_only,
         match_path: opts.match_path,
         regex: opts.regex,
         match_case: opts.match_case,
@@ -2028,7 +2028,6 @@ pub fn aggregate_iter(
     let mut total = 0usize;
     let mut files = 0usize;
     let mut folders = 0usize;
-    let mut total_size = 0u64;
     let mut total_file_size = 0u64;
     let mut by_ext: HashMap<String, AggregateExt> = HashMap::new();
     let mut largest: Vec<AggregateLargest> = Vec::new();
@@ -2037,7 +2036,6 @@ pub fn aggregate_iter(
             continue;
         }
         total += 1;
-        total_size = total_size.saturating_add(e.size);
         if e.is_dir {
             folders += 1;
         } else {
@@ -2081,7 +2079,6 @@ pub fn aggregate_iter(
         total,
         files,
         folders,
-        total_size,
         total_file_size,
         largest,
         by_extension,
@@ -2917,7 +2914,7 @@ mod tests {
         assert_eq!(a.total, 4);
         assert_eq!(a.files, 4);
         assert_eq!(a.folders, 0);
-        assert_eq!(a.total_size, 9_500);
+        assert_eq!(a.total_file_size, 9_500);
         let largest: Vec<(u64, &str)> = a
             .largest
             .iter()
@@ -3033,38 +3030,49 @@ mod tests {
     }
 
     #[test]
-    fn aggregate_reports_files_only_total() {
-        // A folder's size is its whole subtree, so summing every matched entry
-        // double-counts. `total_file_size` must never be inflated by folder
-        // rows; `total_size` keeps its documented meaning.
+    fn aggregate_size_ignores_folder_rows() {
+        // A folder's size is its whole subtree, so it must never contribute to
+        // the total, and it must not appear in `largest` unless the caller
+        // asked for folders. There is deliberately one size field only.
         let mut file = entry(r"B:\p\d\a.txt", false, 1_700_000_000);
         file.size = 100;
         let mut dir = entry(r"B:\p\d", true, 1_700_000_000);
         dir.size = 100; // a folder carries the size of everything beneath it
         let map: HashMap<String, IndexedFile> =
             HashMap::from([("a".to_string(), file), ("d".to_string(), dir)]);
-        let run = |q: &str| {
+        let run = |q: &str, files_only: bool| {
             aggregate(
                 &map,
                 &AggregateOptions {
                     query: q.to_string(),
+                    files_only,
                     ..Default::default()
                 },
             )
         };
-        let all = run("*");
-        assert_eq!(all.files, 1);
-        assert_eq!(all.folders, 1);
-        assert_eq!(all.total_size, 200, "documented double-count for '*'");
-        assert_eq!(
-            all.total_file_size, 100,
-            "files-only total must not double-count"
-        );
-        // Querying `file:` avoids the double-count entirely.
-        let files = run("file:");
+
+        // Files by default: the folder is not matched at all, so `total` agrees
+        // with count_files for the same query.
+        let files = run("*", true);
+        assert_eq!(files.total, 1);
         assert_eq!(files.files, 1);
         assert_eq!(files.folders, 0);
-        assert_eq!(files.total_size, 100);
         assert_eq!(files.total_file_size, 100);
+        assert_eq!(files.largest.len(), 1);
+        assert!(!files.largest[0].is_dir);
+
+        // Directories opt in with is:folder: counts and `largest` switch to
+        // folders, and the size total stays 0 because no files matched.
+        let folders = run("is:folder", false);
+        assert_eq!(folders.total, 1);
+        assert_eq!(folders.folders, 1);
+        assert_eq!(folders.total_file_size, 0);
+        assert_eq!(folders.largest.len(), 1);
+        assert!(folders.largest[0].is_dir);
+
+        // A query that matches both never sums the folder into the total.
+        let both = run("*", false);
+        assert_eq!(both.total, 2);
+        assert_eq!(both.total_file_size, 100, "folder rows must not be summed");
     }
 }

@@ -191,9 +191,9 @@ pub fn default_to_files(query: &str) -> String {
 pub const AGENT_INSTRUCTIONS: &str = "\
 Instant File Search: rules that prevent silent wrong answers.
 
-1. aggregate_files: pass query=\"file:\". A bare \"*\" also matches folders, and a
-   folder's size is its whole subtree, so total_size comes out ~4x too high.
-   Use is:folder only when you actually want folder rows.
+1. aggregate_files reports total_file_size, the sum of matched file sizes. It is
+   files-only like the other tools, so a bare \"*\" is safe. Pass is:folder when
+   you want directory rows instead.
 2. Default excludes are ON: node_modules, .git, WinSxS, $Recycle.Bin, System Volume Information. For any disk-usage
    question, or when comparing against du/Get-ChildItem, pass include_all=true; those folders ARE indexed, so a zero result without it means excluded, not absent.
 3. OR is the pipe: '*.a | *.b'. Writing 'OR' is treated as a literal name term

@@ -57,11 +57,10 @@ fn annotate(
     mut value: serde_json::Value,
     query: &str,
     include_all: bool,
-    wants_folders: bool,
 ) -> serde_json::Value {
     value["parsed"] = serde_json::to_value(crate::diagnostics::parsed(query, include_all))
         .unwrap_or(serde_json::Value::Null);
-    let warnings = crate::diagnostics::analyze(query, include_all, wants_folders);
+    let warnings = crate::diagnostics::analyze(query, include_all);
     if !warnings.is_empty() {
         if let Ok(w) = serde_json::to_value(&warnings) {
             value["warnings"] = w;
@@ -110,7 +109,7 @@ impl EverythingHandler {
 
         let value = serde_json::to_value(&result)
             .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
-        let value = annotate(value, &query, include_all, true);
+        let value = annotate(value, &query, include_all);
         let text = serde_json::to_string_pretty(&value)
             .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
 
@@ -153,13 +152,13 @@ impl EverythingHandler {
         let text = serde_json::json!({ "total": count, "note": note }).to_string();
         let value: serde_json::Value = serde_json::from_str(&text)
             .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
-        let value = annotate(value, &query, include_all, true);
+        let value = annotate(value, &query, include_all);
         let text = serde_json::to_string_pretty(&value)
             .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
         Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
 
-    #[tool(description = "Disk usage stats: total count and size, per-extension breakdown, and largest files. ALWAYS pass query=\"file:\": a bare \"*\" also matches folders, and a folder's size is its entire subtree, which inflates total_size roughly 4x. Pass include_all=true for a true disk total (default excludes node_modules, .git, WinSxS, $Recycle.Bin, System Volume Information). Examples: 'file:', '*.iso file: size:>1gb'. Returns aggregate stats, not individual files. USE THIS instead of manually summing file sizes.")]
+    #[tool(description = "Disk usage stats: total count, total_file_size (the sum of matched file sizes), per-extension breakdown, and largest files. Files-only by default like the other tools, so a bare \"*\" is safe; pass is:folder for directory rows. Pass include_all=true for a true disk total (default excludes node_modules, .git, WinSxS, $Recycle.Bin, System Volume Information). Examples: 'file:', '*.iso file: size:>1gb'. Returns aggregate stats, not individual files. USE THIS instead of manually summing file sizes.")]
     async fn aggregate_files(
         &self,
         Parameters(params): Parameters<AggregateParams>,
@@ -169,7 +168,6 @@ impl EverythingHandler {
         let include_all = params.include_all.unwrap_or(false);
         // Asking for folders is the only case where folder rows in an aggregate
         // are intended, and the only case where a subtree-sized total is right.
-        let wants_folders = crate::diagnostics::has_explicit_type(&query);
         let result = tokio::task::spawn_blocking(move || native::aggregate(&params))
             .await
             .map_err(|e| {
@@ -180,7 +178,7 @@ impl EverythingHandler {
 
         let value = serde_json::to_value(&result)
             .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
-        let value = annotate(value, &query, include_all, wants_folders);
+        let value = annotate(value, &query, include_all);
         let text = serde_json::to_string_pretty(&value)
             .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
         Ok(CallToolResult::success(vec![ContentBlock::text(text)]))

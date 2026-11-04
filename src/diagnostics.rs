@@ -171,11 +171,7 @@ fn filter_kind(token: &str) -> Option<&'static str> {
 }
 
 /// Warnings for a query, given how it will actually be executed.
-///
-/// `folders_are_fine` is true when folder rows cannot distort the answer, true
-/// for find_files/count_files (which apply `files_only`), false for
-/// aggregate_files unless the caller explicitly asked for directories.
-pub fn analyze(query: &str, include_all: bool, folders_are_fine: bool) -> Vec<Warning> {
+pub fn analyze(query: &str, include_all: bool) -> Vec<Warning> {
     let mut warnings = Vec::new();
 
     // `OR` is not an operator here; the pipe is. An uppercase OR silently
@@ -290,17 +286,9 @@ pub fn analyze(query: &str, include_all: bool, folders_are_fine: bool) -> Vec<Wa
         ));
     }
 
-    // A bare `*` in an aggregate also matches folders, whose size is their whole
-    // subtree, so totals come out several times too high.
-    let bare_star = query.trim() == "*" || query.trim() == "**";
-    if bare_star && !folders_are_fine {
-        warnings.push(Warning::new(
-            "FOLDERS_INCLUDED",
-            "A bare '*' also matches folders, and a folder's size is its entire subtree, so total_size is inflated. Query \"file:\" for a real disk total.",
-            Some("file:".to_string()),
-        ));
-    }
-
+    // No folder-inflation warning is needed any more: aggregate_files applies
+    // the same files-by-default rule as find_files and count_files, so a bare
+    // `*` cannot pull folder rows into the size total in the first place.
     warnings
 }
 
@@ -328,20 +316,20 @@ mod tests {
 
     #[test]
     fn detects_uppercase_or() {
-        let w = analyze("*.a OR *.b", true, false);
+        let w = analyze("*.a OR *.b", true);
         assert!(codes(&w).contains(&"SUSPECT_OR"));
         assert_eq!(w[0].fix.as_deref(), Some("*.a | *.b"));
         // The pipe is the operator, so it must not warn.
-        assert!(!codes(&analyze("*.a | *.b", true, false)).contains(&"SUSPECT_OR"));
+        assert!(!codes(&analyze("*.a | *.b", true)).contains(&"SUSPECT_OR"));
         // A lowercase `or` is a legitimate name substring; leave it alone.
-        assert!(!codes(&analyze("or", true, false)).contains(&"SUSPECT_OR"));
+        assert!(!codes(&analyze("or", true)).contains(&"SUSPECT_OR"));
     }
 
     #[test]
     fn detects_path_in_query() {
-        let w = analyze("*.sav path:C:/Users/a b/x", true, false);
+        let w = analyze("*.sav path:C:/Users/a b/x", true);
         assert!(codes(&w).contains(&"PATH_IN_QUERY"));
-        assert!(!codes(&analyze("*.sav", true, false)).contains(&"PATH_IN_QUERY"));
+        assert!(!codes(&analyze("*.sav", true)).contains(&"PATH_IN_QUERY"));
     }
 
     #[test]
@@ -349,7 +337,7 @@ mod tests {
         // Regression from a field test: an agent wrote `*.bin | *.7z is:folder`
         // expecting a global folder filter. The pipe splits alternatives, so the
         // first group was unfiltered and directories named *.bin came through.
-        let w = analyze("*.bin | *.7z is:folder", true, false);
+        let w = analyze("*.bin | *.7z is:folder", true);
         let pipe = w
             .iter()
             .find(|x| x.code == "PIPE_FILTER_SCOPE")
@@ -359,26 +347,18 @@ mod tests {
             Some("*.bin is:folder | *.7z is:folder")
         );
         // Repeating the filter on both sides is correct and must stay quiet.
-        assert!(!codes(&analyze("*.bin file: | *.7z file:", true, false))
+        assert!(!codes(&analyze("*.bin file: | *.7z file:", true))
             .contains(&"PIPE_FILTER_SCOPE"));
         // No filters means nothing to scope.
-        assert!(!codes(&analyze("*.a | *.b", true, false)).contains(&"PIPE_FILTER_SCOPE"));
+        assert!(!codes(&analyze("*.a | *.b", true)).contains(&"PIPE_FILTER_SCOPE"));
         // A single alternative is not a scoping problem.
-        assert!(!codes(&analyze("*.bin is:folder", true, false)).contains(&"PIPE_FILTER_SCOPE"));
+        assert!(!codes(&analyze("*.bin is:folder", true)).contains(&"PIPE_FILTER_SCOPE"));
     }
 
     #[test]
     fn flags_default_excludes_only_when_active() {
-        assert!(codes(&analyze("*.rs", false, false)).contains(&"DEFAULT_EXCLUDES_ACTIVE"));
-        assert!(!codes(&analyze("*.rs", true, false)).contains(&"DEFAULT_EXCLUDES_ACTIVE"));
-    }
-
-    #[test]
-    fn flags_bare_star_for_aggregate() {
-        assert!(codes(&analyze("*", true, false)).contains(&"FOLDERS_INCLUDED"));
-        // Explicitly asking for folders is not a mistake.
-        assert!(!codes(&analyze("*", true, true)).contains(&"FOLDERS_INCLUDED"));
-        assert!(!codes(&analyze("file:", true, false)).contains(&"FOLDERS_INCLUDED"));
+        assert!(codes(&analyze("*.rs", false)).contains(&"DEFAULT_EXCLUDES_ACTIVE"));
+        assert!(!codes(&analyze("*.rs", true)).contains(&"DEFAULT_EXCLUDES_ACTIVE"));
     }
 
     #[test]

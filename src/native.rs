@@ -299,9 +299,7 @@ pub struct AggregateResult {
     pub files: u64,
     /// Matched folder count.
     pub folders: u64,
-    /// Sum of sizes over all matched entries.
-    pub total_size: u64,
-    /// Sum of sizes of matched FILES only: the number to use for disk usage.
+    /// Sum of sizes of matched FILES: the number to use for disk usage.
     /// Kept in step with the indexer's `AggregateResult`; if it is missing here
     /// the field is silently dropped from the MCP response.
     #[serde(default)]
@@ -336,6 +334,10 @@ fn options_from_aggregate(params: &AggregateParams) -> serde_json::Value {
         "match_case": params.match_case.unwrap_or(false),
         "match_whole_word": params.match_whole_word.unwrap_or(false),
         "top": params.top.unwrap_or(20) as usize,
+        // Same files-by-default rule as find_files and count_files, so the
+        // three tools report the same `total` for the same query. An explicit
+        // `is:folder` / `folder:` / `attrib:d` opts directories back in.
+        "files_only": !crate::tools::has_explicit_type(&params.query),
     })
 }
 
