@@ -132,6 +132,8 @@ pub struct AggregateParams {
     pub include_all: Option<bool>,
     /// How many of the largest entries to return (default 20).
     pub top: Option<u32>,
+    /// Skip this many of the largest entries before returning `top` of them, so a long folder listing can be paged with repeated calls.
+    pub offset: Option<u32>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]

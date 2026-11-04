@@ -353,6 +353,7 @@ fn options_from_aggregate(params: &AggregateParams) -> serde_json::Value {
         "match_case": params.match_case.unwrap_or(false),
         "match_whole_word": params.match_whole_word.unwrap_or(false),
         "top": params.top.unwrap_or(20) as usize,
+        "offset": params.offset.unwrap_or(0) as usize,
         "depth": params.depth,
         // Same files-by-default rule as find_files and count_files, so the
         // three tools report the same `total` for the same query. An explicit

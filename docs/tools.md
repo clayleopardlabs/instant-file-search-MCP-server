@@ -210,3 +210,7 @@ question, which is the worst outcome available: `fields` and the `path` argument
 `recent_changes` both behaved that way before 1.0.20, and each cost an agent real
 time. The trade-off is that a client which injects its own keys into `arguments`
 will now get an error rather than a working call.
+
+`aggregate_files` accepts `offset` alongside `top`, so a long folder listing can be
+paged with repeated calls. It applies to `largest`; `by_extension` remains capped
+by `top` and is not paged.

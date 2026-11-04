@@ -64,6 +64,9 @@ pub struct AggregateOptions {
     pub match_whole_word: bool,
     /// How many of the largest entries to return (default 20).
     pub top: usize,
+    /// Skip this many of the largest entries before taking `top`, so a long
+    /// folder listing can be paged. Applies to `largest` only.
+    pub offset: usize,
     /// Exclude directories, matching the files-by-default rule the other tools
     /// use. Without this, `aggregate_files` reports a larger `total` than
     /// `count_files` for the same query, and a folder outranks the files it
@@ -2021,7 +2024,7 @@ pub fn aggregate(
 
     largest.sort_by(|a, b| b.size.cmp(&a.size).then_with(|| a.path.cmp(&b.path)));
     let top = if opts.top == 0 { 20 } else { opts.top };
-    largest.truncate(top);
+    page(&mut largest, opts.offset, top);
 
     let mut by_extension: Vec<AggregateExt> = by_ext.into_values().collect();
     // Size first: for disk-usage questions the bytes are the point, and sorting
@@ -2099,7 +2102,7 @@ pub fn aggregate_iter(
             size: e.size,
             is_dir: e.is_dir,
         });
-        if largest.len() > top {
+        if largest.len() > top + opts.offset {
             let mut smallest = 0usize;
             for i in 1..largest.len() {
                 if largest[i].size < largest[smallest].size
@@ -2113,6 +2116,7 @@ pub fn aggregate_iter(
         }
     }
     largest.sort_by(|a, b| b.size.cmp(&a.size).then_with(|| a.path.cmp(&b.path)));
+    page(&mut largest, opts.offset, top);
     let mut by_extension: Vec<AggregateExt> = by_ext.into_values().collect();
     // Size first: for disk-usage questions the bytes are the point, and sorting
     // by count buries the big extensions under a long tail of tiny ones.
@@ -2142,6 +2146,18 @@ pub fn aggregate_iter(
 /// depths counts the same bytes repeatedly: an 11 GB tree once reported 26 GB
 /// through this field. Sorting by path puts an ancestor before its descendants,
 /// so a single pass can skip any folder already covered by one already counted.
+/// Drop the first `offset` entries, then keep at most `top`.
+///
+/// `top` alone capped a listing with no way to see the rest, so an agent could
+/// not enumerate more folders than the cap without subtraction tricks.
+fn page(rows: &mut Vec<AggregateLargest>, offset: usize, top: usize) {
+    if offset > 0 {
+        let drop_n = offset.min(rows.len());
+        rows.drain(..drop_n);
+    }
+    rows.truncate(top);
+}
+
 fn union_folder_size(mut dirs: Vec<(String, u64)>) -> u64 {
     dirs.sort_by(|a, b| a.0.cmp(&b.0));
     let mut total = 0u64;
@@ -3158,6 +3174,46 @@ mod tests {
         let both = run("*", false);
         assert_eq!(both.total, 2);
         assert_eq!(both.total_file_size, 100, "folder rows must not be summed");
+    }
+
+    #[test]
+    fn aggregate_pages_through_largest_with_offset() {
+        let mut a = entry(r"B:\p\a.bin", false, 1_700_000_000);
+        a.size = 10;
+        let mut b = entry(r"B:\p\b.bin", false, 1_700_000_000);
+        b.size = 30;
+        let mut c = entry(r"B:\p\c.bin", false, 1_700_000_000);
+        c.size = 20;
+        let mut d = entry(r"B:\p\d.bin", false, 1_700_000_000);
+        d.size = 40;
+        let map: HashMap<String, IndexedFile> = HashMap::from([
+            ("a".to_string(), a),
+            ("b".to_string(), b),
+            ("c".to_string(), c),
+            ("d".to_string(), d),
+        ]);
+        let run = |top: usize, offset: usize| {
+            aggregate(
+                &map,
+                &AggregateOptions {
+                    query: "*".to_string(),
+                    top,
+                    offset,
+                    ..Default::default()
+                },
+            )
+        };
+        // Sizes descend: 40, 30, 20, 10.
+        assert_eq!(run(2, 0).largest[0].size, 40);
+        // The second page starts at the third largest.
+        let second = run(2, 2);
+        assert_eq!(second.largest.len(), 2);
+        assert_eq!(second.largest[0].size, 20, "offset must skip the top two");
+        assert_eq!(second.largest[1].size, 10);
+        // An offset past the end is empty rather than a panic.
+        assert!(run(2, 99).largest.is_empty());
+        // Paging must not change the totals.
+        assert_eq!(run(2, 2).total_file_size, 100);
     }
 
     #[test]
