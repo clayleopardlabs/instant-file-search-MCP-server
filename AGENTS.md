@@ -1,4 +1,4 @@
-# Instant File Search MCP Server — Repository Map
+# Instant File Search MCP Server: Repository Map
 
 ## Installation acceptance criteria
 
@@ -43,15 +43,15 @@ instant-file-search-MCP-server/             # repo name; binary: instant-file-se
 ├── Cargo.toml              # Cargo workspace (MCP server + indexer crate)
 ├── Cargo.lock
 ├── src/
-│   ├── main.rs             # Entrypoint — stdio transport, tokio main
+│   ├── main.rs             # Entrypoint: stdio transport, tokio main
 │   ├── handler.rs          # MCP tool handler (5 tools) + native-first routing
 │   ├── tools.rs            # Param structs with JSON Schema derives (SearchParams, CountParams, AggregateParams, RecentChangesParams)
 │   ├── everything.rs       # Everything IPC client wrapper + engine manager (auto-launch); Windows-only, #[cfg(windows)]
-│   ├── native.rs           # Native indexer pipe client — Windows named pipe + Linux Unix socket
+│   ├── native.rs           # Native indexer pipe client, Windows named pipe + Linux Unix socket
 │   └── results.rs          # Shared result types, FILETIME→ISO conversion, attribute formatting
 ├── indexer/                # Native indexer crate (binary: instant-file-search-indexer)
 │   ├── src/main.rs         # `serve` (pipe/socket + scan + watcher) / `scan` (one-shot diagnostic)
-│   ├── src/platform.rs     # Platform seam — re-exports platform-specific modules + path helpers
+│   ├── src/platform.rs     # Platform seam: re-exports platform-specific modules + path helpers
 │   ├── src/index.rs        # Path-keyed in-memory index + record-number→path ref map
 │   ├── src/query.rs        # Query engine (substring CI, scope/excludes/filters/sort, bounded top-N)
 │   ├── src/types.rs        # IndexedFile struct (separator-agnostic, FILETIME epoch)
@@ -67,7 +67,7 @@ instant-file-search-MCP-server/             # repo name; binary: instant-file-se
 │   ├── src/pipe_unix.rs    # Linux/macOS: Unix socket server
 │   ├── src/walk_macos.rs   # macOS: getattrlistbulk directory walker
 │   └── src/fsevents.rs     # macOS: FSEvents change watcher
-├── plugin/                 # OpenCode plugin adapter (optional — sub-agent support)
+├── plugin/                 # OpenCode plugin adapter (optional, sub-agent support)
 │   ├── package.json
 │   ├── tsconfig.json
 │   └── src/index.ts
@@ -100,32 +100,32 @@ the Everything engine if the native indexer is unreachable.
 | `search_status` | Engine health: indexed file count, volumes, native/everything availability. |
 
 `find_files`, `count_files` and `aggregate_files` also return `parsed` (how the
-query was understood) and, when relevant, `warnings` carrying a concrete fix —
+query was understood) and, when relevant, `warnings` carrying a concrete fix, 
 see "Response diagnostics" in `docs/tools.md`. Invalid filter tokens are
 rejected with an error rather than silently returning zero.
 
 ### Common query patterns
 
-- `*.rs` — all Rust source files
-- `Cargo.toml` — exact filename match
-- `*.md path:/home/user/project` — scoped to a directory
-- `*.log path:C:/Windows` — Windows path (forward slashes preferred to avoid JSON escaping)
-- `content:"fn main"` — content search (bounded 256MB store; targeted, not exhaustive)
-- `dm:lastweek` — modified in the last week
-- `size:>10mb` — larger than 10 MB
-- `*.tmp | *.bak` — match either pattern. The pipe splits the query into alternatives, so a filter applies only to its own alternative: `*.bin | *.7z is:folder` filters only the second one. Repeat the filter on each side.
-- `!*.tmp` — exclude a file pattern. The inline `!` does **not** exclude directories in the native engine; use `exclude_path` for that.
-- `sort=size` — sort by size (largest first)
+- `*.rs`: all Rust source files
+- `Cargo.toml`: exact filename match
+- `*.md path:/home/user/project`: scoped to a directory
+- `*.log path:C:/Windows`: Windows path (forward slashes preferred to avoid JSON escaping)
+- `content:"fn main"`: content search (bounded 256MB store; targeted, not exhaustive)
+- `dm:lastweek`: modified in the last week
+- `size:>10mb`: larger than 10 MB
+- `*.tmp | *.bak`: match either pattern. The pipe splits the query into alternatives, so a filter applies only to its own alternative: `*.bin | *.7z is:folder` filters only the second one. Repeat the filter on each side.
+- `!*.tmp`: exclude a file pattern. The inline `!` does **not** exclude directories in the native engine; use `exclude_path` for that.
+- `sort=size`: sort by size (largest first)
 
 ### Key parameters
 
-- `query` — search pattern (wildcards, content:, date:, size:, exclude with !)
-- `path` — directory scope (use forward slashes)
-- `max_results` — cap result count (0 = default 100)
-- `offset` — skip N results for pagination
-- `sort` — `name`, `name_desc`, `size`, `date_modified`, `date_created`, `extension`, etc.
-- `include_all` — include `node_modules`, `.git`, `WinSxS`, `$Recycle.Bin`, `System Volume Information` (default false). All five are indexed, so a zero result without this flag means excluded, not absent.
-- `exclude_path` — extra directories to skip, `;`-separated (comma does not work)
+- `query`: search pattern (wildcards, content:, date:, size:, exclude with !)
+- `path`: directory scope (use forward slashes)
+- `max_results`: cap result count (0 = default 100)
+- `offset`: skip N results for pagination
+- `sort`: `name`, `name_desc`, `size`, `date_modified`, `date_created`, `extension`, etc.
+- `include_all`: include `node_modules`, `.git`, `WinSxS`, `$Recycle.Bin`, `System Volume Information` (default false). All five are indexed, so a zero result without this flag means excluded, not absent.
+- `exclude_path`: extra directories to skip, `;`-separated (comma does not work)
 
 ## Engine routing (native-first)
 
@@ -166,22 +166,22 @@ everything (engine_source: existing / installed_launched / bundled / none).
 ## Everything engine acquisition (fallback, Windows-only)
 
 `src/everything.rs` `ensure_engine()` picks the best available search engine on first use:
-1. Already-running Everything (IPC window reachable) — used as-is, zero extra RAM
-2. Installed Everything (no window; e.g. service-only) — launches its GUI, which connects to the service
-3. Bundled portable engine (`<binary dir>\everything\Everything.exe`) — launched as the DEFAULT instance (not a named instance; the Everything service only serves the default instance), `-startup` tray mode, `admin_service=1` ini, waits for DB load (timeout: `EVERYTHING_ENGINE_TIMEOUT_SECS`, default 60)
+1. Already-running Everything (IPC window reachable), used as-is, zero extra RAM
+2. Installed Everything (no window; e.g. service-only), launches its GUI, which connects to the service
+3. Bundled portable engine (`<binary dir>\everything\Everything.exe`), launched as the DEFAULT instance (not a named instance; the Everything service only serves the default instance), `-startup` tray mode, `admin_service=1` ini, waits for DB load (timeout: `EVERYTHING_ENGINE_TIMEOUT_SECS`, default 60)
 
 ## Environment variables
 
-- `EVERYTHING_MCP_LOG` — tracing filter (stderr; never stdout, to keep NDJSON clean)
-- `EVERYTHING_ENGINE_EXE` — override bundled engine path
-- `EVERYTHING_ENGINE_TIMEOUT_SECS` — engine DB-load wait in seconds (default 60)
-- Plugin: `INSTANT_FS_MCP_BINARY` (legacy: `EVERYTHING_MCP_BINARY`) — override MCP binary path
+- `EVERYTHING_MCP_LOG`: tracing filter (stderr; never stdout, to keep NDJSON clean)
+- `EVERYTHING_ENGINE_EXE`: override bundled engine path
+- `EVERYTHING_ENGINE_TIMEOUT_SECS`: engine DB-load wait in seconds (default 60)
+- Plugin: `INSTANT_FS_MCP_BINARY` (legacy: `EVERYTHING_MCP_BINARY`), override MCP binary path
 
 ## Build notes
 
 ### Windows
 
-Rust target pinned `x86_64-pc-windows-gnu`; needs mingw-w64 on PATH — rustup's
+Rust target pinned `x86_64-pc-windows-gnu`; needs mingw-w64 on PATH, rustup's
 self-contained `dlltool.exe` wrapper is broken (CreateProcess error). Use WinLibs
 (winget: BrechtSanders.WinLibs.POSIX.UCRT) and prepend `mingw64\bin` to PATH
 before `cargo build`. Everything portable zip is SHA256-pinned; re-fetch with
@@ -195,38 +195,38 @@ Build with `cargo build --release` from the workspace root.
 
 ## Known indexer pitfalls (verified 2026-08-01)
 
-- NTFS `$FILE_NAME` attribute metadata goes stale (timestamps/sizes only refresh on rename) — scan reads times from `$STANDARD_INFORMATION`, size from `$DATA` valid-data-length.
+- NTFS `$FILE_NAME` attribute metadata goes stale (timestamps/sizes only refresh on rename), scan reads times from `$STANDARD_INFORMATION`, size from `$DATA` valid-data-length.
 - USN reason constants: DELETE=0x200 (NOT 0x2, which is DATA_EXTEND), RENAME=0x1000|0x2000, HARD_LINK_CHANGE=0x10000, CLOSE=0x80000000, CREATE=0x100.
-- Named pipes distribute across ALL listeners — a stale duplicate `serve` process steals queries (empty results from an empty index). Check for leftovers before debugging.
+- Named pipes distribute across ALL listeners: a stale duplicate `serve` process steals queries (empty results from an empty index). Check for leftovers before debugging.
 - When redeploying for diagnostics, verify the deployed exe timestamp matches the fresh build (copy errors get hidden by `>nul` redirects).
-- Never run the indexer in the foreground — it blocks until timeout; use fire-and-forget elevated starts with output redirected to files.
+- Never run the indexer in the foreground: it blocks until timeout; use fire-and-forget elevated starts with output redirected to files.
 - Linux: `CapabilityBoundingSet=CAP_SYS_ADMIN` alone strips `CAP_DAC_OVERRIDE`/`CAP_DAC_READ_SEARCH`, preventing traversal of `drwxr-x---` directories. The systemd unit must include all three capabilities.
-- Linux: path separator in index.rs must use `crate::platform::SEP` — hardcoded `\\` breaks `adjust_ancestors`, `sum_children`, `remove_prefix`, `rename_prefix`.
+- Linux: path separator in index.rs must use `crate::platform::SEP`, hardcoded `\\` breaks `adjust_ancestors`, `sum_children`, `remove_prefix`, `rename_prefix`.
 - Linux: fanotify `open_by_handle_at` fails with `O_PATH` mount fds on kernel 7.0+ (returns EBADF). Mount fds must be opened with `O_RDONLY | O_DIRECTORY` instead.
-- Linux: fanotify lumps CREATE/MODIFY/CLOSE_WRITE into a single "WRITE" reason. The `recent_changes` "created" filter is a synonym for "modified" — there is no way to distinguish file creation from modification via fanotify alone.
+- Linux: fanotify lumps CREATE/MODIFY/CLOSE_WRITE into a single "WRITE" reason. The `recent_changes` "created" filter is a synonym for "modified", there is no way to distinguish file creation from modification via fanotify alone.
 - Linux: `/tmp` is typically tmpfs (not a real disk) and is excluded from the indexer scan. Use paths on real disk volumes for test files.
 
-- Windows: an MFT record can hold several `$DATA` attributes, and a **named** one is an alternate data stream — commonly the `Zone.Identifier` a browser stamps on a download. Size must come from the **unnamed** stream only. Taking the first `$DATA` seen reports the ADS size: a 4.4 GB ISO carrying a 166-byte `Zone.Identifier` was indexed as 166 bytes, which also hid it from every `size:>` query.
+- Windows: an MFT record can hold several `$DATA` attributes, and a **named** one is an alternate data stream, commonly the `Zone.Identifier` a browser stamps on a download. Size must come from the **unnamed** stream only. Taking the first `$DATA` seen reports the ADS size: a 4.4 GB ISO carrying a 166-byte `Zone.Identifier` was indexed as 166 bytes, which also hid it from every `size:>` query.
 - Changing the MFT parser does **not** correct rows already in the index. The service replays from its saved USN checkpoint on restart, so a parser fix stays invisible until the index is rebuilt. Bump a parser/schema version and force a rescan when it changes, or stop the service, delete `index.sqlite3` (derived data), and start it again.
-- Default exclusions are **five** (`node_modules`, `.git`, `WinSxS`, `$Recycle.Bin`, `System Volume Information`). Keep `src/diagnostics.rs::DEFAULT_EXCLUDES`, the handshake instructions in `src/tools.rs`, and `docs/tools.md` in step with `indexer/src/query.rs::DEFAULT_EXCLUDES` — under-reporting them makes an agent read "excluded" as "empty".
+- Default exclusions are **five** (`node_modules`, `.git`, `WinSxS`, `$Recycle.Bin`, `System Volume Information`). Keep `src/diagnostics.rs::DEFAULT_EXCLUDES`, the handshake instructions in `src/tools.rs`, and `docs/tools.md` in step with `indexer/src/query.rs::DEFAULT_EXCLUDES`, under-reporting them makes an agent read "excluded" as "empty".
 
 ## Pre-release checks
 
 Run these before tagging, in this order:
 
-1. `cargo test --workspace` — unit tests plus `tests/mcp_handshake.rs`, which
+1. `cargo test --workspace`: unit tests plus `tests/mcp_handshake.rs`, which
    spawns the built binary and asserts the real `initialize` handshake
    advertises `capabilities.tools` and that `tools/list` returns the five
    tools. A unit test on `get_info()` cannot catch that class of bug; the wire
    can.
-2. `powershell -File scripts/install.ps1 -SelfTest` — pure-function regression
+2. `powershell -File scripts/install.ps1 -SelfTest`, pure-function regression
    tests for the DeepSeek Harness patch editor (root/preset/override scopes,
    mixed line endings, UTF-8 round trips, preset mounts, uninstall row removal).
    CI runs this on every push; it never touches a profile or a service.
-3. `scripts/parity.ps1` (Windows, indexer service running) — the differential
+3. `scripts/parity.ps1` (Windows, indexer service running), the differential
    battery that compares native counts against the Everything engine. It needs
    live engines, so CI cannot run it and it is `#[ignore]`d by default.
-4. `scripts/doctor.ps1 -RequireNative` — must report 0 failures.
+4. `scripts/doctor.ps1 -RequireNative`: must report 0 failures.
 
 `scripts/install.ps1` delegates the admin-only half to
 `scripts/register-indexer-service.ps1`, which ships as a release asset and has a

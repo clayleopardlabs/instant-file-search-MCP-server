@@ -1,6 +1,6 @@
 # macOS Port Plan
 
-Goal: the native indexer + MCP server run natively on macOS (native-only —
+Goal: the native indexer + MCP server run natively on macOS (native-only, 
 Everything fallback is Windows-only by construction). Companion doc:
 `docs/macos-support.md` (architectural research). This document is the phased
 execution plan.
@@ -13,7 +13,7 @@ execution plan.
   Mac later for live FSEvents / launchd / TCC smoke tests.
 - The Linux port already did the hard seam work: `types.rs`, `platform.rs`,
   `protocol.rs`, portable query/content/index. macOS adds a third backend to
-  the existing seam — a **smaller delta than Linux was**.
+  the existing seam: a **smaller delta than Linux was**.
 - Windows-only crates today: `windows`, `ntfs`, `everything-ipc`,
   `windows-service`. Linux-only additions: `nix`, `rustix`, `sd-notify`.
   Everything else is cross-platform. macOS needs `libc` (already present for
@@ -66,12 +66,12 @@ The remaining work is validation and release hardening:
 ### Phase 0: Cross-platform build scaffolding (no runtime behavior change)
 - **Deps**: add `[target.'cfg(target_os = "macos")'.dependencies]` (libc,
   objc2-core-services with the FSEvents feature). `nix` supports macOS/BSD
-  fully; rustix's `getdents64`/`statx`/`io_uring` surface is Linux-gated (fine —
+  fully; rustix's `getdents64`/`statx`/`io_uring` surface is Linux-gated (fine, 
   the macOS walker is libc anyway).
 - **Gates**: `#[cfg(target_os = "macos")]` around the macOS
   `walk_macos.rs` and `fsevents.rs`; `platform.rs` re-exports
   `walk_macos`/`fsevents`/`pipe_unix` for the native macOS build.
-- **CI**: add `.github/workflows/macos.yml` — macos-15 + macos-26 arm64,
+- **CI**: add `.github/workflows/macos.yml`, macos-15 + macos-26 arm64,
   `cargo build` + `cargo test` both crates. Windows path untouched.
 - **Gate**: workspace compiles on all three targets; all portable unit tests
   pass on macOS.
@@ -79,7 +79,7 @@ The remaining work is validation and release hardening:
 ### Phase 1: platform.rs macOS arm
 - Re-export `discover_volumes`/`scan_volume` from `walk_macos`, `journal_tails`/
   `watch_all` from `fsevents`, `PipeServer` from `pipe_unix` (same Unix socket
-  code as Linux — no new transport).
+  code as Linux: no new transport).
 - `volume_of` on macOS: mount-aware, like Linux (inodes collide across
   filesystems). Use `getmntinfo` to map mount points → devid.
 - **Gate**: workspace compiles for macOS; Windows parity battery still green.
@@ -89,12 +89,12 @@ The remaining work is validation and release hardening:
   filter `apfs` + `MNT_LOCAL`; skip `/System/Volumes/*` (Data reached via
   firmlinks from `/`) and `@`-snapshot mounts; index `/` + `/Volumes/*`.
 - Walk: `getattrlistbulk` with `FSOPT_RETURN_REALDEV` (batched statx
-  equivalent — name + fileid + real devid + crtime + modtime + size + mode +
+  equivalent: name + fileid + real devid + crtime + modtime + size + mode +
   flags + objtype in one syscall batch). ~4.7x faster than readdir+stat,
   1,600x fewer syscalls.
-- Emit the same scan item shape: path, name, size, mtime, btime (crtime —
+- Emit the same scan item shape: path, name, size, mtime, btime (crtime, 
   native on macOS), atime, mode/type, fileid, real devid.
-- Content-store fill loop: reuse existing logic (same 256MB budget — known
+- Content-store fill loop: reuse existing logic (same 256MB budget, known
   limitation carries over).
 - **Gate**: `scan` one-shot mode works on macOS; index contents match a
   reference walk on a fixture tree (unit test with a temp dir).
@@ -113,7 +113,7 @@ The remaining work is validation and release hardening:
   right events in the ring buffer; restart + gap → rescan triggers.
 
 ### Phase 5: Service host (launchd)
-- `main.rs`: macOS bootstrap — launchd foreground (no daemonize), readiness via
+- `main.rs`: macOS bootstrap, launchd foreground (no daemonize), readiness via
   connect+ping (no `Type=notify` equivalent). Console modes `serve`/`scan`
   preserved.
 - `scripts/install-macos.sh`: build, install to `/usr/local/lib/instant-file-search/`,
@@ -127,16 +127,16 @@ The remaining work is validation and release hardening:
 
 ### Phase 6: Semantic parity mapping (macOS specifics)
 - **Case/normalization (the big one)**: default APFS is case-insensitive AND
-  normalization-insensitive but byte-preserving — `readdir` returns a mix of
+  normalization-insensitive but byte-preserving, `readdir` returns a mix of
   NFC/NFD names. Canonicalize index AND query keys to NFC + Unicode lowercase
   (`unicode-normalization` crate + `to_lowercase`, NOT `to_ascii_lowercase`);
   dedup on canonical key. Detect per-volume case via `pathconf(_PC_CASE_SENSITIVE)`
   / `VOL_CAP_FMT_CASE_SENSITIVE`.
 - `attrib:` / `is:`: HIDDEN ← dotfile | `UF_HIDDEN`; DIRECTORY ← `S_IFDIR`;
-  READONLY ← `!S_IWUSR` or immutable; SYSTEM/ARCHIVE have no faithful source —
+  READONLY ← `!S_IWUSR` or immutable; SYSTEM/ARCHIVE have no faithful source, 
   drop (never match, correct Everything-equivalent behavior).
 - `frn:` → `(real devid, fileid)`, scoped by mount. APFS inodes are monotonic
-  ~63-bit and NOT recycled — no reuse guard needed.
+  ~63-bit and NOT recycled: no reuse guard needed.
 - Dates: date_created ← crtime (native), date_modified ← mtime, date_accessed ←
   atime.
 - **Gate**: full query-surface unit tests pass on macOS (same fixtures).
@@ -163,23 +163,23 @@ The remaining work is validation and release hardening:
    per-binary/bundle FDA grant in System Settings; grants are silently
    revocable by OS upgrades (detect via `EPERM`). Package as a signed app
    bundle with a real CFBundleIdentifier (bare binaries refused on some macOS
-   versions). launchd jobs don't inherit terminal TCC. (Required — no way
+   versions). launchd jobs don't inherit terminal TCC. (Required, no way
    around it.)
 2. **Expectation gap**: initial index of 2-3M files is ~1-2 min via
    getattrlistbulk (no $MFT-class 2-4 s path). Must ship FSEvents incremental
    sync with it or the first scan looks broken.
-3. **Volume-group devid**: System/Data boot volumes share a logical devid —
+3. **Volume-group devid**: System/Data boot volumes share a logical devid, 
    must use `FSOPT_RETURN_REALDEV` / `ATTR_CMNEXT_REALDEVID` for physical
    per-volume values.
 4. **NFC/NFD normalization**: byte-exact `to_ascii_lowercase` matching silently
-   misses NFD-stored names — canonicalize both index and query keys.
+   misses NFD-stored names: canonicalize both index and query keys.
 5. **Content store**: 256MB budget limitation carries over unchanged (known
    gap).
 
 ## Rough effort
-- Phase 0: scaffolding + CI — ~1 session
-- Phase 2b: walk_macos.rs + mount discovery + fixtures — ~1-2 sessions
-- Phase 4: fsevents.rs + journal — ~2 sessions (highest complexity)
-- Phase 5: launchd + install-macos.sh — ~1 session
-- Phase 6: NFC/casefold + attribute mapping — ~1 session
-- Phase 7-8: verification + docs/release — ~1-2 sessions
+- Phase 0: scaffolding + CI: ~1 session
+- Phase 2b: walk_macos.rs + mount discovery + fixtures, ~1-2 sessions
+- Phase 4: fsevents.rs + journal: ~2 sessions (highest complexity)
+- Phase 5: launchd + install-macos.sh: ~1 session
+- Phase 6: NFC/casefold + attribute mapping: ~1 session
+- Phase 7-8: verification + docs/release: ~1-2 sessions

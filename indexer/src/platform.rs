@@ -52,7 +52,7 @@ pub fn normalize_path(p: &str) -> String {
 /// form. Both the index key (`lower_path`) and every query pattern must be
 /// run through this so byte-wise matching sees identical canonical bytes.
 /// Windows/Linux keep ASCII-lowercasing (identity for ASCII paths; unchanged
-/// behavior — NTFS and ext4 do not mix normalization forms on disk).
+/// behavior: NTFS and ext4 do not mix normalization forms on disk).
 #[cfg(target_os = "macos")]
 pub fn canonical_key(s: &str) -> String {
     use unicode_normalization::UnicodeNormalization;

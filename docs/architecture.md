@@ -27,7 +27,7 @@ filesystem map. Runs as the Windows service `instant-file-search-indexer`
   parses FILE records in memory (with USA fixup). Timestamps come from
   `$STANDARD_INFORMATION` (created@+0, modified@+8, accessed@+24) and sizes
   from the **unnamed** `$DATA` attribute (resident: value length; nonresident:
-  valid-data-length at attribute header +48) — the `$FILE_NAME` attribute's
+  valid-data-length at attribute header +48), the `$FILE_NAME` attribute's
   metadata goes stale on NTFS (only refreshed on rename). A *named* `$DATA`
   attribute is an alternate data stream, not the file content: a browser stamps
   a ~166-byte `Zone.Identifier` on every download, so accepting the first
@@ -54,7 +54,7 @@ filesystem map. Runs as the Windows service `instant-file-search-indexer`
   (create / rename / delete / close) come from the journal. Starts from the
   journal tail captured before the scan (the scan is already a full snapshot).
   On journal truncation (rollover), the affected volume is re-scanned instead
-  of replaying — a backlog larger than journal capacity truncates again
+  of replaying: a backlog larger than journal capacity truncates again
   mid-replay and loses records.
 - **Query engine:** case-insensitive substring matching (Everything semantics),
   optional path scope / exclude paths / size & date filters / sort, with a
@@ -97,10 +97,10 @@ systems with the required privileges.
 
 ## Everything engine fallback
 
-- All Everything IPC calls are synchronous and blocking — dispatched via
+- All Everything IPC calls are synchronous and blocking, dispatched via
   `tokio::task::spawn_blocking`. The handler never holds the main thread, but
   it's still a single-threaded executor over blocking I/O.
-- Everything communicates via Windows `WM_COPYDATA` IPC — native Win32
+- Everything communicates via Windows `WM_COPYDATA` IPC, native Win32
   messaging, no HTTP. The `everything-ipc` Rust crate handles it.
 - Engine acquisition is a 3-tier priority: reachable window → launch installed
   GUI (bridges service-only installs) → launch bundled portable engine
@@ -109,7 +109,7 @@ systems with the required privileges.
 ## Transport
 
 - The MCP server speaks stdio (rmcp `transport-io`). The plugin uses **NDJSON**
-  (newline-delimited JSON), NOT Content-Length framing — important if
+  (newline-delimited JSON), NOT Content-Length framing, important if
   modifying the transport layer.
 - The plugin spawns the binary as a child process per tool call, sends MCP
   init + `tools/call` via stdin, reads the JSON response on stdout, then exits.

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# install-macos.sh — Instant File Search: build, deploy, and register the
+# install-macos.sh: Instant File Search: build, deploy, and register the
 # native indexer + MCP server on macOS (launchd LaunchDaemon).
 #
 # Mirrors scripts/install-linux.sh for macOS. What it does:
@@ -10,7 +10,7 @@
 #      (com.clayleopardlabs.instant-file-search.plist)
 #   4. Registers the MCP server client for OpenCode (~/.config/opencode/)
 #      and patches oh-my-opencode-slim subagent `mcps` lists
-#   5. Prints Full Disk Access (TCC) guidance — a required manual step
+#   5. Prints Full Disk Access (TCC) guidance: a required manual step
 #
 # Requirements:
 #   - macOS 13+ (FSEvents / getattrlistbulk; any recent macOS works)
@@ -148,7 +148,7 @@ imply FDA.
 1. Open System Settings > Privacy & Security > Full Disk Access
 2. Click "+" and add:
      /usr/local/lib/instant-file-search/instant-file-search-indexer
-   (If the bare binary is refused, build a signed app bundle around it —
+   (If the bare binary is refused, build a signed app bundle around it, 
    see docs/macos-support.md.)
 3. Restart the daemon:
      sudo launchctl kickstart -k system/com.clayleopardlabs.instant-file-search

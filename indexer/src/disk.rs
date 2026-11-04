@@ -130,7 +130,7 @@ impl DiskIndex {
     /// cache, never a durable archive.
     ///
     /// `vacuum` decides whether the freed pages go back to the filesystem
-    /// immediately. The service passes `false`: VACUUM on a multi-gigabyte
+    /// immediately. The service passes `false`, VACUUM on a multi-gigabyte
     /// index takes tens of seconds, which made an SCM stop time out and report
     /// the service as unstoppable, and the pages are reused by the next content
     /// build anyway.
@@ -1053,7 +1053,7 @@ mod tests {
         let reopened = DiskIndex::open(path.clone()).unwrap();
         assert_eq!(reopened.len(), 2);
         // The row's volume key comes from `insert_entry`, which stores
-        // `platform::volume_of(path)` — `C:` on Windows, the mount root
+        // `platform::volume_of(path)`: `C:` on Windows, the mount root
         // elsewhere. Derive it the same way: a hardcoded "C:" makes this
         // assertion fail on Linux/macOS, where the stored key is "/".
         assert_eq!(

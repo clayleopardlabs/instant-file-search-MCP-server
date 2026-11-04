@@ -301,7 +301,7 @@ pub struct AggregateResult {
     pub folders: u64,
     /// Sum of sizes over all matched entries.
     pub total_size: u64,
-    /// Sum of sizes of matched FILES only — the number to use for disk usage.
+    /// Sum of sizes of matched FILES only: the number to use for disk usage.
     /// Kept in step with the indexer's `AggregateResult`; if it is missing here
     /// the field is silently dropped from the MCP response.
     #[serde(default)]

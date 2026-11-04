@@ -741,7 +741,7 @@ mod tests {
     #[test]
     fn upsert_keeps_dir_recursive_total() {
         // A USN re-stat of a directory must NOT clobber its recursive total
-        // with the dir's own allocation (e.g. 0): the recursive size stays.
+        // with the dir's own allocation (e.g. 0), the recursive size stays.
         let ix = test_index();
         let c = "C:".to_string();
         let a = p(&["C:", "a"]);

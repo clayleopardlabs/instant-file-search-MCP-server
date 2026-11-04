@@ -22,8 +22,8 @@ cargo build --release --workspace
 
 Outputs:
 
-- `target/release/instant-file-search-mcp-server` — the MCP server
-- `target/release/instant-file-search-indexer` — the native indexer
+- `target/release/instant-file-search-mcp-server`, the MCP server
+- `target/release/instant-file-search-indexer`, the native indexer
 
 Cross-checking from another OS (no macOS linker needed):
 
@@ -47,7 +47,7 @@ The script:
 4. Registers the MCP client with OpenCode (`~/.config/opencode/opencode.jsonc`
    or `.json`), including the oh-my-opencode-slim sub-agent `mcps` patch.
 
-### Full Disk Access (TCC) — required manual step
+### Full Disk Access (TCC): required manual step
 
 Root does NOT imply Full Disk Access. The daemon must be granted FDA to scan
 protected locations (Desktop, Documents, Downloads, iCloud, Photos, Mail, ...):
@@ -62,7 +62,7 @@ protected locations (Desktop, Documents, Downloads, iCloud, Photos, Mail, ...):
    sudo launchctl kickstart -k system/com.clayleopardlabs.instant-file-search
    ```
 
-Grants are silently revocable by OS upgrades — if searches silently miss files
+Grants are silently revocable by OS upgrades: if searches silently miss files
 after an upgrade, re-check this setting.
 
 ## Runtime
@@ -93,7 +93,7 @@ Logs: `/var/log/instant-file-search-indexer.log`.
 | $MFT raw scan | `getattrlistbulk` walk (`FSOPT_RETURN_REALDEV`; `fileid` = `file_ref`, `crtime` = created) |
 | USN Change Journal | FSEvents (persistent per-device journal, `since=` replay, `UseExtendedData` for renames) |
 | Named pipe | Unix socket `/tmp/instant-file-search-indexer.sock` |
-| Everything fallback | Not used — native is the only engine |
+| Everything fallback | Not used: native is the only engine |
 | Windows service (SCM) | launchd LaunchDaemon (readiness via connect+ping) |
 
 ## Known gaps (macOS)

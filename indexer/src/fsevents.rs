@@ -283,7 +283,7 @@ fn apply_event(state: &WatcherState, flag: u32, path: &str, file_id: Option<i64>
                 upsert_or_remove(state, path, is_dir);
             }
             _ => {
-                // No old path known (e.g. created during scan window) — treat as WRITE.
+                // No old path known (e.g. created during scan window), treat as WRITE.
                 state.index.record_change(now, "WRITE", path, is_dir);
                 upsert_or_remove(state, path, is_dir);
             }

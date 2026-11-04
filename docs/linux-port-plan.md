@@ -1,12 +1,12 @@
 # Linux Port Plan
 
-Goal: the native indexer + MCP server run natively on Linux (native-only — Everything
+Goal: the native indexer + MCP server run natively on Linux (native-only, Everything
 fallback is Windows-only by construction). Companion doc: `docs/linux-support.md`
 (architectural research). This document is the phased execution plan.
 
 ## Environment facts (2026-08-03)
 
-- WSL2 is **not installed** on the dev machine — live Linux testing requires either
+- WSL2 is **not installed** on the dev machine, live Linux testing requires either
   WSL2 install (admin + likely reboot) or a remote Ubuntu box. Verify target for the
   plan: **GitHub Actions CI on ubuntu-latest** (repo is on GitHub) for build/test;
   WSL2 later for live fanotify/systemd smoke tests.
@@ -16,7 +16,7 @@ fallback is Windows-only by construction). Companion doc: `docs/linux-support.md
 **Ubuntu 24.04 LTS, ext4 root.** The user has a spare PC for a fresh OS install
 that will serve as the live Linux sandbox. Rationale:
 
-- Matches GitHub Actions `ubuntu-latest` (24.04) — sandbox and CI identical,
+- Matches GitHub Actions `ubuntu-latest` (24.04), sandbox and CI identical,
   eliminating environment-divergence surprises.
 - Kernel 6.8 covers the full feature surface the port needs: `FAN_RENAME` (5.17+),
   unprivileged fanotify with FID (5.13+), `statx` btime. The only gap is
@@ -99,7 +99,7 @@ Linux backends behind the same seams:
 - **Gates**: `#[cfg(windows)]` around everything.rs, mft.rs, usn.rs, sector_reader.rs,
   Windows service bootstrap. Linux stubs return a clear "not yet implemented" for the
   backend modules so the workspace compiles.
-- **CI**: add `.github/workflows/linux.yml` — ubuntu-latest, `cargo build` + `cargo test`
+- **CI**: add `.github/workflows/linux.yml`, ubuntu-latest, `cargo build` + `cargo test`
   both crates. Windows path untouched (existing build still works).
 - **Gate**: workspace compiles on both targets; all portable unit tests (query engine,
   index, schemas, tools) pass on Linux.
@@ -124,7 +124,7 @@ Linux backends behind the same seams:
 - Emit the same scan item shape mft.rs produces: path, name, size, mtime, btime,
   atime, mode/type, ino, st_dev. Use `rustix` for statx (std has no btime on Linux).
 - Content-store fill loop: reuse existing logic against walk output (same 256MB
-  budget semantics — the known limitation carries over).
+  budget semantics: the known limitation carries over).
 - **Gate**: `scan` one-shot mode works on Linux; index contents match a reference
   `find`-style walk on a fixture tree (unit test with a temp dir).
 
@@ -149,14 +149,14 @@ Linux backends behind the same seams:
   events in the ring buffer; restart + gap → rescan triggers.
 
 ### Phase 4: Transport (Unix socket)
-- `pipe.rs`: factor the server behind a small trait or cfg'd impl — Windows named
+- `pipe.rs`: factor the server behind a small trait or cfg'd impl, Windows named
   pipe (Win32) vs `tokio::net::UnixListener` with the same newline-framed JSON
   protocol. Keep-alive behavior preserved.
 - `src/native.rs`: cfg'd connect (named pipe vs `UnixStream`).
 - **Gate**: MCP server ↔ indexer round-trip works over the Unix socket on Linux.
 
 ### Phase 5: Service host
-- `main.rs`: Linux bootstrap — daemonize/systemd foreground, `sd_notify` READY,
+- `main.rs`: Linux bootstrap: daemonize/systemd foreground, `sd_notify` READY,
   `AmbientCapabilities=CAP_SYS_ADMIN` for FAN_MARK_FILESYSTEM (systemd unit),
   capability-dropping after setup, console modes `serve`/`scan` preserved.
 - `scripts/install-linux.sh`: build, install to `/usr/local/lib/instant-file-search/`,
@@ -166,10 +166,10 @@ Linux backends behind the same seams:
 
 ### Phase 6: Semantic parity mapping (Linux specifics)
 - `attrib:` / `is:`: map statx mode + d_type: is:folder (S_IFDIR), is:file (S_IFREG),
-  is:hidden (dotfile convention), is:system (mode semantics — define or skip).
+  is:hidden (dotfile convention), is:system (mode semantics, define or skip).
 - `frn:` → `(st_dev, st_ino)`, scoped by mount; document best-effort (no reuse guard).
 - Dates: date_created ← btime (caveat: unavailable on ext3/tmpfs/NFS), date_modified ←
-  mtime, date_accessed ← atime (**unreliable on relatime/noatime defaults — document**).
+  mtime, date_accessed ← atime (**unreliable on relatime/noatime defaults, document**).
 - `sort:`, filters, wildcards, operators: already portable, no change.
 - **Gate**: full query-surface unit tests pass on Linux (same fixtures as Windows).
 
@@ -196,14 +196,14 @@ Linux backends behind the same seams:
 3. **Raw ext4 reads**: skip for v1 (walk is fast enough on SSD; raw reads are
    ext4-only, root, and unsafe mounted-rw). Revisit only if cold-HDD latency matters.
 4. **Content store**: 256MB budget limitation carries over unchanged (known gap).
-5. **btrfs**: fanotify filesystem marks can fail (EXDEV) — currently reported as
+5. **btrfs**: fanotify filesystem marks can fail (EXDEV), currently reported as
    unsupported until an inotify fallback is added; index keys use `stx_subvol` where
    available.
 
 ## Rough effort
-- Phase 0-1: scaffolding + de-noise (small, CI-heavy) — ~1 session
-- Phase 2: walk.rs + mount discovery + fixtures — ~1-2 sessions
-- Phase 3: fanotify.rs + journal + fallback — ~2-3 sessions (highest complexity)
-- Phase 4-5: transport + systemd — ~1 session
-- Phase 6-7: semantic mapping + verification — ~1-2 sessions
-- Phase 8: docs/release — ~1 session
+- Phase 0-1: scaffolding + de-noise (small, CI-heavy), ~1 session
+- Phase 2: walk.rs + mount discovery + fixtures, ~1-2 sessions
+- Phase 3: fanotify.rs + journal + fallback: ~2-3 sessions (highest complexity)
+- Phase 4-5: transport + systemd: ~1 session
+- Phase 6-7: semantic mapping + verification: ~1-2 sessions
+- Phase 8: docs/release: ~1 session

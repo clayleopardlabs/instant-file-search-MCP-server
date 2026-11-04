@@ -81,7 +81,7 @@ pub fn discover_volumes() -> Vec<String> {
 /// Scan one volume, returning all indexed files.
 ///
 /// Fast path: the whole $MFT is read sequentially in blocks and FILE records
-/// are parsed in memory — no per-record API calls.
+/// are parsed in memory: no per-record API calls.
 pub fn scan_volume(volume: &str) -> Result<Vec<IndexedFile>> {
     let device = format!(r"\\?\GLOBALROOT\Device\HarddiskVolume",);
     let _ = device;
@@ -357,7 +357,7 @@ fn parse_file_record_inner(
             }
         } else if atype == ATTR_DATA {
             // Only the UNNAMED $DATA attribute holds the file's content. A named
-            // one is an alternate data stream — typically the Zone.Identifier a
+            // one is an alternate data stream, typically the Zone.Identifier a
             // browser stamps on a download. Taking the first $DATA seen meant a
             // file carrying an ADS reported the ADS size instead of its own:
             // MarioKartWiiOriginalPAL.iso (4,699,979,776 bytes, unnamed stream)

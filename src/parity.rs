@@ -19,7 +19,7 @@ mod parity_tests {
         // (query, path_scope) pairs. The path is passed via the `path` param
         // (a folder scope in both engines), NOT as a `path:` query token:
         // in Everything `path:` is a full-path match modifier, in native it
-        // is a Token::Path — they are not the same operation.
+        // is a Token::Path: they are not the same operation.
         let queries: &[(&str, Option<&str>)] = &[
             ("AGENTS.md", None),
             ("*.png", None),

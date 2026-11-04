@@ -172,7 +172,7 @@ fn filter_kind(token: &str) -> Option<&'static str> {
 
 /// Warnings for a query, given how it will actually be executed.
 ///
-/// `folders_are_fine` is true when folder rows cannot distort the answer — true
+/// `folders_are_fine` is true when folder rows cannot distort the answer, true
 /// for find_files/count_files (which apply `files_only`), false for
 /// aggregate_files unless the caller explicitly asked for directories.
 pub fn analyze(query: &str, include_all: bool, folders_are_fine: bool) -> Vec<Warning> {
@@ -216,7 +216,7 @@ pub fn analyze(query: &str, include_all: bool, folders_are_fine: bool) -> Vec<Wa
 
     // `|` splits the query into alternatives, and a filter binds only to the
     // alternative it appears in. `*.bin | *.7z is:folder` means
-    // "(*.bin) OR (*.7z AND folder)" — not "(*.bin OR *.7z) AND folder", which
+    // "(*.bin) OR (*.7z AND folder)": not "(*.bin OR *.7z) AND folder", which
     // is what a caller means. The unfiltered side also matches directories, so
     // a count can come back higher than the file count for no visible reason.
     let groups: Vec<&str> = query

@@ -3,11 +3,11 @@
 //! Native NTFS indexer for the instant-file-search MCP server.
 //!
 //! Modes:
-//!   serve    — console mode: build the index, then serve queries + USN
+//!   serve: console mode: build the index, then serve queries + USN
 //!              updates over \\.\pipe\instant-file-search-indexer (default)
-//!   service  — Windows service mode (registers with SCM via `sc create`)
-//!   scan     — one-shot diagnostic scan, print stats, exit
-//!   help     — usage
+//!   service: Windows service mode (registers with SCM via `sc create`)
+//!   scan: one-shot diagnostic scan, print stats, exit
+//!   help: usage
 
 mod content;
 mod benchmark;

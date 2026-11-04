@@ -23,8 +23,8 @@ cargo build --release --workspace
 
 Outputs:
 
-- `target/release/instant-file-search-mcp-server` — the MCP server
-- `target/release/instant-file-search-indexer` — the native indexer
+- `target/release/instant-file-search-mcp-server`, the MCP server
+- `target/release/instant-file-search-indexer`, the native indexer
 
 Cross-checking from Windows (no Linux linker needed):
 
@@ -74,7 +74,7 @@ sudo /usr/local/lib/instant-file-search/instant-file-search-indexer scan
 | $MFT raw scan | `getdents64` walk + `statx` (inode = `file_ref`, btime = created) |
 | USN Change Journal | fanotify FID-mode marks (root/CAP_SYS_ADMIN; no inotify fallback yet) |
 | Named pipe | Unix socket `/tmp/instant-file-search-indexer.sock` |
-| Everything fallback | Not used — native is the only engine |
+| Everything fallback | Not used: native is the only engine |
 | Windows service (SCM) | systemd `Type=notify` + sd_notify |
 
 ## Known gaps (Linux)

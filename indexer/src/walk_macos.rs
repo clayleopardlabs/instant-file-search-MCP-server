@@ -149,9 +149,9 @@ fn read_timespec(buf: &[u8], off: usize) -> (i64, i64) {
 ///
 ///   u32 length  (whole record, 8-aligned)
 ///   attribute_set_t returned  (20 bytes: common/vol/dir/file/fork attrs)
-///   ATTR_CMN_ERROR (u32)            — if requested and returned
-///   ATTR_CMN_NAME (attrreference)   — if requested and returned
-///   ATTR_CMN_DEVID (u32)            — real devid under FSOPT_RETURN_REALDEV
+///   ATTR_CMN_ERROR (u32): if requested and returned
+///   ATTR_CMN_NAME (attrreference): if requested and returned
+///   ATTR_CMN_DEVID (u32): real devid under FSOPT_RETURN_REALDEV
 ///   ATTR_CMN_OBJTYPE (u32)
 ///   ATTR_CMN_CRTIME (timespec, 16)
 ///   ATTR_CMN_MODTIME (timespec, 16)
@@ -159,7 +159,7 @@ fn read_timespec(buf: &[u8], off: usize) -> (i64, i64) {
 ///   ATTR_CMN_FLAGS (u32)
 ///   ATTR_CMN_FILEID (u64, 4-aligned)
 ///   ATTR_FILE_DATALENGTH (u64, 4-aligned)
-///   name string (NUL-terminated, 4-padded) — at 24 + attr_dataoffset
+///   name string (NUL-terminated, 4-padded): at 24 + attr_dataoffset
 fn parse_record(buf: &[u8], off: usize) -> Option<(Entry, usize)> {
     if off + 24 > buf.len() {
         return None;

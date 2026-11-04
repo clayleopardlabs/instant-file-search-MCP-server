@@ -38,7 +38,7 @@ const BINARY_PATH: string =
 
 const CALL_TIMEOUT_MS = 90_000;
 
-// ── MCP stdio transport (NDJSON — newline-delimited JSON) ────────
+// ── MCP stdio transport (NDJSON: newline-delimited JSON) ────────
 // The rmcp crate's transport-io uses NDJSON, NOT Content-Length framing.
 // Each message is a single JSON line terminated by \n.
 

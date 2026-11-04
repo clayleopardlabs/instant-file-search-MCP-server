@@ -1,4 +1,4 @@
-//! Query engine — Everything-compatible search over the in-memory index.
+//! Query engine: Everything-compatible search over the in-memory index.
 //!
 //! Supports the same query syntax surface the MCP tools expose:
 //! wildcards (`*`, `?`), `regex:`, `case:`, `dm:`, `dc:`, `da:`, `size:`,
@@ -18,7 +18,7 @@ pub struct QueryOptions {
     pub exclude_path: Option<String>,
     pub include_all: bool,
     /// Exclude directories. The MCP layer sets this for find_files/count_files
-    /// so the query string itself is never rewritten — appending `file:` to the
+    /// so the query string itself is never rewritten, appending `file:` to the
     /// query broke whole-query regex mode (see 553db4d).
     pub files_only: bool,
     pub match_path: bool,
@@ -77,7 +77,7 @@ pub struct AggregateResult {
     pub folders: usize,
     /// Sum of sizes over all matched entries (files' own size; folders'
     /// recursive tree-summed size). Because a folder's size is its whole
-    /// subtree, this double-counts when the query also matches folders — e.g.
+    /// subtree, this double-counts when the query also matches folders, e.g.
     /// `query="*"` reports ~4x the real disk usage. Prefer `total_file_size`
     /// for disk-usage answers, or query `file:` so folders are not matched.
     pub total_size: u64,
@@ -419,7 +419,7 @@ pub fn tokenize(query: &str, opts: &QueryOptions) -> Vec<Token> {
             flush_group(&mut tokens, &mut group);
             continue;
         }
-        // `metric:` modifier — switches size interpretation to decimal 1000-based.
+        // `metric:` modifier: switches size interpretation to decimal 1000-based.
         if raw.to_ascii_lowercase() == "metric:" {
             metric_mode = true;
             continue;
@@ -454,7 +454,7 @@ pub fn tokenize(query: &str, opts: &QueryOptions) -> Vec<Token> {
                 negate,
             }
         } else if term.starts_with("case:") {
-            // `case:term` — case-sensitive term. NFC-normalize the form so
+            // `case:term`: case-sensitive term. NFC-normalize the form so
             // byte-exact comparison against an NFC-normalized name works.
             let pat = crate::platform::nfc_normalize(term[5..].trim());
             if negate {
@@ -475,7 +475,7 @@ pub fn tokenize(query: &str, opts: &QueryOptions) -> Vec<Token> {
                 }
             }
         } else if term.starts_with("ww:") || term.starts_with("wholeword:") {
-            // `ww:term` / `wholeword:term` — whole-word term (Everything
+            // `ww:term` / `wholeword:term`: whole-word term (Everything
             // modifier; also forced globally by the match_whole_word param).
             let pat = crate::platform::pattern_key(
                 term[term.find(':').unwrap() + 1..].trim(),
@@ -534,7 +534,7 @@ pub fn tokenize(query: &str, opts: &QueryOptions) -> Vec<Token> {
         } else if term.starts_with("file:") {
             Token::TypeFilter(TypeFilter::Files)
         } else if lower.starts_with("is:") {
-            // `is:` predicates — Everything shorthand for type/attribute filters.
+            // `is:` predicates: Everything shorthand for type/attribute filters.
             match lower[3..].trim() {
                 "folder" | "directory" => Token::TypeFilter(TypeFilter::Folders),
                 "file" => Token::TypeFilter(TypeFilter::Files),
@@ -885,16 +885,16 @@ fn parse_relative_span(s: &str) -> Option<(i64, i64)> {
 /// Everything-style relative date span evaluated at local time `now`.
 ///
 /// Semantics locked by live probes against Everything:
-/// - `lastNdays` / `pastNdays` / bare `Ndays` : rolling window ending now.
-/// - `prevNdays` / `previousNdays` : trailing window ending at today's start
+/// - `lastNdays` / `pastNdays` / bare `Ndays`: rolling window ending now.
+/// - `prevNdays` / `previousNdays`: trailing window ending at today's start
 ///   (`[today_start - N*day, today_start)`), NOT a rolling window.
-/// - `lastweek` / `pastweek` : rolling 7 days (Everything treats it as
-///   `last7days`); `prevweek` / `previousweek` : calendar previous week
+/// - `lastweek` / `pastweek`: rolling 7 days (Everything treats it as
+///   `last7days`); `prevweek` / `previousweek`: calendar previous week
 ///   (Sunday-start).
-/// - `lastmonth` / `pastmonth` : rolling 31 days (probe: equals
-///   `last31days` EXACTLY); `prevmonth` / `previousmonth` : calendar month.
-/// - `lastyear` / `pastyear` : rolling 365 days; `prevyear` /
-///   `previousyear` : calendar previous year.
+/// - `lastmonth` / `pastmonth`: rolling 31 days (probe: equals
+///   `last31days` EXACTLY); `prevmonth` / `previousmonth`: calendar month.
+/// - `lastyear` / `pastyear`: rolling 365 days; `prevyear` /
+///   `previousyear`: calendar previous year.
 fn parse_relative_span_at(s: &str, now: i64) -> Option<(i64, i64)> {
     let s = s.trim().to_ascii_lowercase();
     let today = start_of_day(now);
@@ -1517,7 +1517,7 @@ fn token_matches(
 /// a regex query always has at least two tokens and `flush_group` wraps them in
 /// `Token::Or`. The compiled-pattern map used to be built by scanning only
 /// top-level tokens, so a nested regex never compiled and
-/// `compiled.get(..).unwrap_or(false)` silently reported "no match" — every
+/// `compiled.get(..).unwrap_or(false)` silently reported "no match", every
 /// `regex:` query through the MCP tool returned zero results.
 fn collect_regex_patterns<'a>(tokens: &'a [Token], out: &mut Vec<(&'a str, bool)>) {
     for t in tokens {
@@ -2185,7 +2185,7 @@ mod tests {
 
     #[test]
     fn type_filter_and_date_and() {
-        // `file: dm:2026-08-01` — files modified on 2026-08-01 (unix 1785542400).
+        // `file: dm:2026-08-01`: files modified on 2026-08-01 (unix 1785542400).
         let got = run("file: dm:2026-08-01");
         assert_eq!(got, vec!["AGENTS.md", "demo.gif", "readme.md"]);
         // dm:2026-08-01 alone must still include dirs.
@@ -2865,7 +2865,7 @@ mod tests {
         // Regression: `dm:2026-08-01` must match local-midnight boundaries,
         // not UTC. `aug1` is the wall-clock-unix of local midnight Aug 1; a
         // file one minute before it belongs to dm:2026-07-31, one minute after
-        // belongs to dm:2026-08-01 — regardless of the host timezone.
+        // belongs to dm:2026-08-01: regardless of the host timezone.
         let aug1 = parse_date("2026-08-01").unwrap();
         // entry() stores `modified` as UTC unix; wall-clock = modified + offset.
         // A file whose wall-clock is local midnight Aug 1 has modified =

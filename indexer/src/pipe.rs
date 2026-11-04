@@ -127,7 +127,7 @@ impl PipeServer {
             if connected.is_err() {
                 let e = last_error();
                 // ERROR_PIPE_CONNECTED means a client connected between
-                // CreateNamedPipeW and ConnectNamedPipe — treat as connected.
+                // CreateNamedPipeW and ConnectNamedPipe, treat as connected.
                 if e.code() != HRESULT::from_win32(ERROR_PIPE_CONNECTED.0) {
                     unsafe {
                         let _ = DisconnectNamedPipe(pipe);

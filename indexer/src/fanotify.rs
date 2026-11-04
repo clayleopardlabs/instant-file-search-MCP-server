@@ -125,7 +125,7 @@ pub fn watch_all(
     let fd = fanotify_init()?;
 
     // Open an O_RDONLY fd on each volume root for handle resolution.
-    // Must NOT be O_PATH — kernel 7.0+ rejects O_PATH fds in open_by_handle_at
+    // Must NOT be O_PATH: kernel 7.0+ rejects O_PATH fds in open_by_handle_at
     // (returns EBADF). O_RDONLY | O_DIRECTORY works reliably.
     let mut mounts: Vec<Mount> = Vec::new();
     for v in volumes {

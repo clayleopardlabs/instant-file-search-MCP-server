@@ -119,15 +119,15 @@ administrator rights to delete and is left in place with a note.
 
 ## Troubleshooting
 
-- **`doctor.ps1 -RequireNative` fails after a "successful" install** — the
+- **`doctor.ps1 -RequireNative` fails after a "successful" install**, the
   admin step was skipped or denied. Run the printed elevated helper command
   (or re-run without `-SkipElevation`/`-NonInteractive`) and check again.
-- **DeepSeek Harness has no tools** — confirm the profile the app uses, run
+- **DeepSeek Harness has no tools**: confirm the profile the app uses, run
   `install.ps1 -Clients dsh -DshProfile <name>`, and restart only if the tools
   still do not appear. `-DshPresets` covers preset-scoped agents.
-- **Searches are slow or report the fallback engine** — the native indexer is
+- **Searches are slow or report the fallback engine**, the native indexer is
   still building its first index, or the service is not running
   (`sc.exe query instant-file-search-indexer`).
-- **Old version directories are piling up** — re-run with
+- **Old version directories are piling up**: re-run with
   `-PruneOldVersions`, after updating any clients the stale-registration scan
   reports.

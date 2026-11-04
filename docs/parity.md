@@ -44,12 +44,12 @@ adds the local offset to span boundaries and to entry FILETIME timestamps.
 - `today` / `yesterday`: calendar days in local time.
 - `lastNdays` / `pastNdays` / bare `Ndays`: rolling window `[now - N*day, now]`.
 - `prevNdays` / `previousNdays`: trailing window `[today_start - N*day,
-  today_start)` — NOT rolling.
+  today_start)`: NOT rolling.
 - `lastweek` / `pastweek`: rolling 7 days (Everything treats them as
   `last7days`). `prevweek` / `previousweek`: calendar previous week,
   Sunday-start.
 - `lastmonth` / `pastmonth`: rolling 31 days (probe: equals `last31days`
-  exactly — not 30, not the calendar month). `prevmonth` / `previousmonth`:
+  exactly: not 30, not the calendar month). `prevmonth` / `previousmonth`:
   calendar previous month.
 - `lastyear` / `pastyear`: rolling 365 days. `prevyear` / `previousyear`:
   calendar previous year.
@@ -102,7 +102,7 @@ into two terms.
 ## Status vs Everything (determination)
 
 The native engine is at **behavioral parity with Everything on the query
-surface agents actually use** — name, path, size (including recursive folder
+surface agents actually use**: name, path, size (including recursive folder
 sizes), regex, `case:`, excludes, and both relative and absolute date filters.
 The differential battery runs ~170 probes; every remaining DIFF is a
 characterized residual gap, not a native bug.
@@ -128,12 +128,12 @@ extended to cover the Everything tokens an agent would actually type.
    Threading the params in was not sufficient, and the battery still could not
    see it. Two further defects, both introduced by 553db4d (files-by-default
    appending a `file:` type token to the query):
-   - `regex:` token — the appended token gave every query two or more tokens,
+   - `regex:` token: the appended token gave every query two or more tokens,
      so `flush_group` wrapped them in `Token::Or`. The compiled-pattern map was
      built by scanning only top-level tokens, so a nested `Token::Regex` never
      compiled, and `compiled.get(..).unwrap_or(false)` turned that into "no
-     match". `regex:.*` — a pattern matching every name — returned nothing.
-   - `regex: true` — whole-query mode compiles the entire query string as one
+     match". `regex:.*`: a pattern matching every name, returned nothing.
+   - `regex: true`: whole-query mode compiles the entire query string as one
      pattern, so the appended ` file:` became literal text in the pattern.
    Fixed by collecting patterns recursively through `Token::Or` and lifting
    type tokens out of whole-query patterns (8252786), then removing the query
@@ -147,7 +147,7 @@ extended to cover the Everything tokens an agent would actually type.
    `content:"fn main"` finds 116 files.
 3. **Content-store fill order is nondeterministic.** The fill pass iterates
    candidate files in HashMap order and stops at the 256MB budget, so coverage
-   is effectively a random sample — repository files may or may not be picked.
+   is effectively a random sample: repository files may or may not be picked.
    FIXED: candidates are iterated in a stable order (sorted by path) so the
    same files are picked across runs and full coverage is reachable.
 
@@ -265,7 +265,7 @@ surface; every probe must be characterized before the battery is green.
   recursive folder sizes.
 - Dates: `today`/`yesterday`, `lastNdays`/`pastNdays`, `prevNdays` (trailing),
   `lastweek`/`prevweek`, `lastmonth` (rolling 31d), `lastyear`, and absolute
-  `dm:`/`dc:`/`da:` dates — all in local time.
+  `dm:`/`dc:`/`da:` dates: all in local time.
 - `path`/`parent` scoping, `file:`/`folder:` type filters, `sort`.
 
 ### Where native is strictly more correct
@@ -281,21 +281,21 @@ surface; every probe must be characterized before the battery is green.
 The native engine beats Everything on agent-relevant capability gaps. Three of
 the four are shipped; the fourth is designed but needs external embedding infra.
 
-1. **Aggregations — SHIPPED.** `aggregate` pipe method + `aggregate_files` MCP
+1. **Aggregations: SHIPPED.** `aggregate` pipe method + `aggregate_files` MCP
    tool. Runs the same filter as search, then returns the matched totals (file
    count, folder count, total size, largest files) and a per-extension
    breakdown (count + size). Works entirely off the existing in-memory index,
    using the recursive folder sizes for directory entries. Everything's API
-   returns raw result lists only — aggregating requires the caller to fetch
+   returns raw result lists only: aggregating requires the caller to fetch
    and sum everything.
-2. **Change queries — SHIPPED.** `recent_changes` pipe method + MCP tool. The
+2. **Change queries: SHIPPED.** `recent_changes` pipe method + MCP tool. The
    USN Change Journal watcher records every applied mutation (CREATE, WRITE,
    RENAME, DELETE, HARD_LINK) into a bounded in-memory ring buffer (cap
    100,000 events), keyed by event reason, local FILETIME timestamp, path, and
     is_dir. Query with `hours` (convenience time window), `since` (FILETIME),
     `reasons` (created/modified/renamed/deleted filter), and `limit` (default
     100, newest-first). Everything has no "what changed since X" API at all.
-3. **Content search — SHIPPED.** `content:"phrase"` query token (works through
+3. **Content search: SHIPPED.** `content:"phrase"` query token (works through
    `find_files`/`count_files`). A bounded `ContentStore` indexes file contents
    for a text-extension allowlist (see `indexer/src/content.rs`: md, txt, rs,
    py, js, ts, json, yml, toml, csv, log, etc.) with a per-file size cap
@@ -306,13 +306,13 @@ the four are shipped; the fourth is designed but needs external embedding infra.
    a `content_paths` constraint, composing with all existing AND/OR semantics.
    This genuinely exceeds Everything's `content:`, which depends on the
    Windows Search indexer and is slow/unreliable when the content indexer is
-   not running. Note: native-only — if the indexer is down the MCP server
+   not running. Note: native-only: if the indexer is down the MCP server
    falls back to Everything's `content:` (which needs the Windows Search
    indexer).
-4. **Semantic search — DESIGNED, NOT BUILT.** Nothing in Everything. The
+4. **Semantic search: DESIGNED, NOT BUILT.** Nothing in Everything. The
    native engine could integrate with the existing hindsight/embedding
    infrastructure, but this requires an embedding model backend, vector
-   storage, and a query-time similarity search — a separate project that
+   storage, and a query-time similarity search, a separate project that
    should not be invented silently. Design sketch: embed the text of
    content-indexed files at scan time (or lazily), store vectors keyed by
    path, and expose a `similar:"phrase"` token returning nearest neighbours.

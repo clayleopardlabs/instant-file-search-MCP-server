@@ -6,7 +6,7 @@
 
 ## Binary
 
-The project pins `x86_64-pc-windows-gnu` as the default Rust target (see `rust-toolchain.toml`). This avoids requiring the full Visual Studio Build Tools with C++ workload — only [MSYS2/MinGW-w64](https://www.msys2.org/) is needed for the GNU linker.
+The project pins `x86_64-pc-windows-gnu` as the default Rust target (see `rust-toolchain.toml`). This avoids requiring the full Visual Studio Build Tools with C++ workload, only [MSYS2/MinGW-w64](https://www.msys2.org/) is needed for the GNU linker.
 
 ```sh
 cargo build --release
@@ -22,7 +22,7 @@ cargo build --release --target x86_64-pc-windows-msvc
 
 ## Vendoring the portable engine
 
-The bundled engine lives at `vendor/everything/instant-file-search-fallback-engine-1.5.0.1418b.zip` (SHA256-pinned, MIT-licensed — see `vendor/everything/LICENSE-instant-file-search-fallback-engine-1.5.0.1418b.txt`). To re-fetch or update it:
+The bundled engine lives at `vendor/everything/instant-file-search-fallback-engine-1.5.0.1418b.zip` (SHA256-pinned, MIT-licensed, see `vendor/everything/LICENSE-instant-file-search-fallback-engine-1.5.0.1418b.txt`). To re-fetch or update it:
 
 ```powershell
 .\scripts\fetch-everything.ps1
@@ -30,7 +30,7 @@ The bundled engine lives at `vendor/everything/instant-file-search-fallback-engi
 
 The installer (`scripts\install.ps1`) extracts this zip into the stable install root's `everything\` folder alongside `instant-file-search-fallback-engine-1.5.0.1418b.ini`.
 
-## Plugin (optional — OpenCode sub-agent support)
+## Plugin (optional: OpenCode sub-agent support)
 
 ```sh
 cd plugin
@@ -46,6 +46,6 @@ The plugin adapter finds the MCP binary by (in order):
 1. `INSTANT_FS_MCP_BINARY` environment variable (`EVERYTHING_MCP_BINARY` accepted for backward compatibility)
 2. Stable install: `%LOCALAPPDATA%\ClayLeopardLabs\instant-file-search\instant-file-search-mcp-server.exe`
 3. Default path relative to the plugin's `dist/` directory: `../../target/release/instant-file-search-mcp-server.exe`
-4. Falls back to `PATH` — fails if not found
+4. Falls back to `PATH`: fails if not found
 
 If the binary path is wrong, all plugin tool calls fail silently. Set `INSTANT_FS_MCP_BINARY` to point at a release build.

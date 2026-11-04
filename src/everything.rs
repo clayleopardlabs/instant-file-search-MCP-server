@@ -169,7 +169,7 @@ fn launch_engine(path: &Path, bundled: bool) -> anyhow::Result<()> {
             .parent()
             .unwrap_or_else(|| Path::new("."))
             .join("instant-file-search-fallback-engine-1.5.0.1418b.ini");
-        // Run as the DEFAULT instance (no -instance flag): the Everything
+        // Run as the DEFAULT instance (no -instance flag), the Everything
         // service only serves the default instance, so the bundled GUI can
         // connect to a running service for indexing.
         cmd.args([
@@ -212,10 +212,10 @@ fn wait_for_engine(kind: &EngineKind, timeout: Duration) -> bool {
 /// Make sure a search engine is available, launching one if necessary.
 ///
 /// Priority:
-/// 1. A reachable, loaded Everything window already exists (user's install) — use it.
+/// 1. A reachable, loaded Everything window already exists (user's install), use it.
 /// 2. An installed Everything exists but is not reachable (e.g. service-only
-///    install) — launch its GUI, which bridges the running service.
-/// 3. No installed Everything — launch the bundled portable Everything.
+///    install), launch its GUI, which bridges the running service.
+/// 3. No installed Everything: launch the bundled portable Everything.
 pub fn ensure_engine() -> Result<EngineSource> {
     // 1. Existing, fully loaded engine.
     if let Ok(client) = EverythingClient::new() {
@@ -396,7 +396,7 @@ pub fn search(params: SearchParams) -> Result<SearchResults> {
 pub fn count(params: CountParams) -> Result<(u64, String)> {
     let client = create_client()?;
 
-    // Mirrors everything::search — keep the files-by-default rule in step.
+    // Mirrors everything::search: keep the files-by-default rule in step.
     let params = CountParams {
         query: crate::tools::default_to_files(&params.query),
         ..params
@@ -432,7 +432,7 @@ pub fn count(params: CountParams) -> Result<(u64, String)> {
 }
 
 /// Quick check whether Everything is running, IPC is available, and the DB
-/// is loaded.  This is stricter than `EverythingClient::new()` alone — it
+/// is loaded.  This is stricter than `EverythingClient::new()` alone, it
 /// also verifies the IPC message channel responds and the database is ready.
 #[allow(dead_code)]
 pub fn is_running() -> bool {
@@ -619,9 +619,9 @@ fn parse_fields(fields: Option<&str>) -> RequestFlags {
     flags
 }
 
-// ---- Tests (manual / integration only — require live Everything GUI) --------
+// ---- Tests (manual / integration only: require live Everything GUI) --------
 
-// ---- Tests (manual / integration only — require live Everything GUI) --------
+// ---- Tests (manual / integration only: require live Everything GUI) --------
 
 #[cfg(test)]
 mod tests {

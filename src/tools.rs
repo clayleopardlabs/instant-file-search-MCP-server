@@ -178,7 +178,7 @@ pub fn default_to_files(query: &str) -> String {
 }
 
 /// Delivered to the model in the `initialize` response, so every session starts
-/// with the rules that are easy to get wrong. Keep it short — it is always in
+/// with the rules that are easy to get wrong. Keep it short, it is always in
 /// context.
 ///
 /// These are the mistakes observed in real agent sessions:
@@ -189,7 +189,7 @@ pub fn default_to_files(query: &str) -> String {
 /// - `path:...` inside the query returned zero results.
 /// - Trusting an index hit that had been deleted a year earlier.
 pub const AGENT_INSTRUCTIONS: &str = "\
-Instant File Search — rules that prevent silent wrong answers.
+Instant File Search: rules that prevent silent wrong answers.
 
 1. aggregate_files: pass query=\"file:\". A bare \"*\" also matches folders, and a
    folder's size is its whole subtree, so total_size comes out ~4x too high.
@@ -199,7 +199,7 @@ Instant File Search — rules that prevent silent wrong answers.
 3. OR is the pipe: '*.a | *.b'. Writing 'OR' is treated as a literal name term
    and returns zero results.
 4. Scope with the `path` parameter (C:/Users/x). Do NOT put path:... inside the
-   query — it returns zero results for paths containing spaces.
+   query: it returns zero results for paths containing spaces.
 5. Multi-extension: ext:lsv,d2s or '*.a | *.b'.
 6. Results are FILES by default; add is:folder for directories.
 7. An invalid filter token matches NOTHING, not everything. If a query returns

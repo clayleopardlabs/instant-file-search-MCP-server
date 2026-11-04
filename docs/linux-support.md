@@ -38,7 +38,7 @@ GNOME Tracker (since 3.3) and FSearch (since 0.3) converged on.
   It does not yet provide an inotify fallback, so unprivileged execution and filesystems
   where filesystem-wide fanotify marks fail are reported as unsupported rather than
   silently providing incomplete change tracking.
-- **Event identity:** FID events carry `(fsid, file handle)` + parent handle + name —
+- **Event identity:** FID events carry `(fsid, file handle)` + parent handle + name, 
   survives renames, resolvable via `open_by_handle_at`. `FAN_RENAME` (5.17+) is a single
   atomic event with old+new parent+name (the USN rename analogue).
 - **Scalability:** one event queue per group, system-wide; default cap 16384 events
@@ -51,7 +51,7 @@ GNOME Tracker (since 3.3) and FSearch (since 0.3) converged on.
 XFS exposes an LSN (no userspace API); btrfs has an internal change log (no stable API).
 The kernel change-journal proposal (Amir Goldstein, LSFMM 2018-2025) is design-stage,
 unmerged. eBPF kprobes on `vfs_*` are viable (Datadog/Wazuh scale) but fragile across
-kernel versions, need root, and still have no persistence — wrong tool for an indexer.
+kernel versions, need root, and still have no persistence, wrong tool for an indexer.
 auditd can stream file events but loses events under load and is security-shaped.
 
 **Consequence for `recent_changes`:** the daemon persists its bounded event history as
@@ -77,10 +77,10 @@ maps space, not files).
   ~1.2M+ files/sec (kerything), ~2-3 s cold. But: needs root/disk-group, unsafe while
   mounted read-write (stale data vs kernel cache), and only ext4 has a stable documented
   linear inode table. XFS is a large btree-walk effort; btrfs's format is not a stable
-  ABI. **Not recommended as the default** — a walk is the sane engineering choice.
+  ABI. **Not recommended as the default**: a walk is the sane engineering choice.
 
 **Timestamps:** `stx_btime` ↔ date_created (ext4/XFS/btrfs yes; ext3/tmpfs/NFS no),
-`stx_mtime` ↔ date_modified, `stx_atime` ↔ date_accessed (unreliable on Linux defaults —
+`stx_mtime` ↔ date_modified, `stx_atime` ↔ date_accessed (unreliable on Linux defaults, 
 `relatime`/`noatime`). `stx_ctime` is NOT a file-change time (it's inode status change).
 
 ## 3. Index key (inode vs NTFS FRN)
@@ -88,12 +88,12 @@ maps space, not files).
 **Key by `(st_dev, st_ino)`, never `st_ino` alone** (POSIX identity pair; inode numbers
 repeat across filesystems). Rules:
 
-- **Drop entries on delete** — inode numbers are reused immediately and undetectably
+- **Drop entries on delete**: inode numbers are reused immediately and undetectably
   (no sequence-number guard, unlike NTFS FRN's 16-bit sequence).
-- **Do not persist `(st_dev, st_ino)` across reboots** — `st_dev` is not stable across
+- **Do not persist `(st_dev, st_ino)` across reboots**, `st_dev` is not stable across
   reboots (btrfs/ZFS change it; Baloo bug 402154). Persist `f_fsid`/file handles or
   rescan.
-- **Handle multi-path-per-inode** (hard links, bind mounts) — the "one path per file"
+- **Handle multi-path-per-inode** (hard links, bind mounts), the "one path per file"
   model already needs this on NTFS.
 - **btrfs subvolumes** report a per-subvolume anonymous `st_dev` (not in mountinfo, not
   stable); use `stx_subvol` (6.10+) or `(fsid, subvol, ino)`.
@@ -103,7 +103,7 @@ repeat across filesystems). Rules:
 **Parent resolution:** build `(dev, ino) → path` during the scan (as the Windows engine
 builds FRN→path). For incremental updates, fanotify FID events give the parent handle +
 child name (`FAN_REPORT_DIR_FID|FAN_REPORT_NAME`) or the child's own handle
-(`FAN_REPORT_TARGET_FID`) — resolve via `open_by_handle_at` + `fstatat`. `FAN_RENAME`
+(`FAN_REPORT_TARGET_FID`), resolve via `open_by_handle_at` + `fstatat`. `FAN_RENAME`
 updates the path old→new atomically.
 
 ## Porting plan (what would need to change)
@@ -122,7 +122,7 @@ updates the path old→new atomically.
 
 **Verdict:** a Linux port is feasible and the query surface (wildcards, filters, dates,
 `recent_changes`, `aggregate_files`) ports cleanly. The two real costs are (1) the
-initial scan is a walk, not a raw read — seconds-to-minutes instead of instant, and
-(2) `recent_changes` loses kernel-side persistence — the daemon must own the ring buffer
+initial scan is a walk, not a raw read: seconds-to-minutes instead of instant, and
+(2) `recent_changes` loses kernel-side persistence, the daemon must own the ring buffer
 and rescan after downtime. Everything's fallback engine is Windows-only, so Linux is
 native-only by construction.

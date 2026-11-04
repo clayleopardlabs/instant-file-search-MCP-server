@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# install-linux.sh — Instant File Search: build, deploy, and register the
+# install-linux.sh: Instant File Search: build, deploy, and register the
 # native indexer + MCP server on Linux (Ubuntu 24.04 LTS / systemd).
 #
 # Mirrors scripts/install.ps1 for Windows. What it does:
