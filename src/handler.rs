@@ -11,7 +11,7 @@ use tracing::error;
 use crate::everything;
 use crate::native;
 use crate::tools::{
-    AggregateParams, CountParams, RecentChangesParams, SearchParams, StatusParams,
+    AggregateParams, CountParams, RecentChangesParams, SearchParams,
 };
 
 /// Probe the Everything fallback engine for `search_status`. Windows-only;
@@ -204,11 +204,8 @@ impl EverythingHandler {
         Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
 
-    #[tool(description = "Check the file search service health: engine status, indexed file count, volumes. Call this before find_files/count_files if you suspect the service is down. Pass verify_sample=N to stat N indexed paths and report any that are missing or changed size, which is how you tell whether the index still agrees with the filesystem before trusting a total.")]
-    async fn search_status(
-        &self,
-        Parameters(params): Parameters<StatusParams>,
-    ) -> Result<CallToolResult, ErrorData> {
+    #[tool(description = "Check the file search service health: engine status, indexed file count, volumes. Call this before find_files/count_files if you suspect the service is down.")]
+    async fn search_status(&self) -> Result<CallToolResult, ErrorData> {
         let (native_result, everything_result) = tokio::task::spawn_blocking(|| {
             (native::status(), everything_status_probe())
         })
@@ -261,54 +258,20 @@ impl EverythingHandler {
             Err(e) => serde_json::json!({ "ok": false, "error": e.to_string() }),
         };
 
-        let mut json = serde_json::json!({
+        let json = serde_json::json!({
             "server": { "version": crate::APP_VERSION, "commit": crate::BUILD_COMMIT },
             "native": native_status,
             "everything": everything_status,
             "warnings": warnings,
         });
 
-        // Opt-in trust check. A stale index is the usual reason this server
-        // disagrees with Explorer or a shell count, and the disagreement is
-        // otherwise invisible: every number still looks confident.
-        //
-        // A path is required. Sampling unscoped means searching every indexed
-        // volume to collect N rows, which on a multi-million-file index takes
-        // long enough that the tool call appears to hang. Scope it to the folder
-        // whose totals you are about to quote, which is also the more useful
-        // check.
-        if let Some(n) = params.verify_sample.filter(|n| *n > 0) {
-            let Some(path) = params.path.clone() else {
-                return Err(ErrorData::invalid_params(
-                    "verify_sample requires `path`. An unscoped verification searches every indexed volume to collect its sample and can appear to hang on a large index. Scope it to the folder whose totals you intend to quote, for example path=\"C:/Users/you/Downloads\".",
-                    None,
-                ));
-            };
-            let report =
-                tokio::task::spawn_blocking(move || sample_index(n as usize, Some(&path)))
-                    .await
-                    .map_err(|e| {
-                        error!("spawn_blocking failed: {e}");
-                        ErrorData::internal_error(format!("task join failed: {e}"), None)
-                    })?;
-            match report {
-                Ok(r) => {
-                    let clean = r.is_clean();
-                    json["verify"] = serde_json::to_value(&r).unwrap_or(serde_json::Value::Null);
-                    if !clean {
-                        json["verify"]["verdict"] = serde_json::json!(
-                            "Sampled index rows disagree with the filesystem. The index is a snapshot: it can keep entries for files that no longer exist, and sizes written by an older parser stay until the index is rebuilt. Rebuild the index before trusting any total from this server."
-                        );
-                    } else {
-                        json["verify"]["verdict"] =
-                            serde_json::json!("Sample agrees with the filesystem.");
-                    }
-                }
-                Err(e) => {
-                    json["verify"] = serde_json::json!({ "error": e.to_string() });
-                }
-            }
-        }
+        // NOTE: index-versus-filesystem verification (`verify_sample`) is NOT
+        // wired here yet. It is implemented and unit tested in `src/verify.rs`
+        // and `sample_index` below, but calling it from this handler blocked
+        // indefinitely against the live index in testing, and a tool call that
+        // never returns is worse than the missing check. The module is kept so
+        // the follow-up starts from tested code rather than a blank page.
+        // Do not re-enable without reproducing the block first.
 
         let text = serde_json::to_string_pretty(&json)
             .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
@@ -320,6 +283,10 @@ impl EverythingHandler {
 ///
 /// Uses the ordinary search path so the sample is exactly what a caller would
 /// have been given, then checks each one against the filesystem.
+///
+/// Currently unused: see the note in `search_status`. Kept (with its tests) as
+/// the starting point for the verification feature.
+#[allow(dead_code)]
 fn sample_index(n: usize, path: Option<&str>) -> anyhow::Result<crate::verify::VerifyReport> {
     let params = SearchParams {
         query: "file:".to_string(),
