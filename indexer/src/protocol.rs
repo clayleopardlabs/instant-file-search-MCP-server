@@ -129,6 +129,10 @@ pub fn handle(state: &IndexerState, req: Request) -> Response<'static> {
                 since: i64,
                 limit: usize,
                 reasons: Option<String>,
+                /// Scope the feed to one subtree. Without this the method
+                /// accepted a plausible looking request and returned every
+                /// drive's activity, which reads as a correct answer.
+                path: Option<String>,
             }
             impl Default for RecentParams {
                 fn default() -> Self {
@@ -136,6 +140,7 @@ pub fn handle(state: &IndexerState, req: Request) -> Response<'static> {
                         since: 0,
                         limit: 100,
                         reasons: None,
+                        path: None,
                     }
                 }
             }
@@ -149,10 +154,12 @@ pub fn handle(state: &IndexerState, req: Request) -> Response<'static> {
                     }
                 }
             };
-            let changes =
-                state
-                    .index
-                    .recent_changes_filtered(p.since, p.limit, p.reasons.as_deref());
+            let changes = state.index.recent_changes_scoped(
+                p.since,
+                p.limit,
+                p.reasons.as_deref(),
+                p.path.as_deref(),
+            );
             Response {
                 ok: true,
                 data: Some(serde_json::json!({"changes": changes})),

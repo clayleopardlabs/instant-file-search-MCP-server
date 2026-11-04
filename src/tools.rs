@@ -84,7 +84,6 @@ pub struct SearchParams {
     /// Maximum depth below `path`: 1 means direct children only. Use this to see what is loose in a folder without also matching every nested file.
     pub depth: Option<u32>,
     /// Comma-separated list of fields to return: filename, path, size, date_modified, date_created, date_accessed, attributes, extension, run_count, date_run, date_recently_changed.
-    #[allow(dead_code)]
     pub fields: Option<String>,
     /// Directories to exclude from results. Supports Everything ! prefix syntax. Pass one or more paths separated by `;`. Example: "C:\\Windows\\WinSxS;C:\\Program Files" skips both directories. Can also be a partial path like "node_modules" to exclude all folders with that name anywhere.
     pub exclude_path: Option<String>,
@@ -152,6 +151,8 @@ pub struct RecentChangesParams {
     pub limit: Option<usize>,
     /// Only return events with these reasons. Comma-separated subset of: created, modified, renamed, deleted. Default: all. USE THIS to skip delete noise (e.g. reasons=created,modified).
     pub reasons: Option<String>,
+    /// Restrict events to paths under this directory. Without it you get the change feed for every indexed drive, which is rarely what a scoped question wants.
+    pub path: Option<String>,
 }
 
 /// Tool-level default type filter: `find_files` and `count_files` return files.

@@ -385,6 +385,43 @@ impl FileIndex {
             .collect()
     }
 
+    /// Like [`recent_changes_filtered`](Self::recent_changes_filtered) but
+    /// restricted to paths under `scope`.
+    ///
+    /// A scoped request used to be accepted and then ignored: the caller got the
+    /// global change feed across every drive, with nothing in the response
+    /// saying so. A wrong answer that looks right is worse than an error, so the
+    /// scope is applied here rather than trusted to the client.
+    pub fn recent_changes_scoped(
+        &self,
+        since: i64,
+        limit: usize,
+        reasons: Option<&str>,
+        scope: Option<&str>,
+    ) -> Vec<ChangeEvent> {
+        let scope = scope
+            .map(|p| {
+                let norm = crate::platform::normalize_path(p);
+                crate::platform::trim_trailing_sep(&crate::platform::canonical_key(&norm))
+                    .to_string()
+            })
+            .filter(|s| !s.is_empty());
+        let mut events = self.recent_changes_filtered(since, usize::MAX, reasons);
+        if let Some(scope) = scope {
+            events.retain(|e| {
+                let lower = e.path.replace('/', "\\").to_ascii_lowercase();
+                lower == scope
+                    || (lower.starts_with(&scope)
+                        && matches!(
+                            lower.as_bytes().get(scope.len()),
+                            Some(b'\\') | Some(b':')
+                        ))
+            });
+        }
+        events.truncate(if limit == 0 { usize::MAX } else { limit });
+        events
+    }
+
     /// Remove an entry and everything under it (directory delete). The whole
     /// subtree vanishes at once, so only the ancestors of `prefix` need their
     /// recursive total reduced by the subtree's size.

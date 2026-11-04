@@ -388,8 +388,13 @@ pub struct RecentChanges {
     pub changes: Vec<ChangeEvent>,
 }
 
-fn options_from_recent(since: i64, limit: usize, reasons: Option<String>) -> serde_json::Value {
-    json!({ "since": since, "limit": limit, "reasons": reasons })
+fn options_from_recent(
+    since: i64,
+    limit: usize,
+    reasons: Option<String>,
+    path: Option<String>,
+) -> serde_json::Value {
+    json!({ "since": since, "limit": limit, "reasons": reasons, "path": path })
 }
 
 /// Recent USN change events from the native indexer. Exceed capability with
@@ -411,7 +416,7 @@ pub fn recent_changes(params: &RecentChangesParams) -> Result<RecentChanges> {
         (None, None) => 0,
     };
     let limit = params.limit.unwrap_or(100);
-    let data = exchange("recent_changes", Some(options_from_recent(since, limit, params.reasons.clone())))?;
+    let data = exchange("recent_changes", Some(options_from_recent(since, limit, params.reasons.clone(), params.path.clone())))?;
     let mut changes: RecentChanges =
         serde_json::from_value(data).map_err(|e| anyhow!("native recent_changes: bad response: {e}"))?;
     // The wire carries the raw USN timestamp; derive the readable form here so

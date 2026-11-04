@@ -15,7 +15,7 @@
 - **Default auto-exclusions** (skip unless `include_all=true`): `node_modules`, `.git`, `WinSxS`, `$Recycle.Bin`, `System Volume Information`
 - **`exclude_path` separator**: `;` (semicolon), not comma
 - **Default scope**: ALL indexed drives. Narrow with `path` (forward slashes like `C:/Users` work; the engine normalizes them)
-- **`find_files` and `count_files` return files, not directories.** Directories are indexed and carry the aggregate size of everything under them, so an unqualified `size:>1gb` used to rank `C:` above every real file. The native engine applies this as a `files_only` option rather than by rewriting the query: appending a `file:` token to the query string silently broke `regex:` and `regex: true` (8252786, 68a1c23). Add `is:folder`, `folder:`, or an `attrib:` filter (`attrib:d`) to include them. `aggregate_files` applies the same rule, so all three tools report the same `total` for the same query.
+- **`find_files` and `count_files` return files, not directories.** Directories are indexed and carry the aggregate size of everything under them, so an unqualified `size:>1gb` used to rank `C:` above every real file. The native engine applies this as a `files_only` option rather than by rewriting the query: appending a `file:` token to the query string silently broke `regex:` and `regex: true` (8252786, 68a1c23). To match directories instead of files, use `is:folder`, `folder:`, or `attrib:d`. These match directories only; they do not add directories alongside files. `aggregate_files` applies the same rule, so all three tools report the same `total` for the same query.
 - Every result carries `is_dir`, so a caller can filter either way without re-querying.
 - `aggregate_files` reports one size field, `total_file_size`: the sum of
   matched file sizes. Folder rows never contribute, because a folder's size is
@@ -180,3 +180,17 @@ The scope root is never returned as its own result. Asking what is inside
 | code | meaning |
 |------|---------|
 | `REGEX_IN_QUERY` | `regex:` inside the query is a literal name fragment, not a pattern; pass `regex: true` and put the pattern in the query |
+## Row projection and change scoping
+
+`find_files` accepts `fields`, a comma-separated list such as
+`filename,path,size`. Rows are trimmed to exactly those keys, which keeps large
+listings small. The envelope (`total`, `returned`, `offset`, `note`, `parsed`,
+`warnings`) is always present. Before this was implemented the parameter was
+accepted and discarded, so every row came back with all nine fields; a silently
+ignored argument is worse than an absent one, because an absent argument errors
+and an ignored one just bloats the reply.
+
+`recent_changes` is a **global** feed across every indexed drive unless you pass
+`path`. A scoped question such as "has this folder changed since install" needs
+that argument, and previously it was accepted and ignored, returning activity from
+other drives as though it were the answer.

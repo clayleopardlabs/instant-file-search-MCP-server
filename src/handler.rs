@@ -71,6 +71,35 @@ fn annotate(
     value
 }
 
+/// Trim each result object down to the requested `fields`.
+///
+/// The parameter used to be accepted and thrown away, so every row returned all
+/// nine fields regardless of what was asked for. A no-op argument is worse than
+/// an absent one: an absent argument produces an error you can learn from, while
+/// a silently ignored one produces bloat you have to notice.
+fn project_fields(
+    mut value: serde_json::Value,
+    fields: Option<&str>,
+) -> serde_json::Value {
+    let Some(fields) = fields else { return value };
+    let wanted: Vec<String> = fields
+        .split(',')
+        .map(|f| f.trim().to_ascii_lowercase())
+        .filter(|f| !f.is_empty())
+        .collect();
+    if wanted.is_empty() {
+        return value;
+    }
+    if let Some(rows) = value.get_mut("results").and_then(|v| v.as_array_mut()) {
+        for row in rows.iter_mut() {
+            if let Some(obj) = row.as_object_mut() {
+                obj.retain(|key, _| wanted.iter().any(|w| w == key));
+            }
+        }
+    }
+    value
+}
+
 /// Hard ceiling on how long any tool call may take.
 ///
 /// A tool call that never returns is the worst failure mode this server has: the
@@ -134,6 +163,7 @@ impl EverythingHandler {
         reject_invalid_filters(&params.query)?;
         let query = params.query.clone();
         let include_all = params.include_all.unwrap_or(false);
+        let fields = params.fields.clone();
         let result = blocking_bounded("find_files", move || match native::search(&params) {
             Ok(r) => Ok(r),
             Err(e) => {
@@ -152,6 +182,7 @@ impl EverythingHandler {
 
         let value = serde_json::to_value(&result)
             .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
+        let value = project_fields(value, fields.as_deref());
         let value = annotate(value, &query, include_all);
         let text = serde_json::to_string_pretty(&value)
             .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
@@ -214,7 +245,7 @@ impl EverythingHandler {
         Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
 
-    #[tool(description = "List recently created, modified, renamed, or deleted files across all indexed drives. USE THIS to answer 'what files changed recently?' or 'what was modified in the last hour?'. Returns change events with timestamps, paths, and reason (created/modified/renamed/deleted), newest-first. SIMPLEST USAGE: pass hours=1 to get the last hour, hours=24 for the last day; the server computes the FILETIME for you. Results are capped at 100 by default (newest first); pass a larger limit or reasons=created,modified to skip delete noise. Also accepts 'since' (Windows FILETIME, 100ns since 1601, NOT .NET ticks).")]
+    #[tool(description = "List recently created, modified, renamed, or deleted files across all indexed drives. USE THIS to answer 'what files changed recently?' or 'what was modified in the last hour?'. Returns change events with timestamps, paths, and reason (created/modified/renamed/deleted), newest-first. SIMPLEST USAGE: pass hours=1 to get the last hour, hours=24 for the last day; the server computes the FILETIME for you. Results are capped at 100 by default (newest first); pass a larger limit or reasons=created,modified to skip delete noise. Also accepts 'since' (Windows FILETIME, 100ns since 1601, NOT .NET ticks). This is a GLOBAL feed unless you pass path=...; a scoped question about one folder needs that argument.")]
     async fn recent_changes(
         &self,
         Parameters(params): Parameters<RecentChangesParams>,
@@ -433,5 +464,37 @@ mod tests {
                 "search_status",
             ]
         );
+    }
+}
+
+#[cfg(test)]
+mod projection_tests {
+    use super::project_fields;
+
+    #[test]
+    fn project_fields_keeps_only_the_requested_keys() {
+        let value = serde_json::json!({
+            "total": 1,
+            "results": [{
+                "filename": "a.txt",
+                "path": "C:\\\\x",
+                "size": 1,
+                "attributes": "A"
+            }]
+        });
+        let out = project_fields(value, Some("filename,size"));
+        let row = &out["results"][0];
+        assert_eq!(row["filename"], "a.txt");
+        assert_eq!(row["size"], 1);
+        assert!(row.get("path").is_none(), "unrequested fields must be dropped");
+        assert!(row.get("attributes").is_none());
+        assert!(out.get("total").is_some(), "the envelope must survive");
+    }
+
+    #[test]
+    fn project_fields_is_a_no_op_without_the_parameter() {
+        let value = serde_json::json!({"results": [{"filename": "a", "size": 1}]});
+        let out = project_fields(value.clone(), None);
+        assert_eq!(out, value);
     }
 }
