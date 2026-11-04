@@ -154,6 +154,7 @@ mod parity_tests {
         let params = |q: &str, p: Option<&str>| CountParams {
             query: q.to_string(),
             path: p.map(|s| s.to_string()),
+            depth: None,
             regex: None,
             match_case: None,
             match_whole_word: None,
@@ -233,6 +234,7 @@ mod parity_tests {
             match crate::everything::search(crate::tools::SearchParams {
                 query: q.to_string(),
                 path: None,
+                depth: None,
                 regex: None,
                 match_case: None,
                 match_whole_word: None,
@@ -263,6 +265,7 @@ mod parity_tests {
         let params = |q: &str| CountParams {
             query: q.to_string(),
             path: None,
+            depth: None,
             regex: None,
             match_case: None,
             match_whole_word: None,
@@ -315,6 +318,7 @@ mod parity_tests {
         let params = |q: &str| CountParams {
             query: q.to_string(),
             path: None,
+            depth: None,
             regex: None,
             match_case: None,
             match_whole_word: None,
@@ -360,6 +364,7 @@ mod parity_tests {
         let params = |q: &str| CountParams {
             query: q.to_string(),
             path: None,
+            depth: None,
             regex: None,
             match_case: None,
             match_whole_word: None,
@@ -395,6 +400,7 @@ mod parity_tests {
         let params = |q: &str| CountParams {
             query: q.to_string(),
             path: None,
+            depth: None,
             regex: None,
             match_case: None,
             match_whole_word: None,
@@ -435,6 +441,7 @@ mod parity_tests {
         let params = |q: &str| CountParams {
             query: q.to_string(),
             path: None,
+            depth: None,
             regex: None,
             match_case: None,
             match_whole_word: None,

@@ -286,6 +286,17 @@ pub fn analyze(query: &str, include_all: bool) -> Vec<Warning> {
         ));
     }
 
+    // `regex:` inside the query is a literal name term, not a regex. Agents
+    // reach for it because the parameter and the token share a name, and the
+    // failure is silent: zero results, which reads as "no such file".
+    if query.to_ascii_lowercase().contains("regex:") {
+        warnings.push(Warning::new(
+            "REGEX_IN_QUERY",
+            "`regex:` inside the query is treated as a literal filename fragment, not a regular expression, so this query matches nothing. Pass the pattern with the `regex: true` parameter instead, or use wildcards.",
+            None,
+        ));
+    }
+
     // No folder-inflation warning is needed any more: aggregate_files applies
     // the same files-by-default rule as find_files and count_files, so a bare
     // `*` cannot pull folder rows into the size total in the first place.

@@ -28,6 +28,11 @@ pub struct QueryOptions {
     pub max_results: usize,
     pub offset: usize,
     pub sort: Option<String>,
+    /// Maximum depth below `path`, where 1 means direct children only. Without
+    /// this a scoped query matches at any depth, so "what is loose in this
+    /// folder" is not expressible and folder listings return every nested
+    /// directory. Ignored when `path` is unset.
+    pub depth: Option<usize>,
     /// Lowercase paths allowed by a `content:"..."` constraint. When set,
     /// only entries whose lowercased path appears here pass the filter.
     /// Populated by the pipe layer from the ContentStore.
@@ -65,6 +70,9 @@ pub struct AggregateOptions {
     /// contains in `largest`. Set from the query: an explicit `is:folder`,
     /// `folder:` or `attrib:d` opts back in to directories.
     pub files_only: bool,
+    /// Maximum depth below `path`, where 1 means direct children only. This is
+    /// what makes "which subfolders is this folder made of" a single call.
+    pub depth: Option<usize>,
     /// Lowercase paths allowed by a `content:"..."` constraint.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub content_paths: Option<Vec<String>>,
@@ -81,16 +89,22 @@ pub struct AggregateResult {
     pub files: usize,
     /// Matched folder count.
     pub folders: usize,
-    /// Sum of sizes of matched FILES. This answers "how much space do these
-    /// take". Folder rows never contribute, because a folder's size is the sum
-    /// of everything beneath it, so summing folder rows double-counts. There is
-    /// deliberately no second, larger total: an agent should never have to pick
-    /// between two numbers.
+    /// Sum of the sizes of matched entries. Because the tools are files-only by
+    /// default this is the sum of matched file sizes in normal use. When the
+    /// caller explicitly asks for folders (`is:folder`) it sums those folders'
+    /// subtree sizes instead, which is the number that query is asking for.
+    /// There is deliberately no second, larger total: an agent should never have
+    /// to pick between two numbers.
     pub total_file_size: u64,
     /// The `top` largest matched entries by size.
     pub largest: Vec<AggregateLargest>,
-    /// Per-extension counts and size totals over matched files.
+    /// Per-extension counts and size totals over matched files, largest by size
+    /// first and capped at `top`. Uncapped, a whole-drive aggregate returns
+    /// hundreds of single-file extensions, which floods the caller and buries
+    /// the rows that actually matter.
     pub by_extension: Vec<AggregateExt>,
+    /// How many extensions the `top` cap left out of `by_extension`.
+    pub by_extension_omitted: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1703,6 +1717,23 @@ impl<'a> EntryFilter<'a> {
             } else {
                 return false;
             }
+            // The scope root is not a child of itself. Listing "what is in X"
+            // used to return X (its entry carries the parent directory plus the
+            // name "X"), which reads as a bogus result.
+            if lp.len() == self.scope_lower.len() {
+                return false;
+            }
+            // Depth is counted from the scope, so `depth: 1` is exactly the
+            // direct children.
+            if let Some(max_depth) = self.opts.depth {
+                if max_depth > 0 {
+                    let rel = lp[self.scope_lower.len()..].trim_start_matches(['\\', '/']);
+                    let seps = rel.bytes().filter(|b| *b == b'\\' || *b == b'/').count();
+                    if seps + 1 > max_depth {
+                        return false;
+                    }
+                }
+            }
         }
         if !self.exclude_parts.is_empty() {
             let lp = entry.lower_path.as_bytes();
@@ -1949,6 +1980,7 @@ pub fn aggregate(
         exclude_path: opts.exclude_path.clone(),
         include_all: opts.include_all,
         files_only: opts.files_only,
+        depth: opts.depth,
         match_path: opts.match_path,
         regex: opts.regex,
         match_case: opts.match_case,
@@ -1959,16 +1991,18 @@ pub fn aggregate(
 
     let mut files = 0usize;
     let mut folders = 0usize;
-    let mut total_file_size = 0u64;
+    let mut files_size = 0u64;
+    let mut folders_size = 0u64;
     let mut by_ext: HashMap<String, AggregateExt> = HashMap::new();
     let mut largest: Vec<AggregateLargest> = Vec::new();
 
     for e in &matched {
         if e.is_dir {
             folders += 1;
+            folders_size = folders_size.saturating_add(e.size);
         } else {
             files += 1;
-            total_file_size = total_file_size.saturating_add(e.size);
+            files_size = files_size.saturating_add(e.size);
             let ext = e.extension.as_deref().unwrap_or("").to_ascii_lowercase();
             let slot = by_ext.entry(ext.clone()).or_insert_with(|| AggregateExt {
                 extension: ext,
@@ -1990,19 +2024,26 @@ pub fn aggregate(
     largest.truncate(top);
 
     let mut by_extension: Vec<AggregateExt> = by_ext.into_values().collect();
+    // Size first: for disk-usage questions the bytes are the point, and sorting
+    // by count buries the big extensions under a long tail of tiny ones.
     by_extension.sort_by(|a, b| {
-        b.count
-            .cmp(&a.count)
+        b.size
+            .cmp(&a.size)
+            .then_with(|| b.count.cmp(&a.count))
             .then_with(|| a.extension.cmp(&b.extension))
     });
+    let ext_shown = by_extension.len().min(top);
+    let by_extension_omitted = by_extension.len() - ext_shown;
+    by_extension.truncate(ext_shown);
 
     AggregateResult {
         total: matched.len(),
         files,
         folders,
-        total_file_size,
+        total_file_size: if files > 0 { files_size } else { folders_size },
         largest,
         by_extension,
+        by_extension_omitted,
     }
 }
 
@@ -2017,6 +2058,7 @@ pub fn aggregate_iter(
         exclude_path: opts.exclude_path.clone(),
         include_all: opts.include_all,
         files_only: opts.files_only,
+        depth: opts.depth,
         match_path: opts.match_path,
         regex: opts.regex,
         match_case: opts.match_case,
@@ -2028,7 +2070,8 @@ pub fn aggregate_iter(
     let mut total = 0usize;
     let mut files = 0usize;
     let mut folders = 0usize;
-    let mut total_file_size = 0u64;
+    let mut files_size = 0u64;
+    let mut folders_size = 0u64;
     let mut by_ext: HashMap<String, AggregateExt> = HashMap::new();
     let mut largest: Vec<AggregateLargest> = Vec::new();
     for e in entries {
@@ -2038,9 +2081,10 @@ pub fn aggregate_iter(
         total += 1;
         if e.is_dir {
             folders += 1;
+            folders_size = folders_size.saturating_add(e.size);
         } else {
             files += 1;
-            total_file_size = total_file_size.saturating_add(e.size);
+            files_size = files_size.saturating_add(e.size);
             let ext = e.extension.as_deref().unwrap_or("").to_ascii_lowercase();
             let slot = by_ext.entry(ext.clone()).or_insert_with(|| AggregateExt {
                 extension: ext,
@@ -2070,18 +2114,25 @@ pub fn aggregate_iter(
     }
     largest.sort_by(|a, b| b.size.cmp(&a.size).then_with(|| a.path.cmp(&b.path)));
     let mut by_extension: Vec<AggregateExt> = by_ext.into_values().collect();
+    // Size first: for disk-usage questions the bytes are the point, and sorting
+    // by count buries the big extensions under a long tail of tiny ones.
     by_extension.sort_by(|a, b| {
-        b.count
-            .cmp(&a.count)
+        b.size
+            .cmp(&a.size)
+            .then_with(|| b.count.cmp(&a.count))
             .then_with(|| a.extension.cmp(&b.extension))
     });
+    let ext_shown = by_extension.len().min(top);
+    let by_extension_omitted = by_extension.len() - ext_shown;
+    by_extension.truncate(ext_shown);
     AggregateResult {
         total,
         files,
         folders,
-        total_file_size,
+        total_file_size: if files > 0 { files_size } else { folders_size },
         largest,
         by_extension,
+        by_extension_omitted,
     }
 }
 
@@ -3066,7 +3117,10 @@ mod tests {
         let folders = run("is:folder", false);
         assert_eq!(folders.total, 1);
         assert_eq!(folders.folders, 1);
-        assert_eq!(folders.total_file_size, 0);
+        assert_eq!(
+            folders.total_file_size, 100,
+            "listing folders must report their subtree sizes"
+        );
         assert_eq!(folders.largest.len(), 1);
         assert!(folders.largest[0].is_dir);
 

@@ -154,3 +154,29 @@ The last row is the one worth checking rather than assuming. `search_status` tak
             "verdict": "Sample agrees with the filesystem." }
 ```
 ```
+
+## Depth, folder totals and response size
+
+`depth` limits results to N levels below `path`, where `depth: 1` is the direct
+children. Without it, a scoped query matched at every depth, so "what is loose in
+this folder" was not expressible and folder listings came back dominated by
+thousands of nested directories that could not be summed.
+
+Pair `depth` with `is:folder` on `aggregate_files` to total each subfolder of a
+directory in one call.
+
+`total_file_size` is the sum of matched file sizes, or the sum of the matched
+folders' subtree sizes when the query asked for folders with `is:folder`. It
+remains a single field, never two numbers to choose between.
+
+`by_extension` is capped at `top` entries, largest by size first, and reports how
+many it left out in `by_extension_omitted`. Uncapped, a whole-drive aggregate
+returned several hundred single-file extensions and pushed the useful rows out of
+the response entirely.
+
+The scope root is never returned as its own result. Asking what is inside
+`C:/Users/you/Downloads` no longer lists `Downloads`.
+
+| code | meaning |
+|------|---------|
+| `REGEX_IN_QUERY` | `regex:` inside the query is a literal name fragment, not a pattern; pass `regex: true` and put the pattern in the query |

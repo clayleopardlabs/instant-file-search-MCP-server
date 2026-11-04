@@ -188,6 +188,7 @@ fn options_from_search(params: &SearchParams) -> serde_json::Value {
         "match_case": params.match_case.unwrap_or(false),
         "match_whole_word": params.match_whole_word.unwrap_or(false),
         "match_path": params.match_path.unwrap_or(false),
+        "depth": params.depth,
         "max_results": max_results,
         "offset": params.offset.unwrap_or(0) as usize,
         "sort": params.sort,
@@ -204,6 +205,7 @@ fn options_from_count(params: &CountParams) -> serde_json::Value {
         "regex": params.regex.unwrap_or(false),
         "match_case": params.match_case.unwrap_or(false),
         "match_whole_word": params.match_whole_word.unwrap_or(false),
+        "depth": params.depth,
         "max_results": 0,
         "offset": 0,
         "sort": None::<String>,
@@ -319,8 +321,12 @@ pub struct AggregateResult {
     pub total_file_size: u64,
     /// The `top` largest matched entries by size.
     pub largest: Vec<AggregateLargest>,
-    /// Per-extension counts and size totals over matched files.
+    /// Per-extension counts and size totals over matched files, largest first
+    /// and capped at `top`.
     pub by_extension: Vec<AggregateExt>,
+    /// Extensions the cap left out.
+    #[serde(default)]
+    pub by_extension_omitted: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
@@ -347,6 +353,7 @@ fn options_from_aggregate(params: &AggregateParams) -> serde_json::Value {
         "match_case": params.match_case.unwrap_or(false),
         "match_whole_word": params.match_whole_word.unwrap_or(false),
         "top": params.top.unwrap_or(20) as usize,
+        "depth": params.depth,
         // Same files-by-default rule as find_files and count_files, so the
         // three tools report the same `total` for the same query. An explicit
         // `is:folder` / `folder:` / `attrib:d` opts directories back in.

@@ -81,6 +81,8 @@ pub struct SearchParams {
     pub sort: Option<SortOrder>,
     /// Restrict search to files under this path. USE FORWARD SLASHES to avoid JSON escaping: "C:/Users" or "B:/Projects". Backslashes also work but must be escaped in JSON.
     pub path: Option<String>,
+    /// Maximum depth below `path`: 1 means direct children only. Use this to see what is loose in a folder without also matching every nested file.
+    pub depth: Option<u32>,
     /// Comma-separated list of fields to return: filename, path, size, date_modified, date_created, date_accessed, attributes, extension, run_count, date_run, date_recently_changed.
     #[allow(dead_code)]
     pub fields: Option<String>,
@@ -96,6 +98,8 @@ pub struct CountParams {
     pub query: String,
     /// Narrow search to a specific directory. USE FORWARD SLASHES to avoid JSON escaping: "C:/Users". Everything normalises path separators automatically.
     pub path: Option<String>,
+    /// Maximum depth below `path`: 1 means direct children only.
+    pub depth: Option<u32>,
     pub regex: Option<bool>,
     /// Enable case-sensitive matching (default: case-insensitive).
     pub match_case: Option<bool>,
@@ -113,6 +117,8 @@ pub struct AggregateParams {
     pub query: String,
     /// Narrow aggregation to files under this path (a directory scope). USE FORWARD SLASHES to avoid JSON escaping: "C:/Users" or "B:/Projects".
     pub path: Option<String>,
+    /// Maximum depth below `path`: 1 means direct children only. Pair with is:folder to total each subfolder of a directory in one call.
+    pub depth: Option<u32>,
     pub regex: Option<bool>,
     /// Enable case-sensitive matching (default: case-insensitive).
     pub match_case: Option<bool>,
