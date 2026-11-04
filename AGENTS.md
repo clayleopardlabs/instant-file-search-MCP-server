@@ -234,3 +234,31 @@ Run these before tagging, in this order:
 checks it on every PR.
 
 See `docs/` for architecture, build instructions, tool reference, and development notes. `docs/installer.md` is the full Windows installer reference, including the DeepSeek Harness registration model (root and preset scopes, hot reload, `-DshProfile`/`-DshPresets`), verification exit codes, stale-client checks, and uninstall.
+
+## Before you call it a server bug
+
+Three false alarms in a single session were harness faults, not server faults. A
+closed stdin looked like a hang. A harness spilling an oversized tool response
+looked like truncation. A re-created read task looked like a dropped response.
+Each one cost hours, and each one reproduced only through the test rig.
+
+Work down this ladder, in order:
+
+1. **Take the harness out of the path.** Launch the server binary and speak
+   JSON-RPC to its stdin directly. If the behaviour disappears, the harness was
+   responsible and the server was never involved.
+2. **Keep stdin open** until every expected response has arrived. Closing stdin is
+   a shutdown request: the server drains and exits, and calls still in flight are
+   abandoned without a reply. That is not a hang.
+3. **Read the raw bytes**, not the rendered display. If the harness stored an
+   oversized response in a file, read that file before concluding anything was cut
+   off.
+4. **Check the schema before calling behaviour a bug.** An argument that is
+   declared and then ignored is a server bug. An argument that was never declared
+   is an API gap, which is a different and usually smaller problem.
+5. **Check whether the running binaries match each other.** A client and an
+   indexer from different builds produce confusing behaviour that reads like a
+   parser bug. `search_status` reports `BUILD_MISMATCH` for exactly this.
+6. **Consider that your own recent change is the cause.** Before hunting a
+   long-standing defect, re-read today's diff. An hour-old regression looks
+   identical to an old bug, and it is far more likely.
