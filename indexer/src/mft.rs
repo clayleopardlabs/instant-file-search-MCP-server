@@ -356,7 +356,19 @@ fn parse_file_record_inner(
                 }
             }
         } else if atype == ATTR_DATA {
-            if non_resident {
+            // Only the UNNAMED $DATA attribute holds the file's content. A named
+            // one is an alternate data stream — typically the Zone.Identifier a
+            // browser stamps on a download. Taking the first $DATA seen meant a
+            // file carrying an ADS reported the ADS size instead of its own:
+            // MarioKartWiiOriginalPAL.iso (4,699,979,776 bytes, unnamed stream)
+            // was indexed as 166 bytes, the length of its Zone.Identifier.
+            //
+            // Attribute header: +8 non-resident flag, +9 name length (u8), so a
+            // non-zero name length identifies an alternate data stream.
+            let named = off + 9 < buf.len() && buf[off + 9] > 0;
+            if named {
+                // Skip: alternate data stream, not the file content.
+            } else if non_resident {
                 if !data_seen && off + 56 <= buf.len() {
                     size = u64::from_le_bytes(buf[off + 48..off + 56].try_into().ok()?);
                     data_seen = true;
