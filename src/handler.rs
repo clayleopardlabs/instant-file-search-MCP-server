@@ -271,14 +271,26 @@ impl EverythingHandler {
         // Opt-in trust check. A stale index is the usual reason this server
         // disagrees with Explorer or a shell count, and the disagreement is
         // otherwise invisible: every number still looks confident.
+        //
+        // A path is required. Sampling unscoped means searching every indexed
+        // volume to collect N rows, which on a multi-million-file index takes
+        // long enough that the tool call appears to hang. Scope it to the folder
+        // whose totals you are about to quote, which is also the more useful
+        // check.
         if let Some(n) = params.verify_sample.filter(|n| *n > 0) {
-            let path = params.path.clone();
-            let report = tokio::task::spawn_blocking(move || sample_index(n as usize, path.as_deref()))
-                .await
-                .map_err(|e| {
-                    error!("spawn_blocking failed: {e}");
-                    ErrorData::internal_error(format!("task join failed: {e}"), None)
-                })?;
+            let Some(path) = params.path.clone() else {
+                return Err(ErrorData::invalid_params(
+                    "verify_sample requires `path`. An unscoped verification searches every indexed volume to collect its sample and can appear to hang on a large index. Scope it to the folder whose totals you intend to quote, for example path=\"C:/Users/you/Downloads\".",
+                    None,
+                ));
+            };
+            let report =
+                tokio::task::spawn_blocking(move || sample_index(n as usize, Some(&path)))
+                    .await
+                    .map_err(|e| {
+                        error!("spawn_blocking failed: {e}");
+                        ErrorData::internal_error(format!("task join failed: {e}"), None)
+                    })?;
             match report {
                 Ok(r) => {
                     let clean = r.is_clean();
@@ -324,13 +336,21 @@ fn sample_index(n: usize, path: Option<&str>) -> anyhow::Result<crate::verify::V
         include_all: Some(true),
     };
     let results = native::search(&params)?;
+    // `SearchResult.path` is the PARENT directory; the file name is separate.
+    // Joining them is what makes the stat below compare the right object.
     let entries: Vec<(String, u64)> = results
         .results
         .iter()
         .filter_map(|r| {
-            let p = r.path.clone()?;
-            let s = r.size?;
-            Some((p, s))
+            let size = r.size?;
+            let full = match r.path.as_deref() {
+                Some(dir) if !dir.is_empty() => std::path::Path::new(dir)
+                    .join(&r.filename)
+                    .to_string_lossy()
+                    .into_owned(),
+                _ => r.filename.clone(),
+            };
+            Some((full, size))
         })
         .collect();
     Ok(crate::verify::verify_entries(&entries, |p| {

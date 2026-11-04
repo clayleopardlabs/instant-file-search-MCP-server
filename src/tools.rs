@@ -131,7 +131,7 @@ pub struct AggregateParams {
 pub struct StatusParams {
     /// Stat this many indexed paths and report any that are missing or whose size changed. Use this before trusting a total: it detects a stale index, which is the usual reason this server disagrees with Explorer or a shell count.
     pub verify_sample: Option<u32>,
-    /// Restrict the verification sample to files under this path.
+    /// REQUIRED when verify_sample is set. Scope the sample to the folder whose totals you intend to quote; an unscoped sample can appear to hang on a large index.
     pub path: Option<String>,
 }
 

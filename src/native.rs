@@ -113,8 +113,21 @@ fn connect_inner(timeout_ms: u32) -> std::io::Result<std::os::unix::net::UnixStr
     }
 }
 
+/// Serialises pipe round-trips.
+///
+/// The indexer accepts one request at a time per connection, and a second
+/// concurrent caller can time out. That failure is not benign: the MCP handler
+/// treats a native error as "fall back to Everything", and the Everything
+/// fallback blocks, so a parallel tool call appears to hang forever instead of
+/// erroring. Agents do issue parallel calls, so the client must serialise.
+static PIPE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 fn exchange(method: &str, params: Option<serde_json::Value>) -> Result<serde_json::Value> {
     use std::io::{Read, Write};
+
+    // Poisoning only means a previous holder panicked; the pipe is still usable,
+    // so recover the guard rather than turning every later call into an error.
+    let _guard = PIPE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
     let mut file = connect_inner(CONNECT_TIMEOUT_MS)
         .map_err(|e| anyhow!("native engine unavailable: {e}"))?;

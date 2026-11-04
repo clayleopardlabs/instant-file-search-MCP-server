@@ -148,9 +148,9 @@ lengths**, which differs from other tools for reasons that are expected:
 | Higher, and paths no longer exist | The index is a snapshot and can retain deleted entries until it is rebuilt |
 
 The last row is the one worth checking rather than assuming. `search_status`
-takes `verify_sample=N`: it stats N indexed paths and reports `sampled`,
+takes `verify_sample=N` together with `path`: it stats N indexed paths and reports `sampled`,
 `missing`, `size_mismatch`, up to five `examples`, and a `verdict`. A clean sample
-means the totals can be trusted. A dirty one means the index has drifted and
+means the totals can be trusted. `path` is required, because an unscoped sample has to search every indexed volume and can appear to hang on a large index. A dirty sample means the index has drifted and
 should be rebuilt before any number from this server is quoted.
 
 ```json
