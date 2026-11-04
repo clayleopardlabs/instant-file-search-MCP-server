@@ -26,9 +26,14 @@ filesystem map. Runs as the Windows service `instant-file-search-indexer`
 - **MFT scan:** reads the raw `$MFT` data stream sequentially in blocks and
   parses FILE records in memory (with USA fixup). Timestamps come from
   `$STANDARD_INFORMATION` (created@+0, modified@+8, accessed@+24) and sizes
-  from `$DATA` (resident: value length; nonresident: valid-data-length at
-  attribute header +48) — the `$FILE_NAME` attribute's metadata goes stale on
-  NTFS (only refreshed on rename). Full-volume scan: ~2.4M files in ~15s.
+  from the **unnamed** `$DATA` attribute (resident: value length; nonresident:
+  valid-data-length at attribute header +48) — the `$FILE_NAME` attribute's
+  metadata goes stale on NTFS (only refreshed on rename). A *named* `$DATA`
+  attribute is an alternate data stream, not the file content: a browser stamps
+  a ~166-byte `Zone.Identifier` on every download, so accepting the first
+  `$DATA` seen reported a 4.4 GB ISO as 166 bytes. The name length at attribute
+  header +9 identifies a named stream and it is skipped. Full-volume scan:
+  ~2.4M files in ~15s.
 - **Storage modes:** the default disk mode stores source metadata in a local
   SQLite database. It streams entries into the shared matcher and resolves
   record numbers through a database index, so it has a substantially lower

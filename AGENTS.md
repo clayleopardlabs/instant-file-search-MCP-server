@@ -99,6 +99,11 @@ the Everything engine if the native indexer is unreachable.
 | `recent_changes` | Recently created/modified/renamed/deleted files with timestamps. |
 | `search_status` | Engine health: indexed file count, volumes, native/everything availability. |
 
+`find_files`, `count_files` and `aggregate_files` also return `parsed` (how the
+query was understood) and, when relevant, `warnings` carrying a concrete fix —
+see "Response diagnostics" in `docs/tools.md`. Invalid filter tokens are
+rejected with an error rather than silently returning zero.
+
 ### Common query patterns
 
 - `*.rs` — all Rust source files
@@ -108,8 +113,8 @@ the Everything engine if the native indexer is unreachable.
 - `content:"fn main"` — content search (bounded 256MB store; targeted, not exhaustive)
 - `dm:lastweek` — modified in the last week
 - `size:>10mb` — larger than 10 MB
-- `*.tmp | *.bak` — match either pattern
-- `!node_modules` — exclude a directory
+- `*.tmp | *.bak` — match either pattern. The pipe splits the query into alternatives, so a filter applies only to its own alternative: `*.bin | *.7z is:folder` filters only the second one. Repeat the filter on each side.
+- `!*.tmp` — exclude a file pattern. The inline `!` does **not** exclude directories in the native engine; use `exclude_path` for that.
 - `sort=size` — sort by size (largest first)
 
 ### Key parameters
@@ -119,7 +124,8 @@ the Everything engine if the native indexer is unreachable.
 - `max_results` — cap result count (0 = default 100)
 - `offset` — skip N results for pagination
 - `sort` — `name`, `name_desc`, `size`, `date_modified`, `date_created`, `extension`, etc.
-- `include_all` — include `node_modules`, `.git`, `WinSxS` (default false)
+- `include_all` — include `node_modules`, `.git`, `WinSxS`, `$Recycle.Bin`, `System Volume Information` (default false). All five are indexed, so a zero result without this flag means excluded, not absent.
+- `exclude_path` — extra directories to skip, `;`-separated (comma does not work)
 
 ## Engine routing (native-first)
 
@@ -199,6 +205,10 @@ Build with `cargo build --release` from the workspace root.
 - Linux: fanotify `open_by_handle_at` fails with `O_PATH` mount fds on kernel 7.0+ (returns EBADF). Mount fds must be opened with `O_RDONLY | O_DIRECTORY` instead.
 - Linux: fanotify lumps CREATE/MODIFY/CLOSE_WRITE into a single "WRITE" reason. The `recent_changes` "created" filter is a synonym for "modified" — there is no way to distinguish file creation from modification via fanotify alone.
 - Linux: `/tmp` is typically tmpfs (not a real disk) and is excluded from the indexer scan. Use paths on real disk volumes for test files.
+
+- Windows: an MFT record can hold several `$DATA` attributes, and a **named** one is an alternate data stream — commonly the `Zone.Identifier` a browser stamps on a download. Size must come from the **unnamed** stream only. Taking the first `$DATA` seen reports the ADS size: a 4.4 GB ISO carrying a 166-byte `Zone.Identifier` was indexed as 166 bytes, which also hid it from every `size:>` query.
+- Changing the MFT parser does **not** correct rows already in the index. The service replays from its saved USN checkpoint on restart, so a parser fix stays invisible until the index is rebuilt. Bump a parser/schema version and force a rescan when it changes, or stop the service, delete `index.sqlite3` (derived data), and start it again.
+- Default exclusions are **five** (`node_modules`, `.git`, `WinSxS`, `$Recycle.Bin`, `System Volume Information`). Keep `src/diagnostics.rs::DEFAULT_EXCLUDES`, the handshake instructions in `src/tools.rs`, and `docs/tools.md` in step with `indexer/src/query.rs::DEFAULT_EXCLUDES` — under-reporting them makes an agent read "excluded" as "empty".
 
 ## Pre-release checks
 

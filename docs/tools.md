@@ -15,7 +15,7 @@
 - **Default auto-exclusions** (skip unless `include_all=true`): `node_modules`, `.git`, `WinSxS`, `$Recycle.Bin`, `System Volume Information`
 - **`exclude_path` separator**: `;` (semicolon), not comma
 - **Default scope**: ALL indexed drives. Narrow with `path` (forward slashes like `C:/Users` work; the engine normalizes them)
-- **`find_files` and `count_files` return files, not directories.** Directories are indexed and carry the aggregate size of everything under them, so an unqualified `size:>1gb` used to rank `C:` above every real file; the tools now append the `file:` type token unless the query already chooses a type. Add `is:folder`, `folder:`, or an `attrib:` filter (`attrib:d`) to include them — `aggregate_files` still reports files and folders separately.
+- **`find_files` and `count_files` return files, not directories.** Directories are indexed and carry the aggregate size of everything under them, so an unqualified `size:>1gb` used to rank `C:` above every real file. The native engine applies this as a `files_only` option rather than by rewriting the query: appending a `file:` token to the query string silently broke `regex:` and `regex: true` (8252786, 68a1c23). Add `is:folder`, `folder:`, or an `attrib:` filter (`attrib:d`) to include them — `aggregate_files` still reports files and folders separately.
 - Every result carries `is_dir`, so a caller can filter either way without re-querying.
 - `aggregate_files` returns **two** size totals. `total_size` sums every matched
   entry, and because a folder's size is its entire subtree it double-counts
@@ -69,7 +69,7 @@ Everything-compatible tokens the native engine supports. Full parity detail live
 | bare term | `handler` | Case-insensitive substring match |
 | wildcards | `*.ts`, `file[0-9].txt`, `img#.png` | `*` any run (not `\`), `**` any run incl. `\`, `?` one char, `[set]`/`[!set]` classes, `#` one digit, `\x` escape |
 | anchors | `^foo`, `bar$`, `^exact$` | `^` start-of-name, `$` end-of-name; also `start-with:`/`end-with:`/`prefix:`/`suffix:` |
-| `regex:` | `regex:^foo\d+` | Regex match (also available as the `regex` MCP param, whole-query) |
+| `regex:` | `regex:^foo\d+` | Regex match (also available as the `regex` MCP param, whole-query). In whole-query mode a type token such as `file:` is lifted out of the pattern rather than matched as literal text |
 | `case:` | `case:Foo` | Case-sensitive term |
 | `wholeword:` / `ww:` | `ww:foo` | Whole-word match (also available as the `match_whole_word` MCP param, whole-query) |
 | `" "` | `"exact phrase"` | Exact phrase |
@@ -101,4 +101,36 @@ Everything-compatible tokens the native engine supports. Full parity detail live
 
 ### Invalid filters
 
-An invalid filter (e.g. `size:garbage`, `attrib:q`, `ext:`) matches **nothing**, not everything — same as Everything. A query made only of invalid tokens returns zero results.
+The **engine** follows Everything here: an invalid filter (e.g. `size:garbage`, `attrib:q`, `ext:`) matches **nothing**, not everything, so a query made only of invalid tokens returns zero results.
+
+The **MCP layer rejects them instead.** `find_files`, `count_files` and `aggregate_files` return an error naming the offending token, because a silent empty result is indistinguishable from "the file is not there" — the failure an agent is least able to notice. Call the indexer directly if you need engine-level parity.
+
+## Response diagnostics
+
+Every `find_files`, `count_files` and `aggregate_files` response carries two extra fields so a caller can see how its query was understood without reading this file.
+
+`parsed` — what the server did with the request:
+
+```json
+"parsed": {
+  "query": "*.bin | *.7z",
+  "files_only": true,
+  "include_all": false,
+  "excludes": ["node_modules", ".git", "WinSxS", "$Recycle.Bin", "System Volume Information"]
+}
+```
+
+`warnings` — present only when something is likely wrong. Each carries a `code`, a `message`, and usually a `fix` that can be pasted back as-is:
+
+| code | meaning |
+|------|---------|
+| `SUSPECT_OR` | `OR` was parsed as a literal filename term; use the pipe |
+| `PATH_IN_QUERY` | `path:` inside the query instead of the `path` parameter |
+| `PIPE_FILTER_SCOPE` | a filter applies to only one side of a `\|`; the other side is unfiltered |
+| `INVALID_FILTER` | a filter token that can never match — returned as an error, not as a result |
+| `DEFAULT_EXCLUDES_ACTIVE` | the five default exclusions are in force; `include_all=true` for a true total |
+| `FOLDERS_INCLUDED` | a bare `*` in `aggregate_files` also matched folders, inflating `total_size` |
+
+Correctly written queries produce no warnings, so a clean response means the numbers are what they appear to be.
+
+`search_status` additionally emits `BUILD_MISMATCH` / `COMMIT_MISMATCH` when the MCP server and the running indexer come from different builds — the usual reason a fixed bug still misbehaves on the wire.

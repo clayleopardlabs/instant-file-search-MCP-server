@@ -195,6 +195,14 @@ Completeness is the part a shell scan cannot give you. The indexer runs as a ser
 
 This index does not have that hole. On one Windows machine, `*.dll` under `C:\Program Files` is 29,206 files here and 6,169 through PowerShell - the missing 23,037 are all in `WindowsApps`. So "zero PHP files anywhere" comes back as a whole-machine answer, not a best-effort one.
 
+### 9. Every answer explains itself
+
+Agents guess at query syntax, and a wrong guess usually comes back as a confident empty or inflated answer rather than an error. So the server ships its rules in the `initialize` handshake - no one has to be told to go and read the docs mid-task - and repeats the relevant ones on every response: a `parsed` block showing the query as understood, and a `warnings` array carrying a concrete fix.
+
+That covers the mistakes agents actually make: `OR` parsed as a literal filename term, `path:` put inside the query instead of the `path` parameter, a filter scoped to only one side of a `|`, the default exclusions being in force, and a bare `*` that quietly counted folders. Filter tokens that can never match are rejected outright instead of returning zero, because "no such file" and "your query was wrong" should not look identical.
+
+Correctly written queries produce no warnings at all, so a clean response is a signal the numbers are what they appear to be.
+
 
 ##  Save your start-up tokens. Only adds 5 new tools.
 
@@ -295,7 +303,7 @@ Your agent has endless options for narrowing down a search:
 | `" "` | `"exact phrase"` | Match an exact phrase |
 | `content:` | `content:"fn main"` | Match file contents. It uses a bounded local cache, so coverage is a subset of files; use it for targeted searches, not exhaustive counts |
 
-Noisy folders such as `node_modules`, `.git`, and `WinSxS` are skipped by default so results stay useful. When a task genuinely requires a complete inventory, the agent can include those folders with `include_all=true`. Folder scoping also accepts ordinary paths such as `C:/Users`; the engine normalizes path separators for the agent.
+Noisy folders such as `node_modules`, `.git`, `WinSxS`, `$Recycle.Bin` and `System Volume Information` are skipped by default so results stay useful. All five are still indexed, so `include_all=true` reaches them - a zero result without it means "excluded", not "absent". Folder scoping also accepts ordinary paths such as `C:/Users`; the engine normalizes path separators for the agent.
 
 ### How it works
 

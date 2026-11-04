@@ -123,6 +123,23 @@ extended to cover the Everything tokens an agent would actually type.
    substring matching while Everything honored the flag. Fixed by threading
    both params into the tokenizer (query.rs). This is the class of bug the
    battery cannot catch: the harness passes `regex:` tokens, never the params.
+
+   **Follow-up (2026-11-04): regex returned zero results for every MCP query.**
+   Threading the params in was not sufficient, and the battery still could not
+   see it. Two further defects, both introduced by 553db4d (files-by-default
+   appending a `file:` type token to the query):
+   - `regex:` token — the appended token gave every query two or more tokens,
+     so `flush_group` wrapped them in `Token::Or`. The compiled-pattern map was
+     built by scanning only top-level tokens, so a nested `Token::Regex` never
+     compiled, and `compiled.get(..).unwrap_or(false)` turned that into "no
+     match". `regex:.*` — a pattern matching every name — returned nothing.
+   - `regex: true` — whole-query mode compiles the entire query string as one
+     pattern, so the appended ` file:` became literal text in the pattern.
+   Fixed by collecting patterns recursively through `Token::Or` and lifting
+   type tokens out of whole-query patterns (8252786), then removing the query
+   rewrite entirely in favour of a `files_only` option (68a1c23). Regression
+   tests now use the exact strings the MCP handler sends, which is what the
+   battery was missing: it exercised the engine, not the wire.
 2. **`content:"text"` quoted-value parsing was broken** (fix landed 2026-08-03
    earlier): multi-word quoted values kept their quote characters and a
    `content:"fn main"` split at the space. `extract_content_terms` now strips
