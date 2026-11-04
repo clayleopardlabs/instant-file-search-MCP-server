@@ -127,6 +127,15 @@ pub struct AggregateParams {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+#[schemars(description = "Check the search service health, and optionally whether the index still agrees with the filesystem.")]
+pub struct StatusParams {
+    /// Stat this many indexed paths and report any that are missing or whose size changed. This is how you tell whether a total is trustworthy: a stale index gives confident wrong numbers. `path` is required with it.
+    pub verify_sample: Option<u32>,
+    /// Folder to sample for verification. Required when verify_sample is set, and it should be the folder whose totals you intend to quote.
+    pub path: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 #[schemars(description = "Recently changed files from the NTFS change journal: created/modified/renamed/deleted with timestamps and paths. Native-only.")]
 pub struct RecentChangesParams {
     /// Only return events with a timestamp (FILETIME, 100ns since 1601) strictly newer than this. 0 returns all retained events.
@@ -211,7 +220,11 @@ Instant File Search: rules that prevent silent wrong answers.
    Explorer's `size on disk` because cluster slack, NTFS compression and
    alternate data streams are not counted. It can also read higher or lower than
    a shell count: the index sees ACL-protected paths a shell cannot read, and it
-   omits the five folders in rule 2 unless include_all is set.";
+   omits the five folders in rule 2 unless include_all is set.
+10. To check whether the index itself has drifted, call search_status with
+   verify_sample=N and a path. It stats N indexed paths and reports any that are
+   missing or whose size changed, which is the only reliable way to spot a stale
+   index before quoting a total from it.";
 
 #[cfg(test)]
 mod tests {

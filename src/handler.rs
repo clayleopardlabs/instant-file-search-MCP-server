@@ -11,7 +11,7 @@ use tracing::error;
 use crate::everything;
 use crate::native;
 use crate::tools::{
-    AggregateParams, CountParams, RecentChangesParams, SearchParams,
+    AggregateParams, CountParams, RecentChangesParams, SearchParams, StatusParams,
 };
 
 /// Probe the Everything fallback engine for `search_status`. Windows-only;
@@ -71,6 +71,54 @@ fn annotate(
     value
 }
 
+/// Hard ceiling on how long any tool call may take.
+///
+/// A tool call that never returns is the worst failure mode this server has: the
+/// agent gets no signal, cannot tell "still working" from "dead", and has no way
+/// to recover. The indexer pipe has a connect timeout but no read timeout, and
+/// the Everything fallback blocks indefinitely, so without this bound a slow or
+/// wedged engine becomes a silent hang. Observed when several tool calls run
+/// concurrently.
+const TOOL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(45);
+
+fn timeout_error(label: &str) -> ErrorData {
+    ErrorData::internal_error(
+        format!(
+            "{label} did not complete within {} seconds. The indexer may still be building its index after a restart, or the search engine is busy. Retry in a few seconds. If it keeps happening, check the service with: sc query instant-file-search-indexer",
+            TOOL_TIMEOUT.as_secs()
+        ),
+        None,
+    )
+}
+
+/// Run blocking work on the pool, but never wait longer than [`TOOL_TIMEOUT`].
+///
+/// The blocking task is not cancelled on timeout (Rust cannot cancel a blocking
+/// thread). The point is that the caller gets a definite, explainable error
+/// instead of hanging, while the worker finishes in the background.
+async fn blocking_bounded<T, F>(label: &str, work: F) -> Result<T, ErrorData>
+where
+    F: FnOnce() -> anyhow::Result<T> + Send + 'static,
+    T: Send + 'static,
+{
+    let handle = tokio::task::spawn_blocking(work);
+    match tokio::time::timeout(TOOL_TIMEOUT, handle).await {
+        Err(_elapsed) => {
+            error!("{label} exceeded the {}s tool timeout", TOOL_TIMEOUT.as_secs());
+            Err(timeout_error(label))
+        }
+        Ok(Err(join)) => {
+            error!("spawn_blocking failed: {join}");
+            Err(ErrorData::internal_error(
+                format!("task join failed: {join}"),
+                None,
+            ))
+        }
+        Ok(Ok(Err(e))) => Err(ErrorData::internal_error(e.to_string(), None)),
+        Ok(Ok(Ok(value))) => Ok(value),
+    }
+}
+
 #[tool_router]
 impl EverythingHandler {
     #[tool(description = "Find files instantly across ALL indexed drives. USE THIS instead of glob, grep, or Get-ChildItem. Query examples: '*.rs', 'content:handler', 'dm:lastweek size:>1mb', 'attrib:h'. Supports wildcards, regex, content search, date/size filters, path scoping, and sorting. For broad patterns, call count_files first to gauge size. Results are files only; add 'is:folder' to include directories, which carry aggregate sizes and are marked by is_dir. NOTE: content: search is bounded. Memory mode uses up to 256 MB of RAM; disk mode can persist content in SQLite. Use it for targeted searches, not exhaustive scans. Default excludes node_modules, .git, WinSxS, $Recycle.Bin, System Volume Information. Pass include_all=true to search everything. OR is '|' (not 'OR'). Scope with the `path` param, not path: inside the query. Multi-extension: ext:lsv,d2s.")]
@@ -86,28 +134,21 @@ impl EverythingHandler {
         reject_invalid_filters(&params.query)?;
         let query = params.query.clone();
         let include_all = params.include_all.unwrap_or(false);
-        let result = tokio::task::spawn_blocking(move || {
-            match native::search(&params) {
-                Ok(r) => Ok(r),
-                Err(e) => {
-                    error!("native search failed, falling back to Everything: {e}");
-                    #[cfg(windows)]
-                    {
-                        everything::search(params)
-                    }
-                    #[cfg(not(windows))]
-                    {
-                        Err(e)
-                    }
+        let result = blocking_bounded("find_files", move || match native::search(&params) {
+            Ok(r) => Ok(r),
+            Err(e) => {
+                error!("native search failed, falling back to Everything: {e}");
+                #[cfg(windows)]
+                {
+                    everything::search(params)
+                }
+                #[cfg(not(windows))]
+                {
+                    Err(e)
                 }
             }
         })
-        .await
-        .map_err(|e| {
-            error!("spawn_blocking failed: {e}");
-            ErrorData::internal_error(format!("task join failed: {e}"), None)
-        })?
-        .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
+        .await?;
 
         let value = serde_json::to_value(&result)
             .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
@@ -128,28 +169,21 @@ impl EverythingHandler {
         reject_invalid_filters(&params.query)?;
         let query = params.query.clone();
         let include_all = params.include_all.unwrap_or(false);
-        let (count, note) = tokio::task::spawn_blocking(move || {
-            match native::count(&params) {
-                Ok(r) => Ok(r),
-                Err(e) => {
-                    error!("native count failed, falling back to Everything: {e}");
-                    #[cfg(windows)]
-                    {
-                        everything::count(params)
-                    }
-                    #[cfg(not(windows))]
-                    {
-                        Err(e)
-                    }
+        let (count, note) = blocking_bounded("count_files", move || match native::count(&params) {
+            Ok(r) => Ok(r),
+            Err(e) => {
+                error!("native count failed, falling back to Everything: {e}");
+                #[cfg(windows)]
+                {
+                    everything::count(params)
+                }
+                #[cfg(not(windows))]
+                {
+                    Err(e)
                 }
             }
         })
-        .await
-        .map_err(|e| {
-            error!("spawn_blocking failed: {e}");
-            ErrorData::internal_error(format!("task join failed: {e}"), None)
-        })?
-        .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
+        .await?;
 
         let text = serde_json::json!({ "total": count, "note": note }).to_string();
         let value: serde_json::Value = serde_json::from_str(&text)
@@ -170,13 +204,7 @@ impl EverythingHandler {
         let include_all = params.include_all.unwrap_or(false);
         // Asking for folders is the only case where folder rows in an aggregate
         // are intended, and the only case where a subtree-sized total is right.
-        let result = tokio::task::spawn_blocking(move || native::aggregate(&params))
-            .await
-            .map_err(|e| {
-                error!("spawn_blocking failed: {e}");
-                ErrorData::internal_error(format!("task join failed: {e}"), None)
-            })?
-            .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
+        let result = blocking_bounded("aggregate_files", move || native::aggregate(&params)).await?;
 
         let value = serde_json::to_value(&result)
             .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
@@ -191,29 +219,21 @@ impl EverythingHandler {
         &self,
         Parameters(params): Parameters<RecentChangesParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        let result = tokio::task::spawn_blocking(move || native::recent_changes(&params))
-            .await
-            .map_err(|e| {
-                error!("spawn_blocking failed: {e}");
-                ErrorData::internal_error(format!("task join failed: {e}"), None)
-            })?
-            .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
+        let result = blocking_bounded("recent_changes", move || native::recent_changes(&params)).await?;
 
         let text = serde_json::to_string_pretty(&result)
             .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
         Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
 
-    #[tool(description = "Check the file search service health: engine status, indexed file count, volumes. Call this before find_files/count_files if you suspect the service is down.")]
-    async fn search_status(&self) -> Result<CallToolResult, ErrorData> {
-        let (native_result, everything_result) = tokio::task::spawn_blocking(|| {
-            (native::status(), everything_status_probe())
-        })
-        .await
-        .map_err(|e| {
-            error!("spawn_blocking failed: {e}");
-            ErrorData::internal_error(format!("task join failed: {e}"), None)
-        })?;
+    #[tool(description = "Check the file search service health: engine status, indexed file count, volumes. Call this before find_files/count_files if you suspect the service is down. Pass verify_sample=N with path=... to stat N indexed paths and report any that are missing or changed size, which tells you whether the index still agrees with the filesystem before you trust a total.")]
+    async fn search_status(
+        &self,
+        Parameters(params): Parameters<StatusParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let (native_result, everything_result) =
+            blocking_bounded("search_status", || Ok((native::status(), everything_status_probe())))
+                .await?;
 
         // A client and indexer built from different revisions is a real source of
         // confusing behaviour: a bug that was fixed still present on the wire, or
@@ -258,20 +278,39 @@ impl EverythingHandler {
             Err(e) => serde_json::json!({ "ok": false, "error": e.to_string() }),
         };
 
-        let json = serde_json::json!({
+        let mut json = serde_json::json!({
             "server": { "version": crate::APP_VERSION, "commit": crate::BUILD_COMMIT },
             "native": native_status,
             "everything": everything_status,
             "warnings": warnings,
         });
 
-        // NOTE: index-versus-filesystem verification (`verify_sample`) is NOT
-        // wired here yet. It is implemented and unit tested in `src/verify.rs`
-        // and `sample_index` below, but calling it from this handler blocked
-        // indefinitely against the live index in testing, and a tool call that
-        // never returns is worse than the missing check. The module is kept so
-        // the follow-up starts from tested code rather than a blank page.
-        // Do not re-enable without reproducing the block first.
+        // Opt-in trust check. A stale index is the usual reason this server
+        // disagrees with Explorer or a shell count, and the disagreement is
+        // otherwise invisible: every number still looks confident.
+        //
+        // A path is required. Sampling unscoped means searching every indexed
+        // volume to collect N rows, which is wasted work and gives a vaguer
+        // answer than checking the folder whose totals you are about to quote.
+        if let Some(n) = params.verify_sample.filter(|n| *n > 0) {
+            let Some(path) = params.path.clone() else {
+                return Err(ErrorData::invalid_params(
+                    "verify_sample requires `path`. Scope it to the folder whose totals you intend to quote, for example path=\"C:/Users/you/Downloads\".",
+                    None,
+                ));
+            };
+            let report = blocking_bounded("search_status.verify", move || {
+                sample_index(n as usize, Some(path.as_str()))
+            })
+            .await?;
+            let clean = report.is_clean();
+            json["verify"] = serde_json::to_value(&report).unwrap_or(serde_json::Value::Null);
+            json["verify"]["verdict"] = serde_json::json!(if clean {
+                "Sample agrees with the filesystem."
+            } else {
+                "Sampled index rows disagree with the filesystem. The index is a snapshot: it can keep entries for files that no longer exist, and sizes written by an older parser stay until the index is rebuilt. Rebuild the index before trusting any total from this server."
+            });
+        }
 
         let text = serde_json::to_string_pretty(&json)
             .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
@@ -284,9 +323,6 @@ impl EverythingHandler {
 /// Uses the ordinary search path so the sample is exactly what a caller would
 /// have been given, then checks each one against the filesystem.
 ///
-/// Currently unused: see the note in `search_status`. Kept (with its tests) as
-/// the starting point for the verification feature.
-#[allow(dead_code)]
 fn sample_index(n: usize, path: Option<&str>) -> anyhow::Result<crate::verify::VerifyReport> {
     let params = SearchParams {
         query: "file:".to_string(),

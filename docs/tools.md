@@ -147,5 +147,10 @@ lengths**, which differs from other tools for reasons that are expected:
 | Higher than a shell count | The index reads ACL-protected trees a shell is refused (`WindowsApps`, other profiles), so a shell "none found" is really "none I could read" |
 | Higher, and paths no longer exist | The index is a snapshot and can retain deleted entries until it is rebuilt |
 
-The last row is the one worth checking rather than assuming, and it is currently the caller job: sample a few paths with `find_files` and confirm them with `Test-Path` before quoting a total you did not just take from a fresh index. A built-in check (`verify_sample`) is implemented and unit tested in `src/verify.rs` but is not exposed yet: calling it from the status handler blocked against a live index in testing, and a tool call that never returns is worse than the missing check.
+The last row is the one worth checking rather than assuming. `search_status` takes `verify_sample=N` together with `path`: it stats N indexed paths and reports `sampled`, `missing`, `size_mismatch`, up to five `examples`, and a `verdict`. `path` is required, because the useful check is the folder whose totals you are about to quote. A clean sample means the totals can be trusted; a dirty one means the index has drifted and should be rebuilt before any number from this server is quoted.
+
+```json
+"verify": { "sampled": 20, "missing": 0, "size_mismatch": 0,
+            "verdict": "Sample agrees with the filesystem." }
+```
 ```
