@@ -349,11 +349,43 @@ fn days_in_month(y: i64, m: i64) -> i64 {
 /// Tokenize a query string into search tokens.
 pub fn tokenize(query: &str, opts: &QueryOptions) -> Vec<Token> {
     // Everything regex mode: the entire search string is one regex.
+    //
+    // Type tokens are pulled out of the pattern first. The MCP layer appends
+    // `file:` to every query (`tools::default_to_files`); if that stayed in the
+    // string it would become part of the regex and match the literal text
+    // " file:", so every `regex: true` query returned zero results.
     if opts.regex && !query.is_empty() {
-        return vec![Token::Regex {
-            pattern: query.to_string(),
-            negate: false,
-        }];
+        let mut pattern = String::new();
+        let mut type_tokens: Vec<Token> = Vec::new();
+        for part in split_query(query) {
+            match part.to_ascii_lowercase().as_str() {
+                "file:" | "is:file" => type_tokens.push(Token::TypeFilter(TypeFilter::Files)),
+                "folder:" | "is:folder" | "is:directory" => {
+                    type_tokens.push(Token::TypeFilter(TypeFilter::Folders))
+                }
+                _ => {
+                    if !pattern.is_empty() {
+                        pattern.push(' ');
+                    }
+                    pattern.push_str(&part);
+                }
+            }
+        }
+        let mut tokens: Vec<Token> = Vec::new();
+        if !pattern.trim().is_empty() {
+            tokens.push(Token::Regex {
+                pattern: pattern.trim().to_string(),
+                negate: false,
+            });
+        }
+        tokens.extend(type_tokens);
+        // Top-level tokens are OR-ed; an AND-group must be wrapped the same way
+        // `flush_group` wraps a multi-token group, otherwise `.* file:` would
+        // match every directory too.
+        if tokens.len() > 1 {
+            return vec![Token::Or(tokens)];
+        }
+        return tokens;
     }
     let mut tokens: Vec<Token> = Vec::new();
     let mut group: Vec<Token> = Vec::new();
@@ -1468,6 +1500,25 @@ fn token_matches(
     }
 }
 
+/// Collect every `Token::Regex` in the token tree, including those nested
+/// inside a `Token::Or` AND-group.
+///
+/// Regression: the MCP handler appends a `file:` type token to every query, so
+/// a regex query always has at least two tokens and `flush_group` wraps them in
+/// `Token::Or`. The compiled-pattern map used to be built by scanning only
+/// top-level tokens, so a nested regex never compiled and
+/// `compiled.get(..).unwrap_or(false)` silently reported "no match" — every
+/// `regex:` query through the MCP tool returned zero results.
+fn collect_regex_patterns<'a>(tokens: &'a [Token], out: &mut Vec<(&'a str, bool)>) {
+    for t in tokens {
+        match t {
+            Token::Regex { pattern, negate } => out.push((pattern.as_str(), *negate)),
+            Token::Or(group) => collect_regex_patterns(group, out),
+            _ => {}
+        }
+    }
+}
+
 fn file_matches(
     entry: &IndexedFile,
     tokens: &[Token],
@@ -1598,14 +1649,14 @@ impl<'a> EntryFilter<'a> {
             .filter(|p| !p.is_empty())
             .collect();
         let mut compiled: HashMap<String, (regex::Regex, bool)> = HashMap::new();
-        for t in &tokens {
-            if let Token::Regex { pattern, negate } = t {
-                if let Ok(re) = regex::RegexBuilder::new(pattern)
-                    .case_insensitive(!opts.match_case)
-                    .build()
-                {
-                    compiled.insert(pattern.clone(), (re, *negate));
-                }
+        let mut patterns: Vec<(&str, bool)> = Vec::new();
+        collect_regex_patterns(&tokens, &mut patterns);
+        for (pattern, negate) in patterns {
+            if let Ok(re) = regex::RegexBuilder::new(pattern)
+                .case_insensitive(!opts.match_case)
+                .build()
+            {
+                compiled.insert(pattern.to_string(), (re, negate));
             }
         }
 
@@ -2868,5 +2919,63 @@ mod tests {
             .collect();
         by_ext.sort_by_key(|(ext, _, _)| ext.to_string());
         assert_eq!(by_ext, vec![("txt", 2, 1_500), ("zip", 2, 8_000)]);
+    }
+
+    // --- regex regression tests -------------------------------------------
+    // Observed in the field: `regex:.*` returned zero results through the MCP
+    // tool. These pin the engine-level behaviour so a client-side or
+    // tokenizer regression cannot hide behind an empty result set.
+
+    #[test]
+    fn regex_token_matches_names() {
+        // `.*` must match every name; if this is empty the token is being
+        // dropped (or the compiled pattern is missing) rather than not
+        // matching.
+        assert!(!run("regex:.*").is_empty(), "regex:.* matched nothing");
+        assert_eq!(run(r"regex:.*\.txt"), vec!["CaseFile.txt", "sibling.txt"]);
+        assert_eq!(run("regex:^readme"), vec!["readme.md"]);
+        // The MCP handler appends a `file:` type token to every query. That
+        // must not change regex semantics.
+        assert_eq!(
+            run(r"regex:.*\.txt file:"),
+            vec!["CaseFile.txt", "sibling.txt"]
+        );
+        assert!(!run("regex:.* file:").is_empty(), "regex + file: matched nothing");
+    }
+
+    #[test]
+    fn regex_whole_query_mode_honours_file_filter() {
+        // `regex: true` compiles the entire query string as one pattern. The
+        // MCP layer appends `file:` (tools::default_to_files); that token must
+        // be lifted out of the pattern instead of matching literal " file:".
+        let map: HashMap<String, IndexedFile> = HashMap::from([
+            (
+                "readme".to_string(),
+                entry(r"B:\p\readme.md", false, 1_700_000_000),
+            ),
+            ("docs".to_string(), entry(r"B:\p\docs", true, 1_700_000_000)),
+        ]);
+        let opts = |q: &str| QueryOptions {
+            query: q.to_string(),
+            regex: true,
+            ..Default::default()
+        };
+        let got = |q: &str| {
+            let mut v: Vec<String> = search(&map, &opts(q))
+                .entries
+                .iter()
+                .map(|e| e.name.clone())
+                .collect();
+            v.sort();
+            v
+        };
+        // Bare pattern.
+        assert_eq!(got("readme"), vec!["readme.md"]);
+        // Exactly what the MCP handler sends.
+        assert_eq!(got("readme file:"), vec!["readme.md"]);
+        // The type token must still exclude directories.
+        assert_eq!(got(".* file:"), vec!["readme.md"]);
+        // ...and a folder request must still work.
+        assert_eq!(got(".* is:folder"), vec!["docs"]);
     }
 }
