@@ -11,29 +11,7 @@ as a misdiagnosis.
 
 ## Open defects
 
-### 1. Unknown tool arguments are silently accepted (high)
-
-`find_files`, `count_files`, `aggregate_files` and `recent_changes` accept
-arguments that do not exist in their schema, and ignore them. A caller typo
-therefore produces a confident answer to a different question.
-
-Reproduced against the server binary directly, DSH out of the path:
-
-```
-tools/call recent_changes {"hours":720,"limit":2,"zzz_bogus_argument":true}
--> success, 2 events, no error
-```
-
-This is the same failure class as two bugs fixed in 1.0.20: `fields` was declared
-and discarded, and `recent_changes` accepted and ignored `path`. Both produced
-plausible wrong answers rather than errors.
-
-Fix direction: `#[serde(deny_unknown_fields)]` on the parameter structs, then
-check that the resulting error surfaces as a normal tool error and not a panic.
-Note this tightens the client contract, so confirm the shipped plugin and the
-DeepSeek Harness client send only declared fields before releasing.
-
-### 2. `is:folder` binds to one side of a pipe only (medium)
+### 1. `is:folder` binds to one side of a pipe only (medium)
 
 `*save* is:folder | *config*` leaves the second branch unfiltered. A
 `PIPE_FILTER_SCOPE` warning is raised with a suggested fix, so it is signposted,
@@ -79,11 +57,24 @@ argument first. Consider an alias.
 
 ## Recently closed, for context
 
+- Unknown tool arguments were silently accepted, so a caller typo returned a
+  confident answer to a different question. All five parameter structs now use
+  `deny_unknown_fields`, and the error names the bad field and lists the accepted
+  ones. Verified against the server binary directly: an unknown argument now
+  returns `unknown field 'zzz_bogus', expected one of 'query', 'max_results', ...`.
+  **One thing to confirm after the swap:** that the DeepSeek Harness client sends
+  only declared fields. If it injects its own, the first call after restart will
+  error loudly rather than silently, which is the intended trade, but it would
+  need a scheme tweak.
 - `total_file_size` double counted nested folders under `is:folder`: an 11.17 GB
   tree reported 25.99 GB (`ea06092`). Client and harness were not involved; the
   indexer was.
 - `recent_changes` accepted and ignored `path` (`9b43a8e`). Now scoped in the
-  indexer with a separator check.
+  indexer with a separator check. Covered by
+  `recent_changes_scoped_filters_to_the_requested_subtree`, which also asserts a
+  lookalike sibling (`C:\vPinball2`) does not match `C:\vPinball`. Note this
+  cannot be verified against a live indexer until 1.0.20 is deployed, because the
+  old indexer has no `path` field and drops it.
 - `fields` was declared, documented, and discarded (`9b43a8e`). Now projects rows.
 - `by_extension` was unbounded, producing a 184 KB response that the harness
   spilled to disk and displayed as truncated (`9f8f03a`). Capped, sorted by size,

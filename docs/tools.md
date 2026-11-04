@@ -194,3 +194,19 @@ and an ignored one just bloats the reply.
 `path`. A scoped question such as "has this folder changed since install" needs
 that argument, and previously it was accepted and ignored, returning activity from
 other drives as though it were the answer.
+
+## Strict argument checking
+
+Every tool rejects arguments it does not declare. A typo or an invented parameter
+returns an error naming the offending field and listing the accepted ones, instead
+of being silently ignored:
+
+```
+unknown field `zzz_bogus`, expected one of `query`, `max_results`, ...
+```
+
+This is deliberate. A dropped argument produces a confident answer to a different
+question, which is the worst outcome available: `fields` and the `path` argument on
+`recent_changes` both behaved that way before 1.0.20, and each cost an agent real
+time. The trade-off is that a client which injects its own keys into `arguments`
+will now get an error rather than a working call.

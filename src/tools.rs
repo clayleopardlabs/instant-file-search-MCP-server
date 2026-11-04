@@ -62,6 +62,7 @@ impl SortOrder {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[schemars(description = "Find files instantly across ALL indexed drives. Supports wildcards (*.txt, *.rs), content search (content:text), date filters (dm:lastweek), size filters (size:>1mb), regex, path scoping, sorting, and pagination. Default excludes node_modules, .git, WinSxS, $Recycle.Bin, System Volume Information. Pass include_all=true to search everything.")]
+#[serde(deny_unknown_fields)]
 pub struct SearchParams {
     pub query: String,
     pub max_results: Option<u32>,
@@ -93,6 +94,7 @@ pub struct SearchParams {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[schemars(description = "Count files matching a query instantly. Returns count without transferring file data. USE THIS before find_files for broad patterns.")]
+#[serde(deny_unknown_fields)]
 pub struct CountParams {
     pub query: String,
     /// Narrow search to a specific directory. USE FORWARD SLASHES to avoid JSON escaping: "C:/Users". Everything normalises path separators automatically.
@@ -112,6 +114,7 @@ pub struct CountParams {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[schemars(description = "Disk usage stats for files matching a query: total count, total size, per-extension breakdown, and largest files. Native-only.")]
+#[serde(deny_unknown_fields)]
 pub struct AggregateParams {
     pub query: String,
     /// Narrow aggregation to files under this path (a directory scope). USE FORWARD SLASHES to avoid JSON escaping: "C:/Users" or "B:/Projects".
@@ -133,6 +136,7 @@ pub struct AggregateParams {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[schemars(description = "Check the search service health, and optionally whether the index still agrees with the filesystem.")]
+#[serde(deny_unknown_fields)]
 pub struct StatusParams {
     /// Stat this many indexed paths and report any that are missing or whose size changed. This is how you tell whether a total is trustworthy: a stale index gives confident wrong numbers. `path` is required with it.
     pub verify_sample: Option<u32>,
@@ -142,6 +146,7 @@ pub struct StatusParams {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[schemars(description = "Recently changed files from the NTFS change journal: created/modified/renamed/deleted with timestamps and paths. Native-only.")]
+#[serde(deny_unknown_fields)]
 pub struct RecentChangesParams {
     /// Only return events with a timestamp (FILETIME, 100ns since 1601) strictly newer than this. 0 returns all retained events.
     pub since: Option<i64>,

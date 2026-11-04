@@ -712,6 +712,32 @@ mod tests {
         components.join(&crate::platform::SEP.to_string())
     }
 
+    #[test]
+    fn recent_changes_scoped_filters_to_the_requested_subtree() {
+        // Regression: a scoped request used to return the global feed, so an
+        // agent asking "did this folder change" got other drives' activity.
+        let index = test_index();
+        let inside = p(&["C:", "vPinball", "Tables", "a.vpx"]);
+        let lookalike = p(&["C:", "vPinball2", "b.vpx"]);
+        let outside = p(&["C:", "Users", "someone", "c.txt"]);
+        index.record_change(1, "WRITE", &inside, false);
+        index.record_change(2, "WRITE", &lookalike, false);
+        index.record_change(3, "WRITE", &outside, false);
+
+        let scope = p(&["C:", "vPinball"]);
+        let scoped = index.recent_changes_scoped(0, 0, None, Some(&scope));
+        let paths: Vec<&str> = scoped.iter().map(|c| c.path.as_str()).collect();
+        assert_eq!(
+            paths.len(),
+            1,
+            "only the event under the scope should survive, and a sibling whose name merely starts with it must not match: {paths:?}"
+        );
+        assert_eq!(paths[0], inside);
+
+        // No scope is still the global feed.
+        assert_eq!(index.recent_changes_scoped(0, 0, None, None).len(), 3);
+    }
+
     fn build() -> FileIndex {
         let ix = test_index();
         ix.replace(vec![
