@@ -130,7 +130,7 @@ pub struct AggregateParams {
     pub exclude_path: Option<String>,
     /// Set to true to include node_modules, .git, and WinSxS. Default: false.
     pub include_all: Option<bool>,
-    /// How many of the largest entries to return (default 20).
+    /// How many of the largest entries to return (default 20). Passing 0 is treated as omitted and returns 20, not none.
     pub top: Option<u32>,
     /// Skip this many of the largest entries before returning `top` of them, so a long folder listing can be paged with repeated calls.
     pub offset: Option<u32>,
@@ -221,8 +221,8 @@ Instant File Search: rules that prevent silent wrong answers.
    question, or when comparing against du/Get-ChildItem, pass include_all=true; those folders ARE indexed, so a zero result without it means excluded, not absent.
 3. OR is the pipe: '*.a | *.b'. Writing 'OR' is treated as a literal name term
    and returns zero results.
-4. Scope with the `path` parameter (C:/Users/x). Do NOT put path:... inside the
-   query: it returns zero results for paths containing spaces.
+4. Scope with the `path` parameter (C:/Users/x). Avoid path:... inside the
+   query: it only works when the path has no spaces, so prefer the parameter.
 5. Multi-extension: ext:lsv,d2s or '*.a | *.b'.
 6. Results are FILES by default; add is:folder for directories.
 7. An invalid filter token matches NOTHING, not everything. If a query returns

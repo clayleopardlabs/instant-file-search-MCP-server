@@ -226,3 +226,5 @@ folder count came back more than ten times too high.
 Other filters (`size:`, `dm:`, `attrib:`) still bind to the branch they appear in.
 That asymmetry is what `PIPE_FILTER_SCOPE` warns about, and the fix it suggests is
 still the right one: repeat the filter on each side.
+
+Passing `top: 0` is treated as omitted and returns 20 entries. It does not suppress the list, which is worth stating because it is the opposite of what a zero suggests.

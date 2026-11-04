@@ -17,23 +17,13 @@ The content index is budget limited (2 GB configured, roughly 26 MB used), so
 A configuration decision rather than a parser bug, but agents will keep trying to
 use it.
 
-### 2. `top: 0` means default 20, not "no cap" (low)
-
-Undocumented, and the opposite of what a caller expects from a zero.
-
-### 3. `PATH_IN_QUERY` documentation is absolute where the behaviour is conditional (low)
-
-The warning and the docs say a `path:` inside the query returns zero results. It
-actually fails only when the path contains spaces, and otherwise raises the
-warning while returning results. One agent spent a call proving the doc wrong.
-
-### 4. No way to total an arbitrary list of paths (low)
+### 2. No way to total an arbitrary list of paths (low)
 
 Agents triaging several known folders drop to PowerShell because there is no
 "sum these N paths" operation. It is the most cited reason for leaving the MCP
 surface.
 
-### 5. No `min_size` first-class argument (low)
+### 3. No `min_size` first-class argument (low)
 
 `size:>5mb` works and is documented, but several agents reached for a `min_size`
 argument first. Consider an alias.
@@ -42,6 +32,13 @@ argument first. Consider an alias.
 
 ## Recently closed, for context
 
+- `top: 0` is treated as omitted and returns 20 entries, verified against the
+  running indexer rather than assumed. An agent had reported that 0 suppressed the
+  largest list; it does not, so the behaviour was documented instead of changed.
+- A `path:` inside the query is documented as failing for paths containing spaces,
+  which is exactly what it does. The backlog entry claiming the doc was absolute
+  was wrong: the doc was already conditional. Only the handshake wording needed
+  tightening, so no behaviour change was made.
 - Type filters bound to one side of a pipe, so `*a* is:folder | *b*` returned
   files from the second branch and an agent counting folders reported 1,415
   instead of 97. Type tokens are now hoisted out of the branch tree and applied as
