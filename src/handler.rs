@@ -32,6 +32,44 @@ fn everything_status_probe() -> anyhow::Result<serde_json::Value> {
 #[derive(Clone, Default)]
 pub struct EverythingHandler;
 
+/// Reject filter tokens that can only ever match nothing.
+///
+/// Everything's semantics are "an invalid filter matches nothing", which for an
+/// agent-driven server turns a typo into a confident "that file does not exist".
+fn reject_invalid_filters(query: &str) -> Result<(), ErrorData> {
+    let bad = crate::diagnostics::invalid_filters(query);
+    if bad.is_empty() {
+        return Ok(());
+    }
+    Err(ErrorData::invalid_params(
+        format!(
+            "invalid filter token(s): {}. An invalid filter matches nothing, so this \
+             would return a misleading empty result. Valid forms: size:>10mb, \
+             size:large, ext:rs,py, attrib:h.",
+            bad.join(", ")
+        ),
+        None,
+    ))
+}
+
+/// Echo what the server understood, and warn about likely mistakes.
+fn annotate(
+    mut value: serde_json::Value,
+    query: &str,
+    include_all: bool,
+    wants_folders: bool,
+) -> serde_json::Value {
+    value["parsed"] = serde_json::to_value(crate::diagnostics::parsed(query, include_all))
+        .unwrap_or(serde_json::Value::Null);
+    let warnings = crate::diagnostics::analyze(query, include_all, wants_folders);
+    if !warnings.is_empty() {
+        if let Ok(w) = serde_json::to_value(&warnings) {
+            value["warnings"] = w;
+        }
+    }
+    value
+}
+
 #[tool_router]
 impl EverythingHandler {
     #[tool(description = "Find files instantly across ALL indexed drives. USE THIS instead of glob, grep, or Get-ChildItem. Query examples: '*.rs', 'content:handler', 'dm:lastweek size:>1mb', 'attrib:h'. Supports wildcards, regex, content search, date/size filters, path scoping, and sorting. For broad patterns, call count_files first to gauge size. Results are files only; add 'is:folder' to include directories, which carry aggregate sizes and are marked by is_dir. NOTE: content: search is bounded. Memory mode uses up to 256 MB of RAM; disk mode can persist content in SQLite. Use it for targeted searches, not exhaustive scans. Default excludes node_modules, .git, WinSxS — pass include_all=true to search everything. OR is '|' (not 'OR'). Scope with the `path` param, not path: inside the query. Multi-extension: ext:lsv,d2s.")]
@@ -44,6 +82,9 @@ impl EverythingHandler {
         // and the Everything fallback appends a `file:` token (everything.rs).
         // Mutating the query here broke whole-query regex mode and nested regex
         // tokens inside an AND-group where they failed to compile.
+        reject_invalid_filters(&params.query)?;
+        let query = params.query.clone();
+        let include_all = params.include_all.unwrap_or(false);
         let result = tokio::task::spawn_blocking(move || {
             match native::search(&params) {
                 Ok(r) => Ok(r),
@@ -67,7 +108,10 @@ impl EverythingHandler {
         })?
         .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
 
-        let text = serde_json::to_string_pretty(&result)
+        let value = serde_json::to_value(&result)
+            .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
+        let value = annotate(value, &query, include_all, false);
+        let text = serde_json::to_string_pretty(&value)
             .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
 
         Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
@@ -80,6 +124,9 @@ impl EverythingHandler {
     ) -> Result<CallToolResult, ErrorData> {
         // Same files-by-default contract as find_files, so "count first, then
         // list" agrees; applied per engine rather than by rewriting the query.
+        reject_invalid_filters(&params.query)?;
+        let query = params.query.clone();
+        let include_all = params.include_all.unwrap_or(false);
         let (count, note) = tokio::task::spawn_blocking(move || {
             match native::count(&params) {
                 Ok(r) => Ok(r),
@@ -104,6 +151,11 @@ impl EverythingHandler {
         .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
 
         let text = serde_json::json!({ "total": count, "note": note }).to_string();
+        let value: serde_json::Value = serde_json::from_str(&text)
+            .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
+        let value = annotate(value, &query, include_all, false);
+        let text = serde_json::to_string_pretty(&value)
+            .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
         Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
 
@@ -112,6 +164,12 @@ impl EverythingHandler {
         &self,
         Parameters(params): Parameters<AggregateParams>,
     ) -> Result<CallToolResult, ErrorData> {
+        reject_invalid_filters(&params.query)?;
+        let query = params.query.clone();
+        let include_all = params.include_all.unwrap_or(false);
+        // Asking for folders is the only case where folder rows in an aggregate
+        // are intended, and the only case where a subtree-sized total is right.
+        let wants_folders = crate::diagnostics::has_explicit_type(&query);
         let result = tokio::task::spawn_blocking(move || native::aggregate(&params))
             .await
             .map_err(|e| {
@@ -120,7 +178,10 @@ impl EverythingHandler {
             })?
             .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
 
-        let text = serde_json::to_string_pretty(&result)
+        let value = serde_json::to_value(&result)
+            .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
+        let value = annotate(value, &query, include_all, wants_folders);
+        let text = serde_json::to_string_pretty(&value)
             .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
         Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }

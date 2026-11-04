@@ -1,0 +1,289 @@
+//! In-band query diagnostics.
+//!
+//! A file index that answers a malformed query with a confident empty result is
+//! worse than one that errors. Every one of the observed agent mistakes
+//! (`aggregate_files(query="*")`, a missing `include_all`, `OR` instead of `|`,
+//! `path:` inside the query, an invalid filter token) returned a plausible,
+//! wrong answer with no signal at all.
+//!
+//! This module turns those into something the model sees on the call it is
+//! making: a `parsed` summary of what the server understood, a `warnings` array
+//! with an exact fix, and a hard error for filter tokens that can only ever
+//! match nothing.
+
+use serde::Serialize;
+
+/// Directories the indexer skips unless `include_all` is set.
+pub const DEFAULT_EXCLUDES: [&str; 3] = ["node_modules", ".git", "WinSxS"];
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Warning {
+    pub code: &'static str,
+    pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fix: Option<String>,
+}
+
+impl Warning {
+    fn new(code: &'static str, message: impl Into<String>, fix: Option<String>) -> Self {
+        Self {
+            code,
+            message: message.into(),
+            fix,
+        }
+    }
+}
+
+/// What the server understood from a request, echoed back with every response.
+#[derive(Debug, Clone, Serialize)]
+pub struct Parsed {
+    /// The query exactly as received.
+    pub query: String,
+    /// True when the native engine will exclude directories.
+    pub files_only: bool,
+    /// True when `node_modules`/`.git`/`WinSxS` are being searched.
+    pub include_all: bool,
+    /// Active default exclusions; empty when `include_all` is set.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub excludes: Vec<&'static str>,
+}
+
+/// True when the query already chooses a file/folder type.
+pub fn has_explicit_type(query: &str) -> bool {
+    query.split_whitespace().any(|word| {
+        let word = word.to_ascii_lowercase();
+        word.starts_with("is:")
+            || word.starts_with("file:")
+            || word.starts_with("folder:")
+            || word.starts_with("attrib:")
+    })
+}
+
+fn tokens(query: &str) -> impl Iterator<Item = &str> {
+    query.split_whitespace()
+}
+
+/// Filter tokens that cannot match anything, so a zero-result answer would be
+/// misleading rather than informative.
+///
+/// Everything semantics treat these as "match nothing"; for an LLM-driven
+/// server that is a trap, so the MCP layer rejects them instead.
+pub fn invalid_filters(query: &str) -> Vec<String> {
+    let mut bad = Vec::new();
+    for raw in tokens(query) {
+        let word = raw.trim_matches('"');
+        let lower = word.to_ascii_lowercase();
+        let bad_size = |value: &str| -> bool {
+            let v = value.trim();
+            if v.is_empty() {
+                return true;
+            }
+            let without_op = v.trim_start_matches(['>', '<', '=']).trim();
+            if without_op.is_empty() {
+                return true;
+            }
+            // Units are optional and JEDEC-style: 10mb, 512kb, 2gb, 10b.
+            let lower = without_op.to_ascii_lowercase();
+            let digits = lower
+                .strip_suffix("tb")
+                .or_else(|| lower.strip_suffix("gb"))
+                .or_else(|| lower.strip_suffix("mb"))
+                .or_else(|| lower.strip_suffix("kb"))
+                .or_else(|| lower.strip_suffix('b'))
+                .unwrap_or(lower.as_str());
+            digits.is_empty() || digits.parse::<f64>().is_err()
+        };
+        if let Some(v) = lower.strip_prefix("size:") {
+            let value = &word[word.len() - v.len()..];
+            // Named constants are valid (`size:large`, `size:empty`, ...).
+            let named = matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "tiny" | "small" | "medium" | "large" | "huge" | "gigantic" | "empty"
+            );
+            if !named && bad_size(value) {
+                bad.push(word.to_string());
+            }
+        } else if let Some(v) = lower.strip_prefix("len:") {
+            let value = &word[word.len() - v.len()..];
+            if bad_size(value) {
+                bad.push(word.to_string());
+            }
+        } else if let Some(v) = lower.strip_prefix("frn:") {
+            let value = &word[word.len() - v.len()..];
+            if bad_size(value) {
+                bad.push(word.to_string());
+            }
+        } else if let Some(v) = lower.strip_prefix("ext:") {
+            let value = &word[word.len() - v.len()..];
+            if value.trim().is_empty() {
+                bad.push(word.to_string());
+            }
+        } else if let Some(v) = lower.strip_prefix("attrib:") {
+            let value = &word[word.len() - v.len()..];
+            let value = value.trim_start_matches('!');
+            let known = "arsdntpcoeihgmu";
+            if value.is_empty()
+                || !value
+                    .chars()
+                    .all(|c| known.contains(c.to_ascii_lowercase()))
+            {
+                bad.push(word.to_string());
+            }
+        }
+    }
+    bad
+}
+
+/// Warnings for a query, given how it will actually be executed.
+///
+/// `wants_folders` is true when the caller asked for directories, which is the
+/// only case where folder rows in an aggregate are intended.
+pub fn analyze(query: &str, include_all: bool, wants_folders: bool) -> Vec<Warning> {
+    let mut warnings = Vec::new();
+
+    // `OR` is not an operator here; the pipe is. An uppercase OR silently
+    // becomes a literal name term and the query returns nothing.
+    for raw in tokens(query) {
+        if raw.eq_ignore_ascii_case("or") && raw == "OR" {
+            let fixed = query
+                .split_whitespace()
+                .map(|w| if w == "OR" { "|" } else { w })
+                .collect::<Vec<_>>()
+                .join(" ");
+            warnings.push(Warning::new(
+                "SUSPECT_OR",
+                "'OR' was treated as a literal file-name term, not as a boolean operator, so this query can only match a file literally named OR.",
+                Some(fixed),
+            ));
+            break;
+        }
+    }
+
+    // Folder scope belongs in the `path` parameter. Inside the query it is a
+    // path-prefix match that fails whenever the path contains a space.
+    for raw in tokens(query) {
+        if raw.to_ascii_lowercase().starts_with("path:") {
+            let scope = raw
+                .trim_matches('"')
+                .split_once(':')
+                .map(|(_, v)| v.to_string())
+                .unwrap_or_default();
+            warnings.push(Warning::new(
+                "PATH_IN_QUERY",
+                "path: inside the query is a path-prefix match and fails for paths containing spaces. Use the `path` parameter for folder scope.",
+                Some(format!("path=\"{scope}\"")),
+            ));
+            break;
+        }
+    }
+
+    // Invalid filters match nothing, so a zero result would look like "absent".
+    for bad in invalid_filters(query) {
+        warnings.push(Warning::new(
+            "INVALID_FILTER",
+            format!("'{bad}' is not a valid filter and matches nothing."),
+            None,
+        ));
+    }
+
+    if !include_all {
+        warnings.push(Warning::new(
+            "DEFAULT_EXCLUDES_ACTIVE",
+            "node_modules, .git and WinSxS are excluded from these results. Pass include_all=true for a true total.",
+            Some("include_all=true".to_string()),
+        ));
+    }
+
+    // A bare `*` in an aggregate also matches folders, whose size is their whole
+    // subtree, so totals come out several times too high.
+    let bare_star = query.trim() == "*" || query.trim() == "**";
+    if bare_star && !wants_folders {
+        warnings.push(Warning::new(
+            "FOLDERS_INCLUDED",
+            "A bare '*' also matches folders, and a folder's size is its entire subtree, so total_size is inflated. Query \"file:\" for a real disk total.",
+            Some("file:".to_string()),
+        ));
+    }
+
+    warnings
+}
+
+/// The `parsed` block echoed with every tool response.
+pub fn parsed(query: &str, include_all: bool) -> Parsed {
+    Parsed {
+        query: query.to_string(),
+        files_only: !has_explicit_type(query),
+        include_all,
+        excludes: if include_all {
+            Vec::new()
+        } else {
+            DEFAULT_EXCLUDES.to_vec()
+        },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn codes(w: &[Warning]) -> Vec<&'static str> {
+        w.iter().map(|x| x.code).collect()
+    }
+
+    #[test]
+    fn detects_uppercase_or() {
+        let w = analyze("*.a OR *.b", true, false);
+        assert!(codes(&w).contains(&"SUSPECT_OR"));
+        assert_eq!(w[0].fix.as_deref(), Some("*.a | *.b"));
+        // The pipe is the operator, so it must not warn.
+        assert!(!codes(&analyze("*.a | *.b", true, false)).contains(&"SUSPECT_OR"));
+        // A lowercase `or` is a legitimate name substring; leave it alone.
+        assert!(!codes(&analyze("or", true, false)).contains(&"SUSPECT_OR"));
+    }
+
+    #[test]
+    fn detects_path_in_query() {
+        let w = analyze("*.sav path:C:/Users/a b/x", true, false);
+        assert!(codes(&w).contains(&"PATH_IN_QUERY"));
+        assert!(!codes(&analyze("*.sav", true, false)).contains(&"PATH_IN_QUERY"));
+    }
+
+    #[test]
+    fn flags_default_excludes_only_when_active() {
+        assert!(codes(&analyze("*.rs", false, false)).contains(&"DEFAULT_EXCLUDES_ACTIVE"));
+        assert!(!codes(&analyze("*.rs", true, false)).contains(&"DEFAULT_EXCLUDES_ACTIVE"));
+    }
+
+    #[test]
+    fn flags_bare_star_for_aggregate() {
+        assert!(codes(&analyze("*", true, false)).contains(&"FOLDERS_INCLUDED"));
+        // Explicitly asking for folders is not a mistake.
+        assert!(!codes(&analyze("*", true, true)).contains(&"FOLDERS_INCLUDED"));
+        assert!(!codes(&analyze("file:", true, false)).contains(&"FOLDERS_INCLUDED"));
+    }
+
+    #[test]
+    fn rejects_invalid_filters() {
+        assert_eq!(invalid_filters("size:garbage"), vec!["size:garbage"]);
+        assert_eq!(invalid_filters("ext:"), vec!["ext:"]);
+        assert_eq!(invalid_filters("attrib:q"), vec!["attrib:q"]);
+        assert_eq!(invalid_filters("len:>"), vec!["len:>"]);
+        // Valid forms stay quiet.
+        assert!(invalid_filters("size:>10mb").is_empty());
+        assert!(invalid_filters("size:large").is_empty());
+        assert!(invalid_filters("ext:rs,py").is_empty());
+        assert!(invalid_filters("attrib:h").is_empty());
+        assert!(invalid_filters("attrib:!d").is_empty());
+    }
+
+    #[test]
+    fn parsed_reports_files_only_and_excludes() {
+        let p = parsed("*.rs", false);
+        assert!(p.files_only);
+        assert_eq!(p.excludes, DEFAULT_EXCLUDES.to_vec());
+        // An explicit type opts out of files_only.
+        assert!(!parsed("is:folder", false).files_only);
+        // include_all clears the exclusion list.
+        assert!(parsed("*.rs", true).excludes.is_empty());
+    }
+}

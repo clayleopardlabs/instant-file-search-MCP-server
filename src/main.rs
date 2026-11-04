@@ -1,5 +1,6 @@
 #[cfg(windows)]
 mod everything;
+mod diagnostics;
 mod handler;
 mod native;
 #[cfg(all(test, windows))]
