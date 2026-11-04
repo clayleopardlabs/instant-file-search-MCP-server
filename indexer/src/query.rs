@@ -17,6 +17,10 @@ pub struct QueryOptions {
     pub path: Option<String>,
     pub exclude_path: Option<String>,
     pub include_all: bool,
+    /// Exclude directories. The MCP layer sets this for find_files/count_files
+    /// so the query string itself is never rewritten — appending `file:` to the
+    /// query broke whole-query regex mode (see 553db4d).
+    pub files_only: bool,
     pub match_path: bool,
     pub regex: bool,
     pub match_case: bool,
@@ -1673,6 +1677,9 @@ impl<'a> EntryFilter<'a> {
         if !self.opts.include_all && entry.excluded {
             return false;
         }
+        if self.opts.files_only && entry.is_dir {
+            return false;
+        }
         if !self.scope_lower.is_empty() {
             let lp = entry.lower_path.as_str();
             if starts_with_ci(lp, &self.scope_lower) {
@@ -2977,5 +2984,39 @@ mod tests {
         assert_eq!(got(".* file:"), vec!["readme.md"]);
         // ...and a folder request must still work.
         assert_eq!(got(".* is:folder"), vec!["docs"]);
+    }
+
+    #[test]
+    fn files_only_option_excludes_directories() {
+        // Files-by-default must come from the `files_only` option, not from
+        // rewriting the query string.
+        let map: HashMap<String, IndexedFile> = HashMap::from([
+            (
+                "readme".to_string(),
+                entry(r"B:\p\readme.md", false, 1_700_000_000),
+            ),
+            ("docs".to_string(), entry(r"B:\p\docs", true, 1_700_000_000)),
+        ]);
+        let names = |opts: QueryOptions| {
+            let mut v: Vec<String> = search(&map, &opts)
+                .entries
+                .iter()
+                .map(|e| e.name.clone())
+                .collect();
+            v.sort();
+            v
+        };
+        let files_only = QueryOptions {
+            query: "*".to_string(),
+            files_only: true,
+            ..Default::default()
+        };
+        assert_eq!(names(files_only), vec!["readme.md"]);
+        // Default keeps directories visible so `is:folder` opt-in is unchanged.
+        let all = QueryOptions {
+            query: "*".to_string(),
+            ..Default::default()
+        };
+        assert_eq!(names(all), vec!["docs", "readme.md"]);
     }
 }

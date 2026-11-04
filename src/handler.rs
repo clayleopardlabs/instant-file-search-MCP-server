@@ -39,13 +39,11 @@ impl EverythingHandler {
         &self,
         Parameters(params): Parameters<SearchParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        // Files by default. Directories are indexed and carry aggregate sizes,
-        // so without this `size:>1gb` ranked `C:` above every real file. An
-        // explicit `is:folder` / `folder:` / `attrib:` opts into them.
-        let params = SearchParams {
-            query: crate::tools::default_to_files(&params.query),
-            ..params
-        };
+        // Files-by-default is applied per engine, never by rewriting the query
+        // string: the native indexer takes a `files_only` option (native.rs)
+        // and the Everything fallback appends a `file:` token (everything.rs).
+        // Mutating the query here broke whole-query regex mode and nested regex
+        // tokens inside an AND-group where they failed to compile.
         let result = tokio::task::spawn_blocking(move || {
             match native::search(&params) {
                 Ok(r) => Ok(r),
@@ -80,11 +78,8 @@ impl EverythingHandler {
         &self,
         Parameters(params): Parameters<CountParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        // Same default as find_files, so "count first, then list" agrees.
-        let params = CountParams {
-            query: crate::tools::default_to_files(&params.query),
-            ..params
-        };
+        // Same files-by-default contract as find_files, so "count first, then
+        // list" agrees; applied per engine rather than by rewriting the query.
         let (count, note) = tokio::task::spawn_blocking(move || {
             match native::count(&params) {
                 Ok(r) => Ok(r),

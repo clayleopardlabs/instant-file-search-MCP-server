@@ -276,6 +276,14 @@ fn create_client_for(source: &EngineSource) -> Result<EverythingClient> {
 pub fn search(params: SearchParams) -> Result<SearchResults> {
     let client = create_client()?;
 
+    // The native engine takes a `files_only` option; Everything needs the type
+    // token in the query string, so apply the files-by-default rule here rather
+    // than rewriting the query in the handler.
+    let params = SearchParams {
+        query: crate::tools::default_to_files(&params.query),
+        ..params
+    };
+
     let (search_text, note) = build_search_query(
         &params.query,
         params.path.as_deref(),
@@ -387,6 +395,12 @@ pub fn search(params: SearchParams) -> Result<SearchResults> {
 /// Returns (total_count, exclusion_note).
 pub fn count(params: CountParams) -> Result<(u64, String)> {
     let client = create_client()?;
+
+    // Mirrors everything::search — keep the files-by-default rule in step.
+    let params = CountParams {
+        query: crate::tools::default_to_files(&params.query),
+        ..params
+    };
 
     let mut search_flags = SearchFlags::empty();
     if params.regex.unwrap_or(false) {

@@ -150,15 +150,25 @@ pub struct RecentChangesParams {
 /// A query that already chooses a type is left untouched: `is:file`,
 /// `is:folder`, `file:`, `folder:`, or any `attrib:` filter (that is how a
 /// caller asks for directories, e.g. `attrib:d` or `is:hidden`).
-pub fn default_to_files(query: &str) -> String {
-    let explicit_type = query.split_whitespace().any(|word| {
+pub fn has_explicit_type(query: &str) -> bool {
+    query.split_whitespace().any(|word| {
         let word = word.to_ascii_lowercase();
         word.starts_with("is:")
             || word.starts_with("file:")
             || word.starts_with("folder:")
             || word.starts_with("attrib:")
-    });
-    if explicit_type {
+    })
+}
+
+/// Append the `file:` type token unless the query already chooses a type.
+///
+/// Only the Everything fallback uses this now. The native engine takes a
+/// `files_only` option instead, because rewriting the query string breaks
+/// whole-query regex mode (`regex: true`) and nests regex tokens inside an
+/// AND-group. See 553db4d for the original change and the regex regression it
+/// caused.
+pub fn default_to_files(query: &str) -> String {
+    if has_explicit_type(query) {
         return query.to_string();
     }
     if query.trim().is_empty() {

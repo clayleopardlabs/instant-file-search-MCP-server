@@ -168,6 +168,9 @@ fn options_from_search(params: &SearchParams) -> serde_json::Value {
         "path": params.path,
         "exclude_path": params.exclude_path,
         "include_all": params.include_all.unwrap_or(false),
+        // Files-by-default, applied as an option instead of rewriting the
+        // query string (which broke whole-query regex mode).
+        "files_only": !crate::tools::has_explicit_type(&params.query),
         "regex": params.regex.unwrap_or(false),
         "match_case": params.match_case.unwrap_or(false),
         "match_whole_word": params.match_whole_word.unwrap_or(false),
@@ -184,6 +187,7 @@ fn options_from_count(params: &CountParams) -> serde_json::Value {
         "path": params.path,
         "exclude_path": params.exclude_path,
         "include_all": params.include_all.unwrap_or(false),
+        "files_only": !crate::tools::has_explicit_type(&params.query),
         "regex": params.regex.unwrap_or(false),
         "match_case": params.match_case.unwrap_or(false),
         "match_whole_word": params.match_whole_word.unwrap_or(false),
