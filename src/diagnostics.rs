@@ -134,6 +134,31 @@ pub fn invalid_filters(query: &str) -> Vec<String> {
     bad
 }
 
+/// Classify a filter token so scoping problems can be detected by kind rather
+/// than by exact text (`file:` and `is:file` are the same kind).
+fn filter_kind(token: &str) -> Option<&'static str> {
+    let t = token.trim_matches('"').to_ascii_lowercase();
+    let t = t.trim_start_matches('!');
+    const KINDS: [(&str, &str); 12] = [
+        ("is:", "type"),
+        ("file:", "type"),
+        ("folder:", "type"),
+        ("attrib:", "attrib"),
+        ("size:", "size"),
+        ("len:", "len"),
+        ("frn:", "frn"),
+        ("ext:", "ext"),
+        ("dm:", "date"),
+        ("dc:", "date"),
+        ("da:", "date"),
+        ("content:", "content"),
+    ];
+    KINDS
+        .iter()
+        .find(|(p, _)| t.starts_with(p))
+        .map(|(_, k)| *k)
+}
+
 /// Warnings for a query, given how it will actually be executed.
 ///
 /// `wants_folders` is true when the caller asked for directories, which is the
@@ -174,6 +199,65 @@ pub fn analyze(query: &str, include_all: bool, wants_folders: bool) -> Vec<Warni
                 Some(format!("path=\"{scope}\"")),
             ));
             break;
+        }
+    }
+
+    // `|` splits the query into alternatives, and a filter binds only to the
+    // alternative it appears in. `*.bin | *.7z is:folder` means
+    // "(*.bin) OR (*.7z AND folder)" — not "(*.bin OR *.7z) AND folder", which
+    // is what a caller means. The unfiltered side also matches directories, so
+    // a count can come back higher than the file count for no visible reason.
+    let groups: Vec<&str> = query
+        .split('|')
+        .map(str::trim)
+        .filter(|g| !g.is_empty())
+        .collect();
+    if groups.len() > 1 {
+        let per_group: Vec<Vec<(&'static str, String)>> = groups
+            .iter()
+            .map(|g| {
+                g.split_whitespace()
+                    .filter_map(|w| filter_kind(w).map(|k| (k, w.trim_matches('"').to_string())))
+                    .collect()
+            })
+            .collect();
+        let mut kinds: Vec<&'static str> = Vec::new();
+        for (kind, _) in per_group.iter().flatten() {
+            if !kinds.contains(kind) {
+                kinds.push(kind);
+            }
+        }
+        for kind in kinds {
+            if per_group
+                .iter()
+                .all(|g| g.iter().any(|(k, _)| *k == kind))
+            {
+                continue;
+            }
+            let token = per_group
+                .iter()
+                .flatten()
+                .find(|(k, _)| *k == kind)
+                .map(|(_, t)| t.clone())
+                .unwrap_or_default();
+            let fixed = groups
+                .iter()
+                .map(|g| {
+                    if g.split_whitespace().any(|w| filter_kind(w) == Some(kind)) {
+                        g.to_string()
+                    } else {
+                        format!("{g} {token}")
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(" | ");
+            warnings.push(Warning::new(
+                "PIPE_FILTER_SCOPE",
+                format!(
+                    "'{token}' applies only to the alternative it sits in. The pipe splits this into separate groups, so the other side is unfiltered and can match files or directories you meant to exclude."
+                ),
+                Some(fixed),
+            ));
         }
     }
 
@@ -246,6 +330,29 @@ mod tests {
         let w = analyze("*.sav path:C:/Users/a b/x", true, false);
         assert!(codes(&w).contains(&"PATH_IN_QUERY"));
         assert!(!codes(&analyze("*.sav", true, false)).contains(&"PATH_IN_QUERY"));
+    }
+
+    #[test]
+    fn warns_when_a_filter_scopes_only_one_alternative() {
+        // Regression from a field test: an agent wrote `*.bin | *.7z is:folder`
+        // expecting a global folder filter. The pipe splits alternatives, so the
+        // first group was unfiltered and directories named *.bin came through.
+        let w = analyze("*.bin | *.7z is:folder", true, false);
+        let pipe = w
+            .iter()
+            .find(|x| x.code == "PIPE_FILTER_SCOPE")
+            .expect("expected a PIPE_FILTER_SCOPE warning");
+        assert_eq!(
+            pipe.fix.as_deref(),
+            Some("*.bin is:folder | *.7z is:folder")
+        );
+        // Repeating the filter on both sides is correct and must stay quiet.
+        assert!(!codes(&analyze("*.bin file: | *.7z file:", true, false))
+            .contains(&"PIPE_FILTER_SCOPE"));
+        // No filters means nothing to scope.
+        assert!(!codes(&analyze("*.a | *.b", true, false)).contains(&"PIPE_FILTER_SCOPE"));
+        // A single alternative is not a scoping problem.
+        assert!(!codes(&analyze("*.bin is:folder", true, false)).contains(&"PIPE_FILTER_SCOPE"));
     }
 
     #[test]
