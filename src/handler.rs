@@ -10,7 +10,9 @@ use tracing::error;
 #[cfg(windows)]
 use crate::everything;
 use crate::native;
-use crate::tools::{AggregateParams, CountParams, RecentChangesParams, SearchParams};
+use crate::tools::{
+    AggregateParams, CountParams, RecentChangesParams, SearchParams, StatusParams,
+};
 
 /// Probe the Everything fallback engine for `search_status`. Windows-only;
 /// on Linux the native indexer is the only engine.
@@ -202,8 +204,11 @@ impl EverythingHandler {
         Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
 
-    #[tool(description = "Check if the file search service is running. Returns engine status, indexed file count, and volumes. Call this before find_files/count_files if you suspect the service is down.")]
-    async fn search_status(&self) -> Result<CallToolResult, ErrorData> {
+    #[tool(description = "Check the file search service health: engine status, indexed file count, volumes. Call this before find_files/count_files if you suspect the service is down. Pass verify_sample=N to stat N indexed paths and report any that are missing or changed size, which is how you tell whether the index still agrees with the filesystem before trusting a total.")]
+    async fn search_status(
+        &self,
+        Parameters(params): Parameters<StatusParams>,
+    ) -> Result<CallToolResult, ErrorData> {
         let (native_result, everything_result) = tokio::task::spawn_blocking(|| {
             (native::status(), everything_status_probe())
         })
@@ -256,16 +261,81 @@ impl EverythingHandler {
             Err(e) => serde_json::json!({ "ok": false, "error": e.to_string() }),
         };
 
-        let json = serde_json::json!({
+        let mut json = serde_json::json!({
             "server": { "version": crate::APP_VERSION, "commit": crate::BUILD_COMMIT },
             "native": native_status,
             "everything": everything_status,
             "warnings": warnings,
         });
+
+        // Opt-in trust check. A stale index is the usual reason this server
+        // disagrees with Explorer or a shell count, and the disagreement is
+        // otherwise invisible: every number still looks confident.
+        if let Some(n) = params.verify_sample.filter(|n| *n > 0) {
+            let path = params.path.clone();
+            let report = tokio::task::spawn_blocking(move || sample_index(n as usize, path.as_deref()))
+                .await
+                .map_err(|e| {
+                    error!("spawn_blocking failed: {e}");
+                    ErrorData::internal_error(format!("task join failed: {e}"), None)
+                })?;
+            match report {
+                Ok(r) => {
+                    let clean = r.is_clean();
+                    json["verify"] = serde_json::to_value(&r).unwrap_or(serde_json::Value::Null);
+                    if !clean {
+                        json["verify"]["verdict"] = serde_json::json!(
+                            "Sampled index rows disagree with the filesystem. The index is a snapshot: it can keep entries for files that no longer exist, and sizes written by an older parser stay until the index is rebuilt. Rebuild the index before trusting any total from this server."
+                        );
+                    } else {
+                        json["verify"]["verdict"] =
+                            serde_json::json!("Sample agrees with the filesystem.");
+                    }
+                }
+                Err(e) => {
+                    json["verify"] = serde_json::json!({ "error": e.to_string() });
+                }
+            }
+        }
+
         let text = serde_json::to_string_pretty(&json)
             .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
         Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
+}
+
+/// Stat a sample of indexed paths and compare them with the index.
+///
+/// Uses the ordinary search path so the sample is exactly what a caller would
+/// have been given, then checks each one against the filesystem.
+fn sample_index(n: usize, path: Option<&str>) -> anyhow::Result<crate::verify::VerifyReport> {
+    let params = SearchParams {
+        query: "file:".to_string(),
+        max_results: Some(n as u32),
+        offset: None,
+        regex: None,
+        match_case: None,
+        match_whole_word: None,
+        match_path: None,
+        sort: None,
+        path: path.map(|p| p.to_string()),
+        fields: None,
+        exclude_path: None,
+        include_all: Some(true),
+    };
+    let results = native::search(&params)?;
+    let entries: Vec<(String, u64)> = results
+        .results
+        .iter()
+        .filter_map(|r| {
+            let p = r.path.clone()?;
+            let s = r.size?;
+            Some((p, s))
+        })
+        .collect();
+    Ok(crate::verify::verify_entries(&entries, |p| {
+        std::fs::metadata(p).ok().map(|m| m.len())
+    }))
 }
 
 /// Names of the tools this server advertises, sorted. `--self-test` prints them

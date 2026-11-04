@@ -7,6 +7,7 @@ mod native;
 mod parity;
 mod results;
 mod tools;
+mod verify;
 
 use rmcp::ServiceExt;
 use tracing_subscriber::EnvFilter;

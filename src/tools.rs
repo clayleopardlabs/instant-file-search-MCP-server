@@ -127,6 +127,15 @@ pub struct AggregateParams {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+#[schemars(description = "Check the search service health, and optionally whether the index still agrees with the filesystem.")]
+pub struct StatusParams {
+    /// Stat this many indexed paths and report any that are missing or whose size changed. Use this before trusting a total: it detects a stale index, which is the usual reason this server disagrees with Explorer or a shell count.
+    pub verify_sample: Option<u32>,
+    /// Restrict the verification sample to files under this path.
+    pub path: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 #[schemars(description = "Recently changed files from the NTFS change journal: created/modified/renamed/deleted with timestamps and paths. Native-only.")]
 pub struct RecentChangesParams {
     /// Only return events with a timestamp (FILETIME, 100ns since 1601) strictly newer than this. 0 returns all retained events.
@@ -205,7 +214,16 @@ Instant File Search: rules that prevent silent wrong answers.
 7. An invalid filter token matches NOTHING, not everything. If a query returns
    zero, re-read your tokens before concluding the file is absent.
 8. The index is a lead source, not an oracle. Confirm any path you will act on
-   (Test-Path / stat) before telling a user it exists.";
+   (Test-Path / stat) before telling a user it exists.
+9. When your numbers differ from Explorer or a shell, that is usually expected,
+   not a bug. total_file_size sums LOGICAL file lengths: it reads lower than
+   Explorer's `size on disk` because cluster slack, NTFS compression and
+   alternate data streams are not counted. It can also read higher or lower than
+   a shell count: the index sees ACL-protected paths a shell cannot read, and it
+   omits the five folders in rule 2 unless include_all is set. If you need to
+   know whether the index itself has drifted, call search_status with
+   verify_sample=N; it stats N indexed paths and reports any that are missing or
+   whose size changed, which is the only reliable way to detect a stale index.";
 
 #[cfg(test)]
 mod tests {
