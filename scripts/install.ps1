@@ -15,6 +15,11 @@ param(
     [string]$ContentMode,
     [switch]$SkipDownload,
     [switch]$SkipElevation,
+    # The Fallback Engine (Everything) is an optional add-on. The native indexer
+    # is the primary engine, so bundling a second one is only worth it for parity
+    # testing or as a safety net, and it adds an MIT-licensed third-party binary
+    # to every install.
+    [switch]$IncludeFallbackEngine,
     [switch]$SkipCodex,
     [switch]$SkipOpenCode,
     [switch]$SkipClaude,
@@ -1075,6 +1080,45 @@ function Write-InstallState([string]$ServiceBinary) {
     $temp = Join-Path $InstallRoot 'current.json.tmp'
     $state | Set-Content -LiteralPath $temp -Encoding UTF8
     Move-Item -LiteralPath $temp -Destination (Join-Path $InstallRoot 'current.json') -Force
+}
+
+function Test-FallbackEngineInstalled {
+    # An Already-installed Everything means the user is relying on it today, so
+    # an upgrade should not silently take it away.
+    if (Get-Process -Name Everything -ErrorAction SilentlyContinue) { return $true }
+    $roots = @($env:ProgramFiles)
+    if (${env:ProgramFiles(x86)}) { $roots += ${env:ProgramFiles(x86)} }
+    foreach ($root in $roots) {
+        if ($root -and (Test-Path -LiteralPath (Join-Path $root 'Everything\Everything.exe'))) { return $true }
+    }
+    foreach ($key in @(
+            'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Everything',
+            'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\Everything')) {
+        if (Test-Path $key) { return $true }
+    }
+    return $false
+}
+
+function Resolve-FallbackEngineChoice {
+    # $NoPrompt is passed for dry runs; $NonInteractive is the script-level flag.
+    # Both must suppress the question, otherwise a scripted install blocks on it.
+    param([switch]$NoPrompt)
+    if ($IncludeFallbackEngine) { return 'include' }
+    if (Test-FallbackEngineInstalled) {
+        Write-Host 'INFO: Everything is already installed on this machine, so the Fallback Engine is included to keep that working.' -ForegroundColor Cyan
+        return 'include'
+    }
+    if ($NoPrompt -or $NonInteractive) {
+        Write-Host 'INFO: Fallback Engine not installed (optional; the native indexer handles all searches). Pass -IncludeFallbackEngine to add it.' -ForegroundColor Cyan
+        return 'skip'
+    }
+    Write-Host ''
+    Write-Host 'The native indexer is the primary engine. Everything is not required.'
+    Write-Host 'The Fallback Engine is optional: it gives you a second engine to compare'
+    Write-Host 'against for parity testing, or a backup if the native indexer fails.'
+    $answer = Read-Host 'Include the optional Fallback Engine? [y/N]'
+    if ($answer -match '^(y|yes)$') { return 'include' }
+    return 'skip'
 }
 
 function Deploy-BundledEngine {
@@ -2391,8 +2435,15 @@ if ($DryRun) {
 }
 
 Write-Step 'Deploying the Fallback Engine'
-if ($DryRun) { Write-Action "Deploy Fallback Engine into '$(Join-Path $versionRoot 'everything')'" }
-else { Deploy-BundledEngine }
+$fallbackChoice = Resolve-FallbackEngineChoice -NoPrompt:$DryRun
+if ($DryRun) {
+    if ($fallbackChoice -eq 'include') { Write-Action "Deploy the optional Fallback Engine into '$(Join-Path $versionRoot 'everything')'" }
+    else { Write-Action 'Skip the optional Fallback Engine (pass -IncludeFallbackEngine to add it)' }
+} elseif ($fallbackChoice -eq 'include') {
+    Deploy-BundledEngine
+} else {
+    Write-Host 'INFO: Fallback Engine skipped. The native indexer handles all searches. Re-run with -IncludeFallbackEngine to add it.' -ForegroundColor Cyan
+}
 
 foreach ($client in $selected) {
     switch ($client) {

@@ -1,8 +1,9 @@
 # Installer reference (Windows)
 
-`scripts/install.ps1` installs the MCP server, the bundled fallback engine, the
-native indexer service, and the MCP registration for each selected client. It is
-the same script the one-liner installer runs:
+`scripts/install.ps1` installs the MCP server, the native indexer service, and the
+MCP registration for each selected client. The fallback engine is optional and is
+only installed when asked for, or when Everything is already installed on the
+machine:
 
 ```powershell
 powershell -c "irm https://raw.githubusercontent.com/clayleopardlabs/instant-file-search-MCP-server/master/scripts/install.ps1 | iex"
@@ -38,6 +39,7 @@ edits.
 | `-IndexMode` | `disk` | `disk` = RAM-saving mode; `memory` = "super duper fast" RAM-resident index. |
 | `-ContentMode` | `auto` | `auto`, `off`, `memory`, `disk` for the content-index cache. |
 | `-SkipDownload` | off | Never download; requires local binaries or a checkout. |
+| `-IncludeFallbackEngine` | off | Bundle the optional Everything fallback engine. Also included automatically when Everything is already installed; otherwise the installer asks, unless `-NonInteractive`. |
 | `-SkipElevation` | off | Do not attempt the admin step; print the exact elevated helper command instead. |
 | `-NonInteractive` | off | Never prompt: no client picker and no UAC attempt; prints the elevated command and records an incomplete install. Use this from agents and CI. |
 | `-ElevationTimeoutSec` | `120` | How long to wait for the UAC prompt before continuing without the native indexer. `0` waits forever. |

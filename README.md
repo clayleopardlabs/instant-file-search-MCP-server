@@ -327,7 +327,7 @@ A file modified in milliseconds still leaves a trace your agent can now find. Yo
 
 **Do I need to install another search program?**
 
-No. The installer includes everything the tool needs.
+No. The installer includes everything the tool needs. Search is handled by the native indexer. An optional second engine (Everything) exists for parity testing and is only installed if you ask for it with `-IncludeFallbackEngine`.
 
 **Does anything leave my computer?**
 
@@ -343,7 +343,7 @@ No. The first scan builds the index. After that, the background service watches 
 
 **What happens if the background service is unavailable?**
 
-Windows: Hooray! You get a fallback search engine. It's the called the Everything engine made by void-tools. It doesn't have every last feature my native engine has but it's serviceable if you need it. I might pull it from future releases and just keep it in the repo for testing purposes, but for now this project is smart enough to know when the native engine is down and immediately use the backup.
+Windows: the native indexer is the engine, and the fallback engine is now an optional extra rather than something every install carries. If you want a second engine, either for parity testing or as a safety net, install with `-IncludeFallbackEngine` and Everything (by void-tools) is bundled and used automatically when the native indexer is unreachable. If Everything is already installed on your machine, the installer keeps it.
 
 Linux and macOS: sorry, you can only use the native indexer, so if there's a problem it'll tell you. Truth is, aside from a bad installation I can't imagine there's going to be a time when the native engine fails but the backup doesn't, so you're not missing anything.
 
