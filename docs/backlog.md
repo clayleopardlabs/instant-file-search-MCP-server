@@ -10,14 +10,27 @@ as a misdiagnosis.
 
 ## Open defects
 
-### 1. Content search covers about 10,000 of 3.9 million files (medium)
+### 1. Wrong-query cases should be errors, not warnings (high)
+
+Two queries today return a plausible wrong answer with only an advisory warning:
+egex: written inside the query instead of passed as egex: true, and
+path: inside the query when the path contains spaces. The warning is easy to
+skim past, and the result is a wrong answer that the agent then reports as a
+server bug. Whole test rounds have ended with agents "fixing" our server because
+they misused it.
+
+Make both errors. Keep the text short and actionable: name the mistake, show the
+corrected call, stop. An agent should be able to recover from the error alone
+without reading the docs or guessing.
+
+### 2. Content search covers about 10,000 of 3.9 million files (medium)
 
 The content index is budget limited (2 GB configured, roughly 26 MB used), so
 `content:"..."` queries are near-useless for "find the save file containing X".
 A configuration decision rather than a parser bug, but agents will keep trying to
 use it.
 
-### 2. No way to total an arbitrary list of paths (low)
+### 3. No way to total an arbitrary list of paths (low)
 
 Agents triaging several known folders drop to PowerShell because there is no
 "sum these N paths" operation. It is the most cited reason for leaving the MCP
