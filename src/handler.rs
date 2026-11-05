@@ -39,6 +39,18 @@ pub struct EverythingHandler;
 /// Everything's semantics are "an invalid filter matches nothing", which for an
 /// agent-driven server turns a typo into a confident "that file does not exist".
 fn reject_invalid_filters(query: &str) -> Result<(), ErrorData> {
+    // `regex:` inside the query is a literal filename fragment, never a pattern,
+    // so it cannot do anything useful. It used to warn and return zero, and an
+    // agent reads a confident zero as "no such file" or as a broken server.
+    if query
+        .split_whitespace()
+        .any(|t| t.to_ascii_lowercase().starts_with("regex:"))
+    {
+        return Err(ErrorData::invalid_params(
+            "`regex:` inside the query is a literal filename, not a pattern, and matches nothing. Put the pattern in the query and pass regex: true.",
+            None,
+        ));
+    }
     let bad = crate::diagnostics::invalid_filters(query);
     if bad.is_empty() {
         return Ok(());
