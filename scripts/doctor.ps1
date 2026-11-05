@@ -42,6 +42,36 @@ function Read-Utf8Text([string]$Path) {
 # Line/scope parser for Cordis profile patches. It mirrors the installer's model
 # closely enough to tell a root row from a preset row and to read the command
 # each row points at, which is what "is this profile actually registered" means.
+function Resolve-DshScalar {
+    # YAML folds long double-quoted values across lines. A backslash at the end of
+    # a line is an escaped newline and joins with no space; that is how the DSH
+    # patch file wraps long exe paths. Reading only the first line yields a
+    # truncated path, and the doctor then reports a false "wrong path" warning
+    # against a correct installation. Observed on a real profile: three rows
+    # reported as pointing at '.../versi\' when they pointed at 1.0.20.
+    param([string]$Value, [string[]]$Lines, [int]$Start, [int]$End)
+    if (-not $Value -or $Value.Length -lt 2) { return $Value }
+    $quote = $Value[0]
+    if ($quote -ne [char]'"' -and $quote -ne [char]"'") {
+        return $Value.Trim('"').Trim("'")
+    }
+    $backslash = [string][char]92
+    $acc = $Value
+    $index = $Start
+    while (-not $acc.EndsWith([string]$quote) -and $index -lt $End) {
+        $index++
+        $next = ([string]$Lines[$index]).Trim()
+        if ($acc.EndsWith($backslash)) {
+            $acc = $acc.Substring(0, $acc.Length - 1) + $next
+        } else {
+            $acc = $acc + $next
+        }
+    }
+    if ($acc.StartsWith([string]$quote)) { $acc = $acc.Substring(1) }
+    if ($acc.EndsWith([string]$quote)) { $acc = $acc.Substring(0, $acc.Length - 1) }
+    return $acc
+}
+
 function Get-DshPatchReport([string]$Text) {
     $lines = [string[]](@($Text -split "\r?\n"))
     $entryStarts = @()
@@ -106,7 +136,8 @@ function Get-DshPatchReport([string]$Text) {
         $commandPath = $null
         for ($i = $row.Start; $i -le $row.OwnEnd; $i++) {
             if ($lines[$i] -match '^\s*command:\s*(?<value>.+)$') {
-                $commandPath = $Matches['value'].Trim().Trim('"').Trim("'")
+                $commandPath = Resolve-DshScalar -Value $Matches['value'].Trim() `
+                    -Lines $lines -Start $i -End $row.OwnEnd
             }
         }
         $serverRows += [pscustomobject]@{
