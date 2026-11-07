@@ -59,14 +59,34 @@ pub fn build_index(volumes: &[String], index: &SharedIndex) -> Result<usize> {
 #[cfg(target_os = "linux")]
 pub fn build_index_streaming(volumes: &[String], index: &SharedIndex) -> Result<usize> {
     use crate::platform::scan_volume_into;
+    use crate::progress::ScanProgress;
 
-    Ok(index.replace_streaming(|sink| {
-        for v in volumes {
-            match scan_volume_into(v, &mut *sink) {
-                Ok(count) => tracing::info!("scanned {}: {} entries", v, count),
-                Err(e) => tracing::warn!("skipping {}: {e:#}", v),
+    let mut progress = ScanProgress::new(volumes);
+    let result = index.replace_streaming(|sink| {
+        let mut total: u64 = 0;
+        for (volume_index, volume) in volumes.iter().enumerate() {
+            progress.begin_volume(volume_index, volume);
+            let mut in_volume: u64 = 0;
+            let outcome = scan_volume_into(volume, &mut |entry| {
+                in_volume += 1;
+                total += 1;
+                progress.tick(volume, in_volume, total);
+                sink(entry)
+            });
+            match outcome {
+                Ok(count) => progress.finish_volume(volume, count as u64, total),
+                Err(e) => {
+                    tracing::warn!("skipping {}: {e:#}", volume);
+                    progress.finish_volume(volume, in_volume, total);
+                }
             }
         }
         Ok(())
-    }))
+    });
+
+    match &result {
+        Ok(entries) => progress.finished(*entries as u64),
+        Err(error) => progress.failed(&format!("{error:#}")),
+    }
+    result
 }

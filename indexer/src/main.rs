@@ -15,6 +15,8 @@ mod disk;
 mod index;
 mod platform;
 mod protocol;
+#[cfg(target_os = "linux")]
+mod progress;
 mod query;
 mod scan;
 mod types;

@@ -21,10 +21,20 @@ After=local-fs.target
 
 [Service]
 Type=notify
+# A cold-cache walk of a large filesystem takes longer than systemd's default
+# 90 s start timeout (measured 81 s for 1.63 M entries on NVMe; older logs show
+# starts that were killed at 90 s and then restarted in a loop). Allow a full
+# rescan before giving up.
+TimeoutStartSec=300
 ExecStart=/usr/local/lib/instant-file-search/instant-file-search-indexer serve
 EnvironmentFile=-/etc/instant-file-search/indexer.env
 Restart=on-failure
 RestartSec=2
+# World-readable runtime dir for startup-scan progress (scan.json), so the
+# unprivileged MCP server can answer "where is the scan" while the pipe is not
+# up yet. Removed automatically when the service stops.
+RuntimeDirectory=instant-file-search
+RuntimeDirectoryMode=0755
 # fanotify FAN_MARK_FILESYSTEM requires CAP_SYS_ADMIN.
 # CAP_DAC_OVERRIDE + CAP_DAC_READ_SEARCH are needed to traverse every
 # directory on the system (e.g. drwxr-x--- home dirs).

@@ -71,7 +71,7 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<()> {
                 sink(synthetic_entry(n))?;
             }
             Ok(())
-        });
+        })?;
     } else {
         index.replace(synthetic_entries(entries));
     }

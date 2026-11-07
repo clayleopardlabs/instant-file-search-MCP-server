@@ -169,6 +169,28 @@ pub fn status() -> Result<serde_json::Value> {
     exchange("status", None)
 }
 
+/// Read the indexer's startup-scan progress, if it publishes one.
+///
+/// The pipe server only starts after the initial walk, so this file is the only
+/// way to answer "where is the scan" while it runs (the Linux indexer rewrites
+/// it every couple of seconds and exposes it through `search_status` as
+/// `scan`). Returns `None` on platforms that do not publish it, and when the
+/// file is absent or unreadable.
+pub fn scan_progress() -> Option<serde_json::Value> {
+    #[cfg(target_os = "linux")]
+    {
+        let path = std::env::var_os("INSTANT_FS_SCAN_STATUS_PATH")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| std::path::PathBuf::from("/run/instant-file-search/scan.json"));
+        let text = std::fs::read_to_string(path).ok()?;
+        serde_json::from_str(&text).ok()
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        None
+    }
+}
+
 fn options_from_search(params: &SearchParams) -> serde_json::Value {
     // max_results=0 means "no limit" to the indexer, which can produce a
     // response too large for the pipe buffer. Treat 0 as the default 100.

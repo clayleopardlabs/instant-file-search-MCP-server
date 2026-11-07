@@ -135,6 +135,8 @@ Correctly written queries produce no warnings, so a clean response means the num
 
 `search_status` additionally emits `BUILD_MISMATCH` / `COMMIT_MISMATCH` when the MCP server and the running indexer come from different builds, the usual reason a fixed bug still misbehaves on the wire.
 
+On Linux, `search_status` also returns a `scan` object while the indexer publishes startup progress: `state` (`scanning` / `ready` / `failed`), the current `volume` and `volume_index`, `entries`, `entries_in_volume`, and timestamps. The pipe is not listening during the initial walk, so `scan` is the only field that says where startup is; `null` means no progress file is present (for example on Windows or macOS).
+
 ## Why these numbers differ from Explorer or a shell
 
 An agent should not have to work this out. `total_file_size` sums **logical file

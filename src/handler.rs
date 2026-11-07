@@ -305,6 +305,15 @@ impl EverythingHandler {
             }
         }
 
+        // Startup progress is published as a world-readable file because the
+        // pipe is not listening while the initial walk runs. Read it before the
+        // native call so a failure can still report where the scan is.
+        let scan_progress = native::scan_progress();
+        let service_hint = if cfg!(windows) {
+            "sc query instant-file-search-indexer"
+        } else {
+            "systemctl status instant-file-search-indexer"
+        };
         let native_status = match native_result {
             Ok(v) => serde_json::json!({ "ok": true, "detail": v }),
             // A missing pipe usually means the service is still building its
@@ -313,7 +322,9 @@ impl EverythingHandler {
             Err(e) => serde_json::json!({
                 "ok": false,
                 "error": e.to_string(),
-                "hint": "The native indexer is not accepting connections. After a start, upgrade or crash it may still be scanning; retry in a few seconds. If it persists, run: sc query instant-file-search-indexer",
+                "hint": format!(
+                    "The native indexer is not accepting connections. After a start, upgrade or crash it may still be scanning; retry in a few seconds. If `scan` below is non-null it shows the volume and entry count the startup walk has reached. If it persists, run: {service_hint}"
+                ),
             }),
         };
         let everything_status = match everything_result {
@@ -325,6 +336,7 @@ impl EverythingHandler {
             "server": { "version": crate::APP_VERSION, "commit": crate::BUILD_COMMIT },
             "native": native_status,
             "everything": everything_status,
+            "scan": scan_progress,
             "warnings": warnings,
         });
 

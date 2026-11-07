@@ -211,24 +211,19 @@ impl FileIndex {
     /// walk never holds the whole corpus in memory. Memory mode keeps the
     /// historical collect-then-insert behaviour because it is supposed to
     /// materialize the index anyway.
-    pub fn replace_streaming<F>(&self, scan: F) -> usize
+    pub fn replace_streaming<F>(&self, scan: F) -> anyhow::Result<usize>
     where
         F: FnOnce(&mut dyn FnMut(IndexedFile) -> anyhow::Result<()>) -> anyhow::Result<()>,
     {
         if let Some(disk) = &self.disk {
-            return disk.replace_streaming(scan).unwrap_or_else(|e| {
-                tracing::error!("disk streaming replace failed: {e:#}");
-                0
-            });
+            return disk.replace_streaming(scan);
         }
         let mut collected = Vec::new();
-        if let Err(error) = scan(&mut |entry| {
+        scan(&mut |entry| {
             collected.push(entry);
             Ok(())
-        }) {
-            tracing::error!("streaming scan failed: {error:#}");
-        }
-        self.replace(collected)
+        })?;
+        Ok(self.replace(collected))
     }
 
     /// Remove all entries under a volume prefix, then insert the fresh scan.

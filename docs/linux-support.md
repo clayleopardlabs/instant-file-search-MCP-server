@@ -214,6 +214,28 @@ redoes the walk. The streaming scan makes that restart cheap in RAM, but it is
 still a walk, which is why the same architecture behaves differently from
 Windows. The fallback engine is not involved, and disk mode does not remove it.
 
+**Startup progress.** The pipe server starts only after the initial walk, so
+`search_status` cannot answer "where is the scan" while it runs. The indexer now
+publishes progress three ways:
+
+- `journalctl -u instant-file-search-indexer -f` logs `scanning <volume>
+  (volume N/M)` when a volume starts, a heartbeat at most every 5 s
+  (`scanning /mnt/2tb-drive: 22610 entries (708288 total)`), and
+  `scanned <volume>: N entries (M total)` when that volume finishes.
+- `/run/instant-file-search/scan.json` is world-readable and rewritten
+  atomically every 2 s. It carries `state` (`scanning` / `ready` / `failed`), the
+  current `volume` and `volume_index`, `entries`, `entries_in_volume`,
+  `started_at`, `updated_at`, `finished_at`, `pid`, and the `volumes` list.
+- `systemctl status instant-file-search-indexer` shows the same heartbeat via
+  `sd_notify(STATUS=...)`, and `search_status` includes the file as `scan`, so
+  an agent asking during startup gets the current volume and entry count instead
+  of only "not accepting connections".
+
+The unit also sets `TimeoutStartSec=300` and a `RuntimeDirectory` for the status
+file. systemd's default 90 s start timeout is too short for a cold-cache walk:
+this machine measured 81 s for 1.63 M entries, and earlier journal entries show
+starts killed at 90 s and then restarted in a loop.
+
 ## Porting plan (what would need to change)
 
 | Windows module | Linux replacement | Effort |
