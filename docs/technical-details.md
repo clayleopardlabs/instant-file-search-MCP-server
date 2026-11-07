@@ -7,7 +7,7 @@ The following sections are for developers, advanced users, and anyone who wants 
 No separate programs to install. This tool brings its own search engine, so it works out of the box:
 
 1. **A background indexer.** A small service keeps a live, always-up-to-date list of everything on your drives. It runs as a Windows service on Windows, a systemd unit on Linux, or a launchd daemon on macOS. The first scan takes about 15 seconds on a typical Windows PC (roughly 2.4 million files). After that it stays current on its own by watching for new, renamed, or deleted files.
-2. **A Fallback Engine (`instant-file-search-fallback-engine-1.5.0.1418b`).** Just in case. If the background indexer is ever stopped, your searches are answered automatically by the Fallback Engine instead. You never have to start or manage anything. It is a Windows-native engine (Everything) that ships with the release installer; Linux and macOS use the native indexer exclusively.
+2. **An optional Fallback Engine (`instant-file-search-fallback-engine-1.5.0.1418b`).** Windows only, and only present if you install it with `-IncludeFallbackEngine` (or already have Everything installed). When it is present and the background indexer is stopped, searches are answered by it instead. Linux and macOS use the native indexer exclusively.
 
 Searches are local. RAM saving mode stores the index on disk, while super duper fast mode keeps it in RAM. RAM saving mode keeps query memory small; on Linux in RAM saving mode the initial scan streams entries into the database as they are discovered instead of holding the whole corpus in memory. Nothing leaves your machine.
 
@@ -19,7 +19,7 @@ The RAM saving run recorded 6,159,225,044 bytes read and 2,752,666,044 bytes wri
 
 Super duper fast mode avoids writing that SQLite database, but it still has to read the filesystem to build the index. Once it is built, its searches stay in RAM. The 500,000-file run used 488 MiB, or roughly 1 MiB per 1,000 synthetic file records. Real paths and metadata vary, so treat that as a planning estimate, not a capacity guarantee.
 
-Those benchmark RAM figures are measured after the build, with the benchmark's input already dropped. Initial-scan memory on a real corpus is a different number: on a 1.6M-entry Linux machine the deployed 1.0.20 indexer held 710 MB VmRSS (1.19 GB high-water mark) while scanning in disk mode. The Linux scan now streams entries into SQLite as they are discovered instead of collecting them first, so the corpus is no longer held in memory; on the same corpus the synthetic scan peak fell to 9.9 MiB and a real full walk of 1,627,303 entries peaked at 11.5 MiB, with build time and query results unchanged. See [Linux Support](linux-support.md) for the measurement, its date and host, the socket caveat, and the restart caveat.
+Those benchmark RAM figures are measured after the build, with the benchmark's input already dropped. Initial-scan memory on a real corpus is a different number: on a 1.6M-entry Linux machine the deployed 1.0.20 indexer reached a 1.19 GB VmHWM during the scan and held 710 MB VmRSS steady afterwards, in disk mode. The Linux scan now streams entries into SQLite as they are discovered instead of collecting them first, so the corpus is no longer held in memory; on the same corpus the synthetic scan peak fell to 9.9 MiB and a real full walk of 1,627,303 entries peaked at 11.5 MiB, with build time and query results unchanged. See [Linux Support](linux-support.md) for the measurement, its date and host, the socket caveat, and the restart caveat.
 
 For a very large server, file count matters more than the total number of bytes stored. A petabyte made of a few large files is easy to index. A petabyte made of billions of small files is not. RAM saving mode is the only practical choice for those catalogs, but this project's generic disk queries can still stream many SQLite rows. It is not yet a petabyte-scale search architecture without further sharding and query indexes.
 
@@ -31,8 +31,8 @@ documented in [installer.md](installer.md).
 
 The one-line installer command shown in Install on Windows is the recommended method. Notes for agents and power users:
 
-- The installer downloads the MCP server, the native indexer, and the `instant-file-search-fallback-engine` from the latest release on GitHub. The Rust toolchain is not required; the installer does not compile files. It also installs the OpenCode plug-in automatically so sub-agents can use the same search tools.
-- Approving the permission prompt is the only step that uses administrator rights; it puts the background indexer into service. If you cannot see the permission prompt, the tools work with the fallback engine (they are slower). You can register the native indexer subsequently by running the installer in elevated mode.
+- The installer downloads the MCP server and the native indexer from the latest release on GitHub, plus the optional `instant-file-search-fallback-engine` only when you pass `-IncludeFallbackEngine`. The Rust toolchain is not required; the installer does not compile files. It also installs the OpenCode plug-in automatically so sub-agents can use the same search tools.
+- Approving the permission prompt is the only step that uses administrator rights; it puts the background indexer into service. If you cannot see the permission prompt, the native indexer is not installed; if the optional fallback engine is also present, searches are answered by it (slower), otherwise the tools report that no engine is available. You can register the native indexer subsequently by running the installer in elevated mode.
 - If an AI agent reports that it installed only the fallback engine, the installation is incomplete. Ask it to run the repository installer with the required UAC approval and verify with `doctor.ps1 -RequireNative`.
 - Updates are staged in a new versioned folder before the installer switches the MCP client and Windows service to it. Running sessions keep their old executable until you restart the AI app; the installer never overwrites an executable that is in use. The active version and paths are recorded in `%LOCALAPPDATA%\ClayLeopardLabs\instant-file-search\current.json`.
 
@@ -118,8 +118,10 @@ Outputs:
 
 - `target/release/instant-file-search-mcp-server.exe` - the MCP server (Windows)
 - `target/release/instant-file-search-indexer.exe` - the native indexer (Windows)
-- `target/x86_64-unknown-linux-gnu/release/instant-file-search-mcp-server` - Linux build
-- `target/x86_64-unknown-linux-gnu/release/instant-file-search-indexer` - Linux build
+- `target/release/instant-file-search-mcp-server` - Linux build
+- `target/release/instant-file-search-indexer` - Linux build
+
+(Linux builds land in `target/release/` on a Linux host; a cross-compiled build puts them in `target/x86_64-unknown-linux-gnu/release/`.)
 
 The installer registers the indexer as a Windows service (`instant-file-search-indexer`, auto-start). Run `indexer.exe scan` for a one-shot diagnostic, or `indexer.exe serve` to run the indexer in the foreground.
 
@@ -130,7 +132,7 @@ The native indexer runs on Linux. Tested on Ubuntu 26.04 LTS, kernel 7.0, x86_64
 | Windows | Linux |
 |---|---|
 | $MFT raw scan | `getdents64` walk + `statx` (inode = `file_ref`, btime = created) |
-| USN Change Journal | fanotify FID-mode marks (needs root/CAP_SYS_ADMIN; inotify is a documented fallback) |
+| USN Change Journal | fanotify FID-mode marks (needs root/CAP_SYS_ADMIN; no inotify fallback is implemented) |
 | Named pipe | Unix socket at `/tmp/instant-file-search-indexer.sock` (mode 0666) |
 | Everything fallback engine | Not used; native is the only engine on Linux |
 | Windows service (SCM) | systemd unit with `Type=notify` + sd_notify readiness |
@@ -209,7 +211,7 @@ MCP Host (VS Code / Cursor / Claude Desktop / OpenCode / Hermes)
                             └─ NTFS master file list + change journal
 ```
 
-On Windows, if the indexer service is unreachable, the server answers from the `instant-file-search-fallback-engine` instead, with the same tools and results and no setup. On Linux and macOS the native indexer is the only engine.
+On Windows, if the indexer service is unreachable and the optional `instant-file-search-fallback-engine` was installed (or Everything is already present), the server answers from it instead with the same tools and results. Without it, the tools report that no engine is available. On Linux and macOS the native indexer is the only engine.
 
 ## License
 

@@ -90,7 +90,7 @@ Linux backends behind the same seams:
 | `indexer/src/sector_reader.rs` | raw volume reads | not needed (walk path) | `cfg(windows)` |
 | `indexer/src/pipe.rs` | named pipe (Win32) | Unix domain socket (tokio) | Connection seam |
 | `indexer/src/main.rs` | SCM service host | systemd unit host | cfg'd service bootstrap |
-| `indexer/src/scan.rs` | scan orchestration | same | Portable as-is |
+| `indexer/src/scan.rs` | scan orchestration | same + Linux-only `build_index_streaming` | Portable `build_index`; the streaming path is `cfg(target_os = "linux")` |
 | `src/everything.rs` | Everything IPC + auto-launch | removed | `cfg(windows)` |
 | `src/native.rs` | named-pipe client | Unix socket client | Connection seam |
 | `src/handler.rs` / `src/tools.rs` | MCP surface | same | Portable as-is (minus everything) |
@@ -202,8 +202,8 @@ Linux backends behind the same seams:
    ext4-only, root, and unsafe mounted-rw). Revisit only if cold-HDD latency matters.
 4. **Content store**: 256MB budget limitation carries over unchanged (known gap).
 5. **btrfs**: fanotify filesystem marks can fail (EXDEV), currently reported as
-   unsupported until an inotify fallback is added; index keys use `stx_subvol` where
-   available.
+   unsupported until an inotify fallback is added. (No `stx_subvol` keying is
+   implemented; index keys are `(st_dev, st_ino)`.)
 
 ## Rough effort
 - Phase 0-1: scaffolding + de-noise (small, CI-heavy), ~1 session

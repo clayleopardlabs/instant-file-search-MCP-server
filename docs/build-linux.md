@@ -6,7 +6,8 @@ versus the Windows build.
 
 ## Prerequisites
 
-- Ubuntu 24.04 LTS recommended (kernel 6.8). Kernel 5.17+ is required for
+- Ubuntu 24.04 LTS or newer recommended (kernel 6.8+; tested on Ubuntu 26.04
+  LTS, kernel 7.0). Kernel 5.17+ is required for
   full change-tracking support (`FAN_RENAME`); 5.13+ gives unprivileged
   fanotify with FID.
 - Rust toolchain with the `x86_64-unknown-linux-gnu` target:
@@ -43,7 +44,9 @@ The script:
 1. Builds both binaries in release mode.
 2. Installs them under `/usr/local/lib/instant-file-search/`.
 3. Installs the systemd unit `instant-file-search-indexer.service`
-   (`Type=notify`, `AmbientCapabilities=CAP_SYS_ADMIN` for fanotify).
+   (`Type=notify`, `TimeoutStartSec=900`, and `CAP_SYS_ADMIN` +
+   `CAP_DAC_OVERRIDE` + `CAP_DAC_READ_SEARCH` for fanotify and for traversing
+   restricted directories such as `drwxr-x---` home folders).
 4. Enables and starts the service.
 5. Registers the MCP client with OpenCode (`~/.config/opencode/opencode.jsonc`
    or `.json`), including the oh-my-opencode-slim sub-agent `mcps` patch.
@@ -87,9 +90,11 @@ sudo /usr/local/lib/instant-file-search/instant-file-search-indexer scan
 
 ## Known gaps (Linux)
 
-- **fanotify needs root.** The systemd unit grants `CAP_SYS_ADMIN` via
+- **fanotify needs root.** The systemd unit grants `CAP_SYS_ADMIN`,
+  `CAP_DAC_OVERRIDE`, and `CAP_DAC_READ_SEARCH` via
   `AmbientCapabilities`. There is currently no inotify fallback; unprivileged
-  execution fails clearly instead of providing incomplete change tracking.
+  execution fails clearly instead of providing incomplete change tracking, and
+  a `fuseblk`/ntfs-3g mount cannot be marked at all.
 - **`date_accessed` is unreliable** on Linux defaults (relatime/noatime
   mounts). `date_accessed` queries may be stale or zero.
 - **Content store**: the 256MB bounded content store carries over unchanged.

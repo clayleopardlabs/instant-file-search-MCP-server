@@ -44,10 +44,12 @@ their current behavior unless the user explicitly changes a setting.
 - The disk query engine streams rows from SQLite and applies the shared Rust
   filter engine. This protects query parity but scans too many rows for common
   filters.
-- The Windows synthetic result for 500,000 records is approximately 495 MiB
-  RSS in memory mode and 10 MiB RSS in disk mode **after the build**. The
-  10 MiB figure measures a synthetic corpus whose build input had already been
-  dropped; it is not the memory cost of an initial scan of a real filesystem.
+- The historical Windows synthetic result for 500,000 records was about 495 MiB
+  RSS in memory mode and 10 MiB in disk mode **after the build**. The 10 MiB
+  figure does not reproduce on Linux with the current harness (132 MiB after
+  build, 228 MiB peak at 500k), while memory mode roughly reproduces its
+  495 MiB. Treat the 10 MiB as a Windows working-set measurement, not a portable
+  baseline, and note that neither number describes an initial scan.
   Disk queries are roughly 2.2 to 6.6 times slower in that workload.
 - The current regression suite has 93 passing indexer tests (plus the MCP
   server's own tests).
@@ -98,6 +100,9 @@ and date, a release build of this change measured:
   live root service owns it and ended with "Address already in use", so
   after-scan steady memory is quoted from the synthetic streaming row; the real
   walk peaked at 11.5 MiB during the scan.
+- the shipped 1.0.22 service, restarted later against 2,687,923 entries,
+  settled at VmRSS = VmHWM = 31,056 kB. That includes the by-design
+  100,000-event change ring buffer and the content cache.
 
 Windows and macOS still use the collect-then-insert path. That is a known
 follow-up, not a Linux-only regression: Windows resumes from USN checkpoints so

@@ -194,8 +194,9 @@ identical results and timings (for example `*.rs` at 1,024 ms both, and
 `file:*.json` at 2,876 ms vs 2,857 ms), so the change costs no build time and no
 query performance. The real-walk run could not bind the production indexer socket
 because the live root service owns it and ended with "Address already in use",
-so steady-state memory after a real scan is quoted from the synthetic streaming
-row (8.2 MiB); the real walk peaked at 11.5 MiB during the scan.
+so that early run did not observe post-scan steady state; the synthetic streaming
+row (8.2 MiB) is the scan-time figure, and the shipped service's measured steady
+state is given next.
 
 A later restart of the shipped 1.0.22 service confirmed the steady state in
 production: 2,687,923 entries indexed (the machine had gained a fourth volume, an
@@ -235,13 +236,16 @@ Windows. The fallback engine is not involved, and disk mode does not remove it.
 publishes progress three ways:
 
 - `journalctl -u instant-file-search-indexer -f` logs `scanning <volume>
-  (volume N/M)` when a volume starts, a heartbeat at most every 5 s
+  (volume N/M)` when a volume starts, a heartbeat at most every 5 s or 100,000
+  entries, whichever comes first
   (`scanning /mnt/2tb-drive: 22610 entries (708288 total)`), and
   `scanned <volume>: N entries (M total)` when that volume finishes.
 - `/run/instant-file-search/scan.json` is world-readable and rewritten
   atomically every 2 s. It carries `state` (`scanning` / `ready` / `failed`), the
   current `volume` and `volume_index`, `entries`, `entries_in_volume`,
-  `started_at`, `updated_at`, `finished_at`, `pid`, and the `volumes` list.
+  `started_at`, `updated_at`, `finished_at`, `pid`, and the `volumes` list. Both
+  the indexer and the MCP reader honour `INSTANT_FS_SCAN_STATUS_PATH` for tests
+  and non-service runs.
 - `systemctl status instant-file-search-indexer` shows the same heartbeat via
   `sd_notify(STATUS=...)`, and `search_status` includes the file as `scan`, so
   an agent asking during startup gets the current volume and entry count instead

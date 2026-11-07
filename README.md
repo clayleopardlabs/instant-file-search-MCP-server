@@ -238,7 +238,7 @@ You could ask it very specific questions like,
 
 ...but 99% of the time my agents use it automatically. When they're working on a codebase and need to know where that library is or when they're trying to find some config file on my computer, etc. Or this past week when I was doing a reinstall of Windows and needed to backup my Witcher 3 save files.
 
-By default, searches are answered in milliseconds straight from memory. Nothing leaves your machine.
+By default, searches are answered in milliseconds straight from the local index (the RAM saving mode stores it on disk; the fast mode keeps it in memory). Nothing leaves your machine.
 
 ## Two Modes
 

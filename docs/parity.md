@@ -1,6 +1,6 @@
 # Everything parity notes
 
-The native indexer's goal is behavioral parity with the bundled Everything
+The native indexer's goal is behavioral parity with the optional Everything
 engine. Everything is the reference implementation: we run identical queries
 through both engines (native pipe + Everything IPC) and diff the results.
 Any mismatch is a bug in the native engine. The differential harness lives in
@@ -82,11 +82,12 @@ into two terms.
   (e.g. a `node_modules` query scoped to a user profile: native returns only
   files whose *name* contains the term, Everything adds the leaked folders).
   Native is the more correct engine here; the divergence is accepted.
-- Everything reads live from its MFT index; native serves its in-memory scan.
-  Immediately after a scan finishes, a few files changed in the last minutes
+- Everything reads live from its MFT index; native serves its own index (SQLite
+  in the default disk mode, in-memory in fast mode). Immediately after a scan
+  finishes, a few files changed in the last minutes
   can differ. Deltas of a few hundred out of millions are expected.
 - Recency deltas on relative-date filters (`dm:today` etc.) right after
-  midnight: Everything's index timestamps and native's in-memory scan can
+  midnight: Everything's index timestamps and native's index can
   disagree on a small set of files touched in the last minutes.
 
 ## Non-gaps checked and rejected
@@ -243,9 +244,9 @@ Each is documented with rationale for why the gap is accepted.
   `date_created`, `date_accessed`, `attributes` (now real flags),
   `extension`, `is_dir`/`type`. `run_count`/`date_run` stay null (accepted
   gap above). `date_recently_changed` maps to the USN `rc:` timestamp.
-- Sorts: native honors the 14 documented sorts plus the Everything-style
-  `sort:` tokens for size/date/name/path/extension. Everything-only sorts
-  (run count, date run) remain unsupported by design.
+- Sorts: native honors the 14 documented sorts. Everything's inline `sort:`
+  token is unsupported (accepted gap above); Everything-only sorts (run count,
+  date run) remain unsupported by design.
 
 ### How to re-run the audit
 
@@ -266,15 +267,15 @@ surface; every probe must be characterized before the battery is green.
 - Dates: `today`/`yesterday`, `lastNdays`/`pastNdays`, `prevNdays` (trailing),
   `lastweek`/`prevweek`, `lastmonth` (rolling 31d), `lastyear`, and absolute
   `dm:`/`dc:`/`da:` dates: all in local time.
-- `path`/`parent` scoping, `file:`/`folder:` type filters, `sort`.
+- `path` scoping, `file:`/`folder:` type filters, `sort`.
 
 ### Where native is strictly more correct
 
 - **Folder excludes.** Everything's `!<foo\>` excludes a folder's contents but
   leaks the folder itself; native excludes the folder too. Native is right.
 - **Freshness of source.** Everything reads live from its MFT index but its
-  in-memory lists go stale in build-churn trees; native serves its own scan
-  which matches disk truth.
+  in-memory lists go stale in build-churn trees; native serves its own index
+  (SQLite in disk mode) which matches disk truth.
 
 ### Exceed capabilities (3 of 4 shipped)
 

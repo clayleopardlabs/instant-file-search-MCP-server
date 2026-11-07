@@ -4,10 +4,10 @@
 
 | Tool | Purpose | Key detail |
 |------|---------|------------|
-| `find_files` | Full search with wildcards, regex, filters, path scope, sort, pagination, field selection | Max 100 results per call; use `offset` for paging |
+| `find_files` | Full search with wildcards, regex, filters, path scope, sort, pagination, field selection | Defaults to 100 results; pass a larger `max_results` if needed, and use `offset` for paging |
 | `count_files` | Fast count: returns total only, no file data | Call this FIRST for broad patterns to gauge result size |
-| `search_status` | Check engine health (native indexer + Everything fallback) | Call when tools fail unexpectedly |
-| `recent_changes` | List files changed recently (USN change journal), newest first | Pass `hours=N` for a time window; `reasons=` to filter; `limit` caps (default 100) |
+| `search_status` | Check engine health (native indexer; optional Everything fallback on Windows) | Call when tools fail unexpectedly |
+| `recent_changes` | List files changed recently (USN journal on Windows, fanotify on Linux, FSEvents on macOS), newest first | Pass `hours=N` for a time window; `reasons=` to filter; `limit` caps (default 100) |
 | `aggregate_files` | Roll-up stats: total count/size, per-extension breakdown, largest files | USE THIS for disk-usage questions instead of summing results manually. `total_file_size` is the sum of matched file sizes and is files-only; a bare `*` is safe. Pass `is:folder` for directory rows |
 
 ## Key behaviors
@@ -36,7 +36,7 @@
 
 ## recent_changes
 
-USN Change Journal events since a time, **newest first**:
+Change events since a time, **newest first**. The source is the NTFS USN Change Journal on Windows, the fanotify event ring buffer (persisted to `changes.jsonl`) on Linux, and FSEvents on macOS:
 
 - `hours=1`: last hour (server computes the FILETIME; the agent never needs 18-digit integers)
 - `since=<FILETIME>`: events strictly newer than this Windows FILETIME (100ns since 1601-01-01, NOT .NET ticks)
@@ -135,7 +135,7 @@ Correctly written queries produce no warnings, so a clean response means the num
 
 `search_status` additionally emits `BUILD_MISMATCH` / `COMMIT_MISMATCH` when the MCP server and the running indexer come from different builds, the usual reason a fixed bug still misbehaves on the wire.
 
-On Linux, `search_status` also returns a `scan` object while the indexer publishes startup progress: `state` (`scanning` / `ready` / `failed`), the current `volume` and `volume_index`, `entries`, `entries_in_volume`, and timestamps. The pipe is not listening during the initial walk, so `scan` is the only field that says where startup is; `null` means no progress file is present (for example on Windows or macOS).
+On Linux, `search_status` also returns a `scan` object while the indexer publishes startup progress: `state` (`scanning` / `ready` / `failed`), the current `volume` and `volume_index`, `entries`, `entries_in_volume`, and timestamps. The pipe is not listening during the initial walk, so `scan` is the only field that says where startup is; `null` means no progress file is present (for example on Windows or macOS). The object is Linux-only, comes from `/run/instant-file-search/scan.json`, and persists after the walk with `state: "ready"` — so check `state` before assuming a non-null `scan` means "still scanning". Both writer and reader honour `INSTANT_FS_SCAN_STATUS_PATH` for tests and non-service runs.
 
 ## Why these numbers differ from Explorer or a shell
 

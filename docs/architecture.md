@@ -1,5 +1,10 @@
 # Architecture
 
+> **Scope:** the two-engine diagram, the native-first routing, and the
+> Everything-fallback discussion below describe the **Windows** path. On Linux
+> and macOS the `everything` module is not compiled and the native indexer is the
+> only engine; the Linux backend is described under "The native indexer".
+
 ## Two engines, one interface
 
 The server queries either of two engines behind the same tool surface
@@ -86,6 +91,11 @@ filesystem map. Runs as the Windows service `instant-file-search-indexer`
   `TimeoutStartSec=900` because a cold FUSE volume can make the walk outlast
   systemd's default 90 s. A `fuseblk` mount (e.g. `ntfs-3g`) cannot be marked,
   so changes there are only picked up by the next full scan.
+- **macOS backend:** the indexer runs as a launchd daemon, enumerates with a
+  `getattrlistbulk` walk (`walk_macos.rs`; `fileid` = `file_ref`, `crtime` =
+  created), and tracks changes with an FSEvents watcher (`fsevents.rs`). Like
+  Linux it is native-only (no Everything fallback) and can replay FSEvents IDs
+  across restarts when the OS still has that history.
 - **Service stop:** a stop flag is threaded into the serve loop and a wakeup
   client connection pokes the blocking `ConnectNamedPipe` so the service stops
   promptly.
@@ -115,6 +125,10 @@ FSEvents, and fanotify smoke tests still need to run on their real operating
 systems with the required privileges.
 
 ## Everything engine fallback
+
+This whole section applies only when the optional fallback engine is installed
+(`-IncludeFallbackEngine`, or an existing Everything install). A default install
+ships the native indexer only.
 
 - All Everything IPC calls are synchronous and blocking, dispatched via
   `tokio::task::spawn_blocking`. The handler never holds the main thread, but

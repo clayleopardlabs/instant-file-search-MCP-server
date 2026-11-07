@@ -2,14 +2,14 @@
 
 ## Testing
 
-Tests are in `src/everything.rs` under `#[cfg(test)]`:
+The workspace has three test suites:
 
-- **Unit tests only**: sort parsing, field parsing, timestamp formatting, attribute formatting
-- **No integration tests**: Everything GUI must be running for real queries
-- Passes without Everything running (unit tests don't touch IPC)
+- **Indexer unit tests** (`indexer/src/*.rs`, `#[cfg(test)]`): about 93 tests covering the query engine, the in-memory and SQLite index backends, disk migrations/recovery, the pipe protocol, the Linux `getdents64`+`statx` walk, and the fanotify watcher. They run without root, fanotify privileges, or an Everything install.
+- **MCP server unit tests** (`src/*.rs`): the tool surface, result formatting, diagnostics, verify, and the optional Everything parity harness. The parity harness is `#[ignore]` and needs both engines available, so it never runs in a normal test pass.
+- **Protocol handshake** (`tests/mcp_handshake.rs`): initializes the server over stdio and checks the advertised tool list.
 
 ```sh
-cargo test
+cargo test --workspace
 ```
 
 ### Indexer benchmarks
@@ -43,15 +43,12 @@ instant-file-search-indexer benchmark synthetic --mode memory --entries 500000 -
 instant-file-search-indexer benchmark synthetic --mode disk --entries 500000 --runs 10 --json
 ```
 
-The JSON has `schema_version: 1`. `rss_bytes_after_build` is measured after
-the temporary input vector is dropped. `reopen_ms` is measured for disk mode;
-memory mode reports zero because it has no persistent database to reopen.
-Operating system I/O counters are marked unavailable when the platform does not
-expose them to the process.
+The JSON has `schema_version: 1`. `rss_bytes_after_build` is measured after the build input is released; for `stream` there is no corpus vector, so it is simply the post-build RSS. `reopen_ms` is measured for every persistent mode (`disk` and `stream`); memory mode reports zero because it has no database to reopen. Operating system I/O counters are marked unavailable when the platform does not expose them to the process.
 
 ## Logging
 
-Controlled by `EVERYTHING_MCP_LOG` env var (tracing-subscriber with env-filter). Unset by default, no log output.
+- **MCP server:** controlled by the `EVERYTHING_MCP_LOG` env var (tracing-subscriber with env-filter). Unset by default, so the server logs nothing.
+- **Indexer:** controlled by `RUST_LOG` via `EnvFilter::try_from_default_env()`, defaulting to `info`. In service mode this goes to the systemd journal (`journalctl -u instant-file-search-indexer`).
 
 ## Style
 
@@ -59,5 +56,6 @@ Controlled by `EVERYTHING_MCP_LOG` env var (tracing-subscriber with env-filter).
 - `anyhow` for error handling
 - `rmcp` for MCP transport: tools defined via `#[tool]` proc macro on handler
 - `schemars` + `#[derive(JsonSchema)]` for JSON Schema generation from param structs
-- No unsafe blocks, no async Everything calls, no generated code
-- `windows` crate used only for `Win32_Foundation` (minimal surface)
+- No async Everything calls, no generated code
+- `unsafe` is confined to platform backends where the OS API requires it: `indexer/src/fanotify.rs`, `indexer/src/walk.rs`, `indexer/src/walk_macos.rs`, `indexer/src/benchmark.rs` (RSS/stdout helpers), and `src/native.rs` (named-pipe handle handling). The MCP server itself has no unsafe outside `native.rs`.
+- The `windows` crate is Windows-only: the MCP server enables `Win32_Foundation` + `Win32_System_Pipes` + `Win32_Storage_FileSystem`; the indexer enables its own feature list (pipes, security, threading, I/O, IOCTL, memory, process status).

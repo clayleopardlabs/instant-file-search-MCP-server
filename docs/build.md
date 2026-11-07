@@ -2,7 +2,7 @@
 
 ## Prerequisite
 
-**A search engine is not required at build time.** The server is self-contained: it bundles a portable Everything engine (vendored in `vendor/everything/`) and auto-starts one at runtime when none is running. Windows only.
+**A search engine is not required at build time.** The repo vendors the optional portable Everything engine (`vendor/everything/`). It is not compiled in and not deployed by default; the installer adds it only when you pass `-IncludeFallbackEngine` (or reuses an Everything already installed). Windows only.
 
 ## Binary
 
@@ -12,7 +12,7 @@ The project pins `x86_64-pc-windows-gnu` as the default Rust target (see `rust-t
 cargo build --release
 ```
 
-Output: `target/release/instant-file-search-mcp-server.exe`
+Output: `target/release/instant-file-search-mcp-server.exe` and `target/release/instant-file-search-indexer.exe` (the workspace has two binaries). On Linux the same names build without the `.exe` suffix.
 
 To build with MSVC instead, override the toolchain target:
 
@@ -28,7 +28,7 @@ The bundled engine lives at `vendor/everything/instant-file-search-fallback-engi
 .\scripts\fetch-everything.ps1
 ```
 
-The installer (`scripts\install.ps1`) extracts this zip into the stable install root's `everything\` folder alongside `instant-file-search-fallback-engine-1.5.0.1418b.ini`.
+When the fallback is opted into, the installer (`scripts\install.ps1 -IncludeFallbackEngine`) extracts this zip into the versioned install root's `versions\<version>\everything\` folder alongside `instant-file-search-fallback-engine-1.5.0.1418b.ini`. Without that switch nothing is extracted.
 
 ## Plugin (optional: OpenCode sub-agent support)
 

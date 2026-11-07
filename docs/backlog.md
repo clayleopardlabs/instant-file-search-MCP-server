@@ -84,15 +84,20 @@ surface.
 
 ## Deployment state
 
-The running pair is **1.0.19**. Everything above that says "fixed" is built into
-**1.0.20**, staged but not live, because swapping the indexer service needs
-elevation:
+The Linux host runs the **1.0.22** pair (installed 2026-11-07): MCP server and
+indexer both in `/usr/local/lib/instant-file-search/`, service
+`instant-file-search-indexer.service`, and `search_status` reporting matching
+versions 1.0.22.
+
+On Windows the deployment history was **1.0.19** running with **1.0.20** staged
+but not live, because swapping the indexer service needs elevation:
 
 ```
 C:\Users\Omen\Documents\deepseek-harness\default-workspace\switch-indexer-to-1.0.20-as-admin.ps1
 ```
 
-Run it as Administrator, then restart DeepSeek Harness. `search_status` reports
+That elevation step (run as Administrator, then restart DeepSeek Harness) is
+still how a Windows indexer swap works. `search_status` reports
 `BUILD_MISMATCH` while client and indexer disagree, which is the fastest way to
 confirm the swap took.
 
