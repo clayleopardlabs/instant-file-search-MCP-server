@@ -110,6 +110,25 @@ pub fn discover_volumes() -> Vec<String> {
 /// Does NOT descend into other mounts (cross-device boundary) and does NOT
 /// follow symlinks.
 pub fn scan_volume(volume: &str) -> Result<Vec<IndexedFile>> {
+    let mut entries = Vec::new();
+    scan_volume_into(volume, &mut |entry| {
+        entries.push(entry);
+        Ok(())
+    })?;
+    Ok(entries)
+}
+
+/// Walk one mount point recursively, streaming every file and directory into
+/// `sink` as it is discovered.
+///
+/// Same traversal and filtering rules as [`scan_volume`], but the caller
+/// decides what to do with each entry. The disk-backend initial scan uses this
+/// to insert straight into SQLite, so peak memory tracks the SQLite page cache
+/// instead of the size of the filesystem.
+pub fn scan_volume_into(
+    volume: &str,
+    sink: &mut dyn FnMut(IndexedFile) -> Result<()>,
+) -> Result<usize> {
     let root_path = PathBuf::from(volume);
     let root_dir = open_dir(&root_path)?;
 
@@ -117,7 +136,7 @@ pub fn scan_volume(volume: &str) -> Result<Vec<IndexedFile>> {
     let root_stat = statx_follow(&root_dir, ".").context("statx root")?;
     let root_dev = dev_id(&root_stat);
 
-    let mut entries: Vec<IndexedFile> = Vec::new();
+    let mut count = 0usize;
 
     // Iterative DFS using an explicit work stack to avoid stack depth issues
     // on deep trees (Windows scan is iterative; parallel-by-subtree is a
@@ -207,7 +226,8 @@ pub fn scan_volume(volume: &str) -> Result<Vec<IndexedFile>> {
                     );
                     file.attributes = attrs;
 
-                    entries.push(file);
+                    sink(file)?;
+                    count += 1;
 
                     // Push directories onto the work stack for further
                     // iteration.
@@ -232,7 +252,7 @@ pub fn scan_volume(volume: &str) -> Result<Vec<IndexedFile>> {
         }
     }
 
-    Ok(entries)
+    Ok(count)
 }
 
 /// Stat a single path into an `IndexedFile` (used by the fanotify watcher

@@ -22,20 +22,19 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<()> {
     let (mode, entries, runs, json) = if first == "synthetic" {
         parse_named(args)?
     } else {
-        let entries = if first.eq_ignore_ascii_case("memory") || first.eq_ignore_ascii_case("disk")
-        {
+        let entries = if is_storage_mode(&first) {
             DEFAULT_ENTRIES
         } else {
             first
                 .parse::<usize>()
-                .context("benchmark mode must be memory, disk, or synthetic")?
+                .context("benchmark mode must be memory, disk, stream, or synthetic")?
         };
-        let mode = if first.eq_ignore_ascii_case("memory") || first.eq_ignore_ascii_case("disk") {
+        let mode = if is_storage_mode(&first) {
             first
         } else {
             "memory".to_string()
         };
-        let entries = if mode == "memory" || mode == "disk" {
+        let entries = if is_storage_mode(&mode) {
             args.next()
                 .as_deref()
                 .map(str::parse)
@@ -54,20 +53,28 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<()> {
     if runs == 0 {
         anyhow::bail!("benchmark run count must be greater than zero");
     }
-    if !mode.eq_ignore_ascii_case("memory") && !mode.eq_ignore_ascii_case("disk") {
-        anyhow::bail!("benchmark mode must be memory or disk, got {mode:?}");
+    if !is_storage_mode(&mode) {
+        anyhow::bail!("benchmark mode must be memory, disk, or stream, got {mode:?}");
     }
 
     let db_path = temporary_database_path();
     let start_io = io_snapshot();
     let build_started = Instant::now();
     let index = FileIndex::for_benchmark(&mode, db_path.clone())?;
-    let files = synthetic_entries(entries);
-    let update_sample = files
-        .get(entries / 2)
-        .cloned()
-        .context("synthetic benchmark corpus is empty")?;
-    index.replace(files);
+    let update_sample = synthetic_entry(entries / 2);
+    if mode.eq_ignore_ascii_case("stream") {
+        // Same corpus as the memory/disk runs, but fed through the streaming
+        // replace path the Linux initial scan uses. Shows the memory cost of
+        // the scan itself with no corpus-sized Vec.
+        index.replace_streaming(|sink| {
+            for n in 0..entries {
+                sink(synthetic_entry(n))?;
+            }
+            Ok(())
+        });
+    } else {
+        index.replace(synthetic_entries(entries));
+    }
     let build_ms = build_started.elapsed().as_secs_f64() * 1_000.0;
     std::thread::sleep(Duration::from_millis(250));
     let rss_bytes_after_build = resident_bytes();
@@ -78,7 +85,7 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<()> {
     index.upsert(updated);
     let update_ms = update_started.elapsed().as_secs_f64() * 1_000.0;
 
-    let (reopen_ms, queries) = if mode.eq_ignore_ascii_case("disk") {
+    let (reopen_ms, queries) = if !mode.eq_ignore_ascii_case("memory") {
         let reopen_started = Instant::now();
         drop(index);
         let reopened = FileIndex::for_benchmark(&mode, db_path.clone())?;
@@ -119,6 +126,12 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<()> {
 
     remove_database(&db_path);
     Ok(())
+}
+
+fn is_storage_mode(value: &str) -> bool {
+    value.eq_ignore_ascii_case("memory")
+        || value.eq_ignore_ascii_case("disk")
+        || value.eq_ignore_ascii_case("stream")
 }
 
 fn parse_named(mut args: impl Iterator<Item = String>) -> Result<(String, usize, usize, bool)> {
@@ -208,46 +221,49 @@ fn benchmark_queries() -> [&'static str; 6] {
 }
 
 fn synthetic_entries(entries: usize) -> Vec<IndexedFile> {
+    (0..entries).map(synthetic_entry).collect()
+}
+
+/// One synthetic entry. The `stream` mode builds the same corpus as
+/// `memory`/`disk` but feeds it through the scan path one entry at a time,
+/// so it never allocates the corpus-sized `Vec`.
+fn synthetic_entry(n: usize) -> IndexedFile {
     let extensions = ["rs", "txt", "json", "log", "md"];
-    (0..entries)
-        .map(|n| {
-            let is_dir = n % 97 == 0;
-            let extension = extensions[n % extensions.len()];
-            let root = if n % 17 == 0 { "node_modules" } else { "src" };
-            let name = if n % 101 == 0 {
-                format!("café-{:08}.{}", n, extension)
-            } else {
-                format!("file-{:08}.{}", n, extension)
-            };
-            let path = if is_dir {
-                format!(
-                    r"C:\benchmark\workspace-{:03}\{}\module-{:04}",
-                    n % 50,
-                    root,
-                    n % 10_000
-                )
-            } else {
-                format!(
-                    r"C:\benchmark\workspace-{:03}\{}\module-{:04}\{}",
-                    n % 50,
-                    root,
-                    n % 10_000,
-                    name
-                )
-            };
-            let mut entry = IndexedFile::new(
-                path,
-                (n as u64 * 131) % 1_048_576,
-                n as i64,
-                n as i64,
-                n as i64,
-                is_dir,
-                n as u64,
-            );
-            entry.attributes = if n % 19 == 0 { 0x2 } else { 0x80 };
-            entry
-        })
-        .collect()
+    let is_dir = n % 97 == 0;
+    let extension = extensions[n % extensions.len()];
+    let root = if n % 17 == 0 { "node_modules" } else { "src" };
+    let name = if n % 101 == 0 {
+        format!("café-{:08}.{}", n, extension)
+    } else {
+        format!("file-{:08}.{}", n, extension)
+    };
+    let path = if is_dir {
+        format!(
+            r"C:\benchmark\workspace-{:03}\{}\module-{:04}",
+            n % 50,
+            root,
+            n % 10_000
+        )
+    } else {
+        format!(
+            r"C:\benchmark\workspace-{:03}\{}\module-{:04}\{}",
+            n % 50,
+            root,
+            n % 10_000,
+            name
+        )
+    };
+    let mut entry = IndexedFile::new(
+        path,
+        (n as u64 * 131) % 1_048_576,
+        n as i64,
+        n as i64,
+        n as i64,
+        is_dir,
+        n as u64,
+    );
+    entry.attributes = if n % 19 == 0 { 0x2 } else { 0x80 };
+    entry
 }
 
 fn temporary_database_path() -> PathBuf {

@@ -11,7 +11,7 @@ pub use crate::mft::{discover_volumes, scan_volume};
 pub use crate::usn::{journal_tails, watch_all};
 
 #[cfg(target_os = "linux")]
-pub use crate::walk::{discover_volumes, scan_volume, volume_of};
+pub use crate::walk::{discover_volumes, scan_volume, scan_volume_into, volume_of};
 #[cfg(target_os = "linux")]
 pub use crate::fanotify::{journal_tails, watch_all};
 

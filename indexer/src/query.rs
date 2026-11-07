@@ -3319,9 +3319,15 @@ mod tests {
     fn nested_folder_rows_do_not_double_count_the_total() {
         // Regression: listing a folder and its child together summed the
         // subtree twice, so `is:folder` reported 26 GB for an 11 GB tree.
-        let mut outer = entry(r"B:\p\outer", true, 1_700_000_000);
+        // Platform-native separators: the path filter normalizes its needle,
+        // so the fixture paths must be normalized too or this test is
+        // Windows-only.
+        let base = crate::platform::normalize_path(r"B:\p");
+        let outer_path = crate::platform::normalize_path(r"B:\p\outer");
+        let inner_path = crate::platform::normalize_path(r"B:\p\outer\inner");
+        let mut outer = entry(&outer_path, true, 1_700_000_000);
         outer.size = 100;
-        let mut inner = entry(r"B:\p\outer\inner", true, 1_700_000_000);
+        let mut inner = entry(&inner_path, true, 1_700_000_000);
         inner.size = 60;
         let map: HashMap<String, IndexedFile> = HashMap::from([
             ("outer".to_string(), outer),
@@ -3331,7 +3337,7 @@ mod tests {
             &map,
             &AggregateOptions {
                 query: "is:folder".to_string(),
-                path: Some(r"B:\p".to_string()),
+                path: Some(base),
                 depth: None,
                 ..Default::default()
             },

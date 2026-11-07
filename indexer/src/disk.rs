@@ -306,6 +306,33 @@ impl DiskIndex {
         Ok(entries.len())
     }
 
+    /// Replace the whole index from a streamed scan.
+    ///
+    /// Equivalent to [`DiskIndex::replace`], except that the caller feeds
+    /// entries one at a time instead of handing over a fully materialized
+    /// `Vec`. The Linux initial scan uses this so a multi-million-entry walk
+    /// costs one entry of peak memory instead of the whole corpus, which
+    /// measured ~700 MB RSS for 1.6 M entries even in disk mode.
+    pub fn replace_streaming<F>(&self, scan: F) -> Result<usize>
+    where
+        F: FnOnce(&mut dyn FnMut(IndexedFile) -> Result<()>) -> Result<()>,
+    {
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        tx.execute("DELETE FROM files", [])?;
+        let mut count = 0usize;
+        {
+            let mut insert = tx.prepare_cached(INSERT_SQL)?;
+            scan(&mut |entry: IndexedFile| {
+                insert_entry(&mut insert, &entry)?;
+                count += 1;
+                Ok(())
+            })?;
+        }
+        tx.commit()?;
+        Ok(count)
+    }
+
     pub fn replace_volume(&self, prefix: &str, entries: Vec<IndexedFile>) -> Result<usize> {
         let mut conn = self.conn.lock().unwrap();
         let tx = conn.transaction()?;

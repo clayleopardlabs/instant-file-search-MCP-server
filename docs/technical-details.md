@@ -9,7 +9,7 @@ No separate programs to install. This tool brings its own search engine, so it w
 1. **A background indexer.** A small service keeps a live, always-up-to-date list of everything on your drives. It runs as a Windows service on Windows, a systemd unit on Linux, or a launchd daemon on macOS. The first scan takes about 15 seconds on a typical Windows PC (roughly 2.4 million files). After that it stays current on its own by watching for new, renamed, or deleted files.
 2. **A Fallback Engine (`instant-file-search-fallback-engine-1.5.0.1418b`).** Just in case. If the background indexer is ever stopped, your searches are answered automatically by the Fallback Engine instead. You never have to start or manage anything. It is a Windows-native engine (Everything) that ships with the release installer; Linux and macOS use the native indexer exclusively.
 
-Searches are local. RAM saving mode stores the index on disk, while super duper fast mode keeps it in RAM. Nothing leaves your machine.
+Searches are local. RAM saving mode stores the index on disk, while super duper fast mode keeps it in RAM. RAM saving mode keeps query memory small; on Linux in RAM saving mode the initial scan streams entries into the database as they are discovered instead of holding the whole corpus in memory. Nothing leaves your machine.
 
 ## Storage-mode performance on a slow hard drive
 
@@ -18,6 +18,8 @@ The published 500,000-file benchmark ran on NVMe storage. The hard-drive figures
 The RAM saving run recorded 6,159,225,044 bytes read and 2,752,666,044 bytes written while building its SQLite database. That is 8,911,891,088 bytes, or about 8.3 GiB of I/O. A 4,500 RPM hard drive that manages 50 to 100 MB/s of sustained transfer would need roughly 90 to 180 seconds for that transfer alone. Random reads, seeks, and SQLite's write pattern will add time, so a few minutes is a more realistic expectation for the first 500,000-file build.
 
 Super duper fast mode avoids writing that SQLite database, but it still has to read the filesystem to build the index. Once it is built, its searches stay in RAM. The 500,000-file run used 488 MiB, or roughly 1 MiB per 1,000 synthetic file records. Real paths and metadata vary, so treat that as a planning estimate, not a capacity guarantee.
+
+Those benchmark RAM figures are measured after the build, with the benchmark's input already dropped. Initial-scan memory on a real corpus is a different number: on a 1.6M-entry Linux machine the deployed 1.0.20 indexer held 710 MB VmRSS (1.19 GB high-water mark) while scanning in disk mode. The Linux scan now streams entries into SQLite as they are discovered instead of collecting them first, so the corpus is no longer held in memory; on the same corpus the synthetic scan peak fell to 9.9 MiB and a real full walk of 1,627,303 entries peaked at 11.5 MiB, with build time and query results unchanged. See [Linux Support](linux-support.md) for the measurement, its date and host, the socket caveat, and the restart caveat.
 
 For a very large server, file count matters more than the total number of bytes stored. A petabyte made of a few large files is easy to index. A petabyte made of billions of small files is not. RAM saving mode is the only practical choice for those catalogs, but this project's generic disk queries can still stream many SQLite rows. It is not yet a petabyte-scale search architecture without further sharding and query indexes.
 
@@ -132,6 +134,10 @@ The native indexer runs on Linux. Tested on Ubuntu 26.04 LTS, kernel 7.0, x86_64
 | Named pipe | Unix socket at `/tmp/instant-file-search-indexer.sock` (mode 0666) |
 | Everything fallback engine | Not used; native is the only engine on Linux |
 | Windows service (SCM) | systemd unit with `Type=notify` + sd_notify readiness |
+
+Disk mode is active on Linux, and its initial scan streams: the walk feeds entries into one SQLite transaction as they are discovered (`walk::scan_volume_into` then `DiskIndex::replace_streaming`) instead of collecting a corpus-sized `Vec<IndexedFile>` first. Only that initial `serve` scan streams; the fanotify queue-overflow recovery keeps the collecting `build_index()` for an atomic swap while queries are served. Before this change the deployed service measured 710 MB VmRSS with a 1.19 GB high-water mark on a 1.6M-entry machine; with streaming, the same synthetic corpus peaked at 9.9 MiB and a real full walk of 1,627,303 entries peaked at 11.5 MiB, with build time and query results unchanged. [linux-support.md](linux-support.md) records the numbers, their date and host, the socket caveat, and the restart caveat. The fanotify watcher also ignores events for the indexer's own files (`index.sqlite3`, its `-wal`/`-shm` sidecars, and `changes.jsonl`); those events used to drive a self-write feedback loop that pinned a CPU core and grew the change journal to 53 MB.
+
+Linux still re-walks every volume on each service start. `checkpoints_can_resume()` returns false on Linux because fanotify keeps no persistent event history, while Windows USN checkpoints and macOS FSEvents can resume. The streaming scan keeps that restart cheap in RAM but does not remove the walk.
 
 Install from source on a Linux box with the command shown in Start Here. The script builds both binaries, installs them under `/usr/local/lib/instant-file-search/`, installs the systemd unit, starts the service, and registers the MCP client with OpenCode (including the OMO sub-agent `mcps` patch).
 

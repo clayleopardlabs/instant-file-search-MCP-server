@@ -193,7 +193,7 @@ fn serve_with_stop(stop: Arc<std::sync::atomic::AtomicBool>) -> Result<()> {
             saved
         }
         _ => {
-            let n = scan::build_index(&volumes, &index).context("initial scan")?;
+            let n = build_initial_index(&volumes, &index).context("initial scan")?;
             tracing::info!("initial index built: {n} entries");
             index.replace_checkpoints(&live_tails);
             index.optimize_storage();
@@ -388,6 +388,28 @@ fn content_mode() -> Result<ContentMode> {
             "INSTANT_FS_CONTENT_INDEX must be auto, off, memory, or disk, got {other:?}"
         ),
     }
+}
+
+/// Build the initial index from a full filesystem scan.
+///
+/// On Linux with the disk backend the walk streams entries straight into
+/// SQLite, so a rescan of a multi-million-entry filesystem no longer has to
+/// materialize the whole corpus in RAM (measured ~700 MB RSS for 1.6 M entries
+/// with the collect-then-insert path). Linux always takes this path after a
+/// restart because fanotify has no durable event history, unlike the Windows
+/// USN journal, whose checkpoints usually skip the full scan.
+///
+/// The watcher's fanotify queue-overflow recovery deliberately keeps using
+/// [`scan::build_index`], which swaps the index atomically while queries are
+/// being served.
+fn build_initial_index(volumes: &[String], index: &index::SharedIndex) -> Result<usize> {
+    #[cfg(target_os = "linux")]
+    {
+        if index.storage_mode() == "disk" {
+            return scan::build_index_streaming(volumes, index);
+        }
+    }
+    scan::build_index(volumes, index)
 }
 
 /// Return true only when every indexed volume has a checkpoint the platform

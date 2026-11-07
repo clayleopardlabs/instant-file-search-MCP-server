@@ -23,7 +23,16 @@ The old command form remains supported:
 ```sh
 instant-file-search-indexer benchmark memory 500000
 instant-file-search-indexer benchmark disk 500000
+instant-file-search-indexer benchmark stream 500000
 ```
+
+`memory` and `disk` collect the synthetic corpus into a `Vec` before inserting
+and only then measure, which is what the Windows/macOS scan path still does.
+`stream` builds the same corpus but feeds it through the streaming
+`replace_streaming` path that the Linux initial `serve` scan uses, so comparing
+`disk` with `stream` shows the scan-time memory cost of materializing the
+corpus. All three modes use a temporary database and never touch the configured
+live index.
 
 For repeatable measurements with mixed file types, folders, excluded paths,
 Unicode names, percentiles, reopen time, update time, process RSS, database

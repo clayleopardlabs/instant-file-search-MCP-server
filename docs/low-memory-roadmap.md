@@ -44,10 +44,75 @@ their current behavior unless the user explicitly changes a setting.
 - The disk query engine streams rows from SQLite and applies the shared Rust
   filter engine. This protects query parity but scans too many rows for common
   filters.
-- The current Windows synthetic result for 500,000 records is approximately
-  495 MiB RSS in memory mode and 10 MiB RSS in disk mode. Disk queries are
-  roughly 2.2 to 6.6 times slower in that workload.
+- The Windows synthetic result for 500,000 records is approximately 495 MiB
+  RSS in memory mode and 10 MiB RSS in disk mode **after the build**. The
+  10 MiB figure measures a synthetic corpus whose build input had already been
+  dropped; it is not the memory cost of an initial scan of a real filesystem.
+  Disk queries are roughly 2.2 to 6.6 times slower in that workload.
 - The current regression suite has 53 passing indexer tests.
+
+### Initial-scan memory on Linux (measured 2026-11-07)
+
+The 10 MiB disk-mode baseline above does not describe the initial scan. On this
+Linux machine (host "Omen", Ubuntu-like Linux, kernel 7.0, x86_64, 2026-11-07;
+VmRSS/VmHWM from `/proc`) the deployed 1.0.20 service held VmRSS 710,092 kB with
+VmHWM 1,193,540 kB while the native indexer scanned 1,608,934 entries across
+`/`, `/boot/efi`, and `/mnt/2tb-drive` in disk mode (`INSTANT_FS_INDEX_MODE=disk`
+in `/etc/instant-file-search/indexer.env`; 2.7 GB `index.sqlite3`). The installed
+1.0.20 binary's `benchmark disk 1600000` peaked at 728 MB RSS and still reported
+`rss_bytes_after_build` 425,164,800 (425 MB) after the build input was dropped.
+
+Root cause: `scan::build_index()` collected every `scan_volume()` result into one
+`Vec<IndexedFile>` before `index.replace(all)`. Each `IndexedFile` carries six
+precomputed heap strings (`path`, `name`, `lower_name`, `lower_path`, `own_name`,
+`extension`), so a 1.6M-entry corpus costs roughly 450 to 650 bytes per entry.
+The live high-water mark is higher than the synthetic peak because
+`build_index()` holds one vector per volume and then extends them into the
+single corpus vector, so both buffers are briefly resident. Query-time RAM in
+disk mode was never the problem; scan-time materialization was.
+
+This is not a missing Windows technique: the Windows MFT scanner also builds a
+`Vec::with_capacity(record_count)` and returns it (`mft.rs`), so both platforms
+materialise the scan today. Windows simply resumes from USN checkpoints on
+restart and often skips the scan, while Linux must re-walk every start. The
+corrected baseline for 500,000 entries on Linux with the current harness is
+132 MiB after build / 228 MiB peak in disk mode (the older 10 MiB figure does
+not reproduce and was probably a Windows working-set artefact); memory mode
+roughly reproduces its 495 MiB figure.
+
+Fix in this change: the Linux disk-mode initial scan now streams entries into a
+single SQLite transaction as they are discovered
+(`FileIndex::replace_streaming`, `DiskIndex::replace_streaming`,
+`walk::scan_volume_into`) instead of materializing the corpus. On the same host
+and date, a release build of this change measured:
+
+- synthetic 1.6M-entry corpus, old collect path: peak 727,588 kB (710 MiB),
+  413,536 kB (404 MiB) after the build;
+- same corpus, streaming path (`benchmark stream 1600000`): peak 10,136 kB
+  (9.9 MiB), 8,364 kB (8.2 MiB) after the build, with unchanged build time
+  (25.4 s vs 25.7 s) and identical query results and timings;
+- real disk-mode walk, 1,627,303 entries (681,712 on `/`, 202 on `/boot/efi`,
+  945,389 on `/mnt/2tb-drive`): peak 11,736 kB (11.5 MiB), scan completed in
+  about two minutes. That run could not bind the production socket because the
+  live root service owns it and ended with "Address already in use", so
+  after-scan steady memory is quoted from the synthetic streaming row; the real
+  walk peaked at 11.5 MiB during the scan.
+
+Windows and macOS still use the collect-then-insert path. That is a known
+follow-up, not a Linux-only regression: Windows resumes from USN checkpoints so
+it does not re-walk on every restart, and macOS replays FSEvents. On Linux the
+fanotify queue-overflow recovery also keeps the collect-then-insert
+`build_index()` so it can swap the index atomically while queries are served;
+only the initial `serve` scan streams. Linux also re-walks everything on every
+service start because `checkpoints_can_resume()` returns false there (fanotify
+has no persistent event history); the streaming scan makes that restart cheap in
+RAM but does not remove the walk.
+
+A second Linux defect from the same investigation is fixed: the fanotify
+watcher marks whole filesystems and was applying events for the indexer's own
+database, `-wal`/`-shm`, and `changes.jsonl`. That self-write loop pinned a CPU
+core and grew the change journal to 53 MB (about 12 KB/s). Those events are now
+dropped; see `docs/linux-support.md`.
 
 Preserve these public MCP tools and their schemas:
 

@@ -293,7 +293,15 @@ fn event_loop(
                 .or_else(|| resolve_handle_path(mounts, &target_handle));
 
             if let Some(path) = path {
-                apply_event(index, content, meta.mask, is_dir, &path, &target_handle, &mut pending);
+                apply_event_unless_internal(
+                    index,
+                    content,
+                    meta.mask,
+                    is_dir,
+                    &path,
+                    &target_handle,
+                    &mut pending,
+                );
             } else {
                 tracing::debug!("fanotify: could not resolve path for mask=0x{:X}", meta.mask);
             }
@@ -372,6 +380,32 @@ fn readlink_fd(fd: RawFd) -> Option<String> {
     }
     buf.truncate(n as usize);
     String::from_utf8(buf).ok()
+}
+
+/// Apply a resolved event, unless the path is one of the indexer's own data
+/// files (the SQLite database, its sidecars, or the change journal).
+///
+/// The watcher marks whole filesystems, so it also observes the indexer writing
+/// its own data. Applying those events would append to the change journal and
+/// upsert into SQLite, which writes the same files again and emits more events:
+/// an unbounded self-write feedback loop. An event for one of these paths is
+/// never a real user change and must be dropped before any index, journal,
+/// content or pending-rename work happens. Keeping the guard in this function
+/// also makes the `event_loop` filter unit-testable without fanotify privileges.
+fn apply_event_unless_internal(
+    index: &Arc<FileIndex>,
+    content: &Arc<crate::content::ContentStore>,
+    mask: u64,
+    is_dir: bool,
+    path: &str,
+    target_handle: &Option<FileHandle>,
+    pending: &mut std::collections::HashMap<Vec<u8>, String>,
+) {
+    if crate::index::is_internal_index_path(path) {
+        tracing::debug!("fanotify: dropping event for internal index path {path} (mask=0x{mask:X})");
+        return;
+    }
+    apply_event(index, content, mask, is_dir, path, target_handle, pending);
 }
 
 /// Apply a single fanotify event to the index and content store, mirroring
@@ -613,6 +647,87 @@ mod tests {
         // None returns all
         let all = index.recent_changes_filtered(0, 0, None);
         assert_eq!(all.len(), 2);
+    }
+
+    /// The indexer's own data paths for this process: the disk database, its
+    /// `-wal` sibling, and the change journal. Derived from the same env
+    /// overrides `is_internal_index_path` honors, so the assertions stay
+    /// deterministic even if the harness already exports
+    /// INSTANT_FS_INDEX_PATH / INSTANT_FS_CHANGE_LOG (env vars are
+    /// process-global and tests run in parallel; this test never mutates them).
+    fn internal_data_paths() -> (String, String, String) {
+        let normalize = |p: std::ffi::OsString| p.to_string_lossy().replace('\\', "/");
+        let database = std::env::var_os("INSTANT_FS_INDEX_PATH")
+            .map(normalize)
+            .unwrap_or_else(|| "/var/lib/instant-file-search/index.sqlite3".to_string());
+        let journal = std::env::var_os("INSTANT_FS_CHANGE_LOG")
+            .map(normalize)
+            .unwrap_or_else(|| "/var/lib/instant-file-search/changes.jsonl".to_string());
+        let wal = format!("{database}-wal");
+        (database, wal, journal)
+    }
+
+    #[test]
+    fn internal_index_paths_are_filtered_and_user_paths_are_not() {
+        let (database, wal, journal) = internal_data_paths();
+        for path in [&database, &wal, &journal] {
+            assert!(
+                crate::index::is_internal_index_path(path),
+                "indexer's own data file must be filtered as internal: {path}"
+            );
+        }
+        for path in ["/tmp/user-file.txt", "/home/user/Documents/report.pdf"] {
+            assert!(
+                !crate::index::is_internal_index_path(path),
+                "ordinary user file must never be filtered as internal: {path}"
+            );
+        }
+    }
+
+    #[test]
+    fn internal_events_are_dropped_before_recording_or_indexing() {
+        let index = Arc::new(FileIndex::new_empty());
+        let content = Arc::new(crate::content::ContentStore::new());
+        let mut pending = std::collections::HashMap::new();
+        let (database, wal, journal) = internal_data_paths();
+
+        // The indexer writing its own files must not be recorded as a change
+        // and must not be upserted, or every write re-triggers the loop.
+        for path in [&database, &wal, &journal] {
+            apply_event_unless_internal(&index, &content, FAN_CREATE, false, path, &None, &mut pending);
+        }
+        assert!(index.recent_changes(0, 0).is_empty(), "internal writes must not append to the change journal");
+        assert_eq!(index.len(), 0, "internal files must not enter the index");
+
+        // A rename of an internal file must not enter the pending-rename map.
+        let handle = FileHandle { handle_bytes: 4, handle_type: 1, data: vec![0x5A; 4] };
+        apply_event_unless_internal(
+            &index, &content, FAN_MOVED_FROM, false, &database, &Some(handle.clone()), &mut pending,
+        );
+        assert!(pending.is_empty(), "internal rename must not be tracked for pairing");
+
+        // An ordinary user path still flows through unchanged: journaled...
+        apply_event_unless_internal(&index, &content, FAN_DELETE, false, "/tmp/user-file.txt", &None, &mut pending);
+        let changes = index.recent_changes(0, 0);
+        assert_eq!(changes.len(), 1);
+        assert_eq!(changes[0].reason, "DELETE");
+        assert_eq!(changes[0].path, "/tmp/user-file.txt");
+
+        // ...and a CREATE on a real user file still enters the index.
+        let unique = format!(
+            "ifs-fanotify-guard-{}-{}.txt",
+            std::process::id(),
+            SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
+        );
+        let user_file = std::env::temp_dir().join(unique);
+        std::fs::write(&user_file, b"hello").unwrap();
+        let user_file = user_file.to_string_lossy().into_owned();
+        apply_event_unless_internal(&index, &content, FAN_CREATE, false, &user_file, &None, &mut pending);
+        assert!(
+            index.snapshot_map().contains_key(&user_file),
+            "a normal user file must still be upserted into the index: {user_file}"
+        );
+        let _ = std::fs::remove_file(&user_file);
     }
 
     #[test]

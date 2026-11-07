@@ -263,6 +263,8 @@ in RAM saving mode.
 | Find `*.rs` files | 515 ms | 340 ms |
 | Find a module name | 36 ms | 92 ms |
 
+Those RAM numbers are measured after the index is built. On Linux the first scan is the peak: a machine with 1.6 million indexed files measured about 710 MB of RSS for the indexer service, 1.19 GB at its high-water mark, and that was with disk-backed RAM saving mode already active. In RAM saving mode the Linux scan now streams entries into the database as it discovers them instead of collecting every entry in memory first. On the same 1.6 million file corpus the scan peak measured about 10 MiB, and a real full walk of that machine peaked at 11.5 MiB, with build time and query results unchanged. These are single-machine numbers, not a capacity promise; the [Linux support notes](docs/linux-support.md) have the details.
+
 
 As you can see, aside from the first index build which only happens once there's no real reason to use the super duper fast mode. Unless... you're going to be running literally hundreds of thousands of searches. And since every search is millions of files in milliseconds, you'd basically only want the super duper fast mode if you're the NSA. Or you have an old, slow harddrive:
 

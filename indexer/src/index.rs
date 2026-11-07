@@ -107,8 +107,8 @@ impl FileIndex {
     pub fn for_benchmark(mode: &str, disk_path: PathBuf) -> anyhow::Result<Self> {
         let disk = match mode {
             "memory" => None,
-            "disk" => Some(Arc::new(DiskIndex::open(disk_path)?)),
-            _ => anyhow::bail!("benchmark mode must be 'memory' or 'disk'"),
+            "disk" | "stream" => Some(Arc::new(DiskIndex::open(disk_path)?)),
+            _ => anyhow::bail!("benchmark mode must be 'memory', 'disk', or 'stream'"),
         };
         Ok(Self {
             inner: RwLock::new(Inner::default()),
@@ -203,6 +203,32 @@ impl FileIndex {
             inner.entries.insert(e.path.clone(), e);
         }
         n
+    }
+
+    /// Replace the entire index from a streamed scan (initial scan).
+    ///
+    /// The disk backend inserts entries as they arrive, so a full filesystem
+    /// walk never holds the whole corpus in memory. Memory mode keeps the
+    /// historical collect-then-insert behaviour because it is supposed to
+    /// materialize the index anyway.
+    pub fn replace_streaming<F>(&self, scan: F) -> usize
+    where
+        F: FnOnce(&mut dyn FnMut(IndexedFile) -> anyhow::Result<()>) -> anyhow::Result<()>,
+    {
+        if let Some(disk) = &self.disk {
+            return disk.replace_streaming(scan).unwrap_or_else(|e| {
+                tracing::error!("disk streaming replace failed: {e:#}");
+                0
+            });
+        }
+        let mut collected = Vec::new();
+        if let Err(error) = scan(&mut |entry| {
+            collected.push(entry);
+            Ok(())
+        }) {
+            tracing::error!("streaming scan failed: {error:#}");
+        }
+        self.replace(collected)
     }
 
     /// Remove all entries under a volume prefix, then insert the fresh scan.
@@ -409,12 +435,17 @@ impl FileIndex {
         let mut events = self.recent_changes_filtered(since, usize::MAX, reasons);
         if let Some(scope) = scope {
             events.retain(|e| {
-                let lower = e.path.replace('/', "\\").to_ascii_lowercase();
+                // Normalize the event path the same way the scope was
+                // normalized (platform-native separators). Hardcoding `\` here
+                // made path-scoped recent_changes silently match nothing on
+                // Linux, where watcher paths use `/`.
+                let lower =
+                    crate::platform::canonical_key(&crate::platform::normalize_path(&e.path));
                 lower == scope
                     || (lower.starts_with(&scope)
                         && matches!(
                             lower.as_bytes().get(scope.len()),
-                            Some(b'\\') | Some(b':')
+                            Some(b'\\') | Some(b'/') | Some(b':')
                         ))
             });
         }
@@ -595,6 +626,30 @@ fn change_log_path() -> Option<PathBuf> {
     }
     #[allow(unreachable_code)]
     None
+}
+
+/// True when `path` is one of the indexer's own data files: the disk index
+/// database, its SQLite sidecar files, or the change journal.
+///
+/// The Linux watcher marks whole filesystems with fanotify, so the indexer
+/// observes the writes it makes to its own data directory. Applying those
+/// events back into the index writes to those files again and therefore
+/// produces more events: an endless self-write feedback loop that pins a CPU
+/// core and grows the change journal without bound. An event for one of these
+/// paths is never a real user change and must be dropped.
+pub fn is_internal_index_path(path: &str) -> bool {
+    let normalized = path.replace('\\', "/");
+    let database = index_path().to_string_lossy().replace('\\', "/");
+    let mut owned = vec![
+        database.clone(),
+        format!("{database}-wal"),
+        format!("{database}-shm"),
+        format!("{database}-journal"),
+    ];
+    if let Some(log) = change_log_path() {
+        owned.push(log.to_string_lossy().replace('\\', "/"));
+    }
+    owned.iter().any(|candidate| candidate == &normalized)
 }
 
 fn open_change_log() -> (VecDeque<ChangeEvent>, Option<BufWriter<File>>) {
