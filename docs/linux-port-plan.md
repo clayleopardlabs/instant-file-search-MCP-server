@@ -1,5 +1,10 @@
 # Linux Port Plan
 
+> **Status (2026-11-07): implemented and shipped.** The native Linux backend runs
+> as `instant-file-search-indexer.service`; this plan is kept as the historical
+> execution record. Current behavior lives in `docs/linux-support.md` and
+> `docs/architecture.md`.
+
 Goal: the native indexer + MCP server run natively on Linux (native-only, Everything
 fallback is Windows-only by construction). Companion doc: `docs/linux-support.md`
 (architectural research). This document is the phased execution plan.

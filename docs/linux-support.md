@@ -1,5 +1,12 @@
 # Linux Support Assessment
 
+> **Status (2026-11-07): implemented.** This document started as a port
+> assessment; the native Linux backend now ships and runs as
+> `instant-file-search-indexer.service`. Sections 1-3 are the original
+> 2026-08-03 research that drove the port and are kept as history; section 4
+> records measured current behavior. Read "would" and "planned" below as
+> "was the plan", not "still missing".
+
 What it would take to port the native indexer to Linux. Research conducted 2026-08-03
 via three parallel lanes (change tracking, fast enumeration, inode semantics). Sources
 are cited inline; all findings are from kernel docs, man pages, LWN, and production
@@ -37,7 +44,10 @@ GNOME Tracker (since 3.3) and FSearch (since 0.3) converged on.
   implementation runs this path through systemd with `AmbientCapabilities=CAP_SYS_ADMIN`.
   It does not yet provide an inotify fallback, so unprivileged execution and filesystems
   where filesystem-wide fanotify marks fail are reported as unsupported rather than
-  silently providing incomplete change tracking.
+  silently providing incomplete change tracking. A `fuseblk` volume (for example an
+  `ntfs-3g` mount such as `/mnt/2tb-drive` on this machine) is one of those: the mark
+  fails with `ENODEV`, the journal logs a warning, and changes on that mount are not
+  tracked until the index is rebuilt on the next start.
 - **Event identity:** FID events carry `(fsid, file handle)` + parent handle + name, 
   survives renames, resolvable via `open_by_handle_at`. `FAN_RENAME` (5.17+) is a single
   atomic event with old+new parent+name (the USN rename analogue).
@@ -187,6 +197,12 @@ because the live root service owns it and ended with "Address already in use",
 so steady-state memory after a real scan is quoted from the synthetic streaming
 row (8.2 MiB); the real walk peaked at 11.5 MiB during the scan.
 
+A later restart of the shipped 1.0.22 service confirmed the steady state in
+production: 2,687,923 entries indexed (the machine had gained a fourth volume, an
+overlay tree being rebuilt by an image build) in about three minutes, then
+VmRSS = VmHWM = 31,056 kB. That figure includes the by-design 100,000-event
+change ring buffer and the content cache, so it is above the scan's own 10-12 MiB.
+
 Reproduce with `instant-file-search-indexer benchmark disk 1600000` (old
 collect path) and `instant-file-search-indexer benchmark stream 1600000` (the
 `stream` mode added in this change; same synthetic corpus, temporary database
@@ -231,10 +247,12 @@ publishes progress three ways:
   an agent asking during startup gets the current volume and entry count instead
   of only "not accepting connections".
 
-The unit also sets `TimeoutStartSec=300` and a `RuntimeDirectory` for the status
+The unit also sets `TimeoutStartSec=900` and a `RuntimeDirectory` for the status
 file. systemd's default 90 s start timeout is too short for a cold-cache walk:
-this machine measured 81 s for 1.63 M entries, and earlier journal entries show
-starts killed at 90 s and then restarted in a loop.
+this machine measured 81 s warm for 1.63 M entries, and a later restart against
+a cold `ntfs-3g`/FUSE volume took about three minutes for 2.69 M entries. Journal
+entries from before the change show starts killed at 90 s and restarted in a
+loop; 300 s was still not enough under the FUSE cold path.
 
 ## Porting plan (what would need to change)
 

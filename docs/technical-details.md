@@ -139,6 +139,8 @@ Disk mode is active on Linux, and its initial scan streams: the walk feeds entri
 
 Linux still re-walks every volume on each service start. `checkpoints_can_resume()` returns false on Linux because fanotify keeps no persistent event history, while Windows USN checkpoints and macOS FSEvents can resume. The streaming scan keeps that restart cheap in RAM but does not remove the walk.
 
+Startup is observable even though the socket is not: the walk logs `scanning <volume>` plus heartbeats, sends the same text to `systemctl status` via `sd_notify(STATUS=...)`, writes `/run/instant-file-search/scan.json` every 2 s (`state`, `volume`, `entries`, timestamps), and `search_status` returns it as `scan`. The unit sets `TimeoutStartSec=900`; the default 90 s can kill a cold-cache walk (an `ntfs-3g`/FUSE volume is the worst case) and restart it in a loop.
+
 Install from source on a Linux box with the command shown in Start Here. The script builds both binaries, installs them under `/usr/local/lib/instant-file-search/`, installs the systemd unit, starts the service, and registers the MCP client with OpenCode (including the OMO sub-agent `mcps` patch).
 
 See `build-linux.md` and `linux-port-plan.md` for details and known gaps.

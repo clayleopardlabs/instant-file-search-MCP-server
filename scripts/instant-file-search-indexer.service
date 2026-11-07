@@ -22,10 +22,11 @@ After=local-fs.target
 [Service]
 Type=notify
 # A cold-cache walk of a large filesystem takes longer than systemd's default
-# 90 s start timeout (measured 81 s for 1.63 M entries on NVMe; older logs show
+# 90 s start timeout (81 s warm for 1.63 M entries; a cold ntfs-3g/FUSE volume
+# can take many minutes), and older logs show
 # starts that were killed at 90 s and then restarted in a loop). Allow a full
 # rescan before giving up.
-TimeoutStartSec=300
+TimeoutStartSec=900
 ExecStart=/usr/local/lib/instant-file-search/instant-file-search-indexer serve
 EnvironmentFile=-/etc/instant-file-search/indexer.env
 Restart=on-failure

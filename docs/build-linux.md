@@ -55,6 +55,14 @@ The indexer listens on a Unix socket at `/tmp/instant-file-search-indexer.sock`
 `Type=notify`; the indexer sends `READY=1` once the socket is bound and
 `STOPPING` on shutdown.
 
+The unit sets `TimeoutStartSec=900`. A full walk of a large filesystem can
+outlast systemd's default 90 s start timeout, especially on a cold `ntfs-3g` /
+FUSE mount where metadata lookups are userspace round trips. While the walk
+runs, the indexer publishes progress to `/run/instant-file-search/scan.json`
+(world-readable, rewritten every 2 s), reports the same text as the unit's
+`systemctl status` message, and logs a heartbeat to the journal; the MCP
+`search_status` tool returns the file as `scan`.
+
 Manual run (foreground, for diagnostics):
 
 ```sh

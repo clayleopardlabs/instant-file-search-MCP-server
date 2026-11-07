@@ -67,6 +67,25 @@ filesystem map. Runs as the Windows service `instant-file-search-indexer`
   `\\.\pipe\instant-file-search-indexer`, newline-terminated responses,
   keep-alive until the client disconnects. The SYSTEM-created pipe grants
   Everyone read/write via a security descriptor so unprivileged clients work.
+- **Linux backend:** the indexer runs as the systemd unit
+  `instant-file-search-indexer.service` and serves the same JSON protocol over
+  `/tmp/instant-file-search-indexer.sock` instead of a named pipe. Enumeration is
+  a `getdents64` + `statx` walk (`walk.rs`) rather than a raw `$MFT` read, and
+  change tracking is a fanotify `FAN_MARK_FILESYSTEM` watcher (`fanotify.rs`)
+  rather than the USN journal. Because fanotify keeps no durable history there
+  is no resumable checkpoint, so every start performs a full walk. With the
+  default disk backend that walk streams entries straight into one SQLite
+  transaction (`walk::scan_volume_into` -> `FileIndex::replace_streaming` ->
+  `DiskIndex::replace_streaming`) instead of building a corpus-sized `Vec`,
+  which is what keeps startup RSS near 10-35 MB on a 1.6-2.7 M-entry tree; the
+  fanotify queue-overflow recovery keeps the collecting `build_index()` path so
+  it can swap the index atomically while queries are served. The socket only
+  starts listening after the walk, so the walk publishes its progress to
+  `/run/instant-file-search/scan.json`, as `sd_notify(STATUS=...)` text, and as
+  log heartbeats; `search_status` returns that file as `scan`. The unit sets
+  `TimeoutStartSec=900` because a cold FUSE volume can make the walk outlast
+  systemd's default 90 s. A `fuseblk` mount (e.g. `ntfs-3g`) cannot be marked,
+  so changes there are only picked up by the next full scan.
 - **Service stop:** a stop flag is threaded into the serve loop and a wakeup
   client connection pokes the blocking `ConnectNamedPipe` so the service stops
   promptly.

@@ -49,7 +49,8 @@ their current behavior unless the user explicitly changes a setting.
   10 MiB figure measures a synthetic corpus whose build input had already been
   dropped; it is not the memory cost of an initial scan of a real filesystem.
   Disk queries are roughly 2.2 to 6.6 times slower in that workload.
-- The current regression suite has 53 passing indexer tests.
+- The current regression suite has 93 passing indexer tests (plus the MCP
+  server's own tests).
 
 ### Initial-scan memory on Linux (measured 2026-11-07)
 

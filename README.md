@@ -251,9 +251,9 @@ Super duper fast mode is useful though when you have an old or slow hard drive o
 ### Speed and RAM usage
 
 Here's what we saw with 500,000 test files on Windows. RAM saving mode used
-about 50x less RAM, 10 MiB instead of 488 MiB. Finding one filename took
-about twice as long, 87 ms instead of 38 ms. Some broad searches were faster
-in RAM saving mode.
+about 50x less RAM, 10 MiB instead of 488 MiB after indexing. Finding one
+filename took about twice as long, 87 ms instead of 38 ms. Some broad searches
+were faster in RAM saving mode.
 
 | What we measured | Super duper fast mode | RAM saving mode |
 |------------------|------------:|----------:|
@@ -263,7 +263,7 @@ in RAM saving mode.
 | Find `*.rs` files | 515 ms | 340 ms |
 | Find a module name | 36 ms | 92 ms |
 
-Those RAM numbers are measured after the index is built. On Linux the first scan is the peak: a machine with 1.6 million indexed files measured about 710 MB of RSS for the indexer service, 1.19 GB at its high-water mark, and that was with disk-backed RAM saving mode already active. In RAM saving mode the Linux scan now streams entries into the database as it discovers them instead of collecting every entry in memory first. On the same 1.6 million file corpus the scan peak measured about 10 MiB, and a real full walk of that machine peaked at 11.5 MiB, with build time and query results unchanged. These are single-machine numbers, not a capacity promise; the [Linux support notes](docs/linux-support.md) have the details.
+Those are Windows figures, measured after the index is built, with a synthetic 500,000-file corpus. They describe steady state, not the first scan, and the 10 MiB disk-mode number does not reproduce on Linux (a 500,000-entry Linux build measured 132 MiB after build, 228 MiB at peak). On Linux the first scan used to be the real problem: a machine with 1.6 million indexed files measured about 710 MB of RSS for the indexer service, 1.19 GB at its high-water mark, and that was with disk-backed RAM saving mode already active, because the scan collected every entry in memory before writing it. RAM saving mode now streams entries into the database as it discovers them: on the same 1.6 million file corpus the scan peak measured about 10 MiB, a real full walk of that machine peaked at 11.5 MiB, and a later restart with 2.69 million entries settled at about 31 MB steady (that figure includes the change-event ring buffer and the content cache). Build time and query results were unchanged. These are single-machine numbers, not a capacity promise; the [Linux support notes](docs/linux-support.md) have the details.
 
 
 As you can see, aside from the first index build which only happens once there's no real reason to use the super duper fast mode. Unless... you're going to be running literally hundreds of thousands of searches. And since every search is millions of files in milliseconds, you'd basically only want the super duper fast mode if you're the NSA. Or you have an old, slow harddrive:
