@@ -242,6 +242,33 @@ impl ContentStore {
         is_text_file(path)
     }
 
+    /// Store several files at once, returning how many were kept.
+    ///
+    /// The disk backend writes a whole batch in one transaction with a single
+    /// budget read, because a transaction and a `SUM(byte_count)` per file made
+    /// filling the cache quadratic (#16). The memory backend just loops, since
+    /// its inserts are already cheap.
+    pub fn insert_batch(&self, entries: &[(String, Vec<u8>)]) -> usize {
+        if !self.enabled || entries.is_empty() {
+            return 0;
+        }
+        if let Some(disk) = &self.disk {
+            return match disk.content_insert_batch(entries) {
+                Ok(count) => count,
+                Err(error) => {
+                    tracing::warn!("disk content batch insert failed: {error:#}");
+                    0
+                }
+            };
+        }
+        let mut count = 0;
+        for (path, data) in entries {
+            self.insert(path, data);
+            count += 1;
+        }
+        count
+    }
+
     /// Store content for a path (path + data already validated eligible).
     /// Keys are canonical (NFC + Unicode-lower on macOS) so they match
     /// `IndexedFile::lower_path` exactly.

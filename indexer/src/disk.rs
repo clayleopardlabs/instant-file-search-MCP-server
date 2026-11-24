@@ -149,50 +149,75 @@ impl DiskIndex {
     }
 
     pub fn content_insert(&self, path: &str, data: &[u8]) -> Result<bool> {
-        if data.is_empty() {
-            return Ok(false);
+        Ok(self.content_insert_batch(&[(path.to_string(), data.to_vec())])? == 1)
+    }
+
+    /// Store several files in a single transaction.
+    ///
+    /// This used to be one `content_insert` call per file, and each of those
+    /// opened its own transaction and ran
+    /// `SELECT COALESCE(SUM(byte_count), 0) FROM file_contents`, a full scan of
+    /// the content table, to check the budget. On a table holding hundreds of
+    /// MB that is O(n) per file, so filling the content cache was quadratic and
+    /// pinned a core at roughly 40 files per second (#16).
+    ///
+    /// One transaction per batch with the byte total read once and maintained in
+    /// memory removes both costs. The budget is still enforced entry by entry, so
+    /// a batch stops at the first entry that would overflow and keeps what fits.
+    pub fn content_insert_batch(&self, entries: &[(String, Vec<u8>)]) -> Result<usize> {
+        if entries.is_empty() {
+            return Ok(0);
         }
-        let key = crate::platform::canonical_key(path);
-        let data = data[..data.len().min(crate::content::MAX_FILE_BYTES as usize)].to_ascii_lowercase();
         let budget = disk_content_budget();
         let mut conn = self.conn.lock().unwrap();
         let tx = conn.transaction()?;
-        let old_bytes: usize = tx
-            .query_row(
-                "SELECT byte_count FROM file_contents WHERE path=?1",
-                params![key],
-                |r| r.get::<_, i64>(0),
-            )
-            .optional()?
-            .unwrap_or(0)
-            .max(0) as usize;
-        let used: usize = tx
+        let mut used: usize = tx
             .query_row("SELECT COALESCE(SUM(byte_count), 0) FROM file_contents", [], |r| {
                 r.get::<_, i64>(0)
             })?
             .max(0) as usize;
-        if used.saturating_sub(old_bytes).saturating_add(data.len()) > budget {
-            tx.commit()?;
-            return Ok(false);
+        let mut inserted = 0usize;
+        for (path, data) in entries {
+            if data.is_empty() {
+                continue;
+            }
+            let key = crate::platform::canonical_key(path);
+            let data = data[..data.len().min(crate::content::MAX_FILE_BYTES as usize)]
+                .to_ascii_lowercase();
+            let old_bytes: usize = tx
+                .query_row(
+                    "SELECT byte_count FROM file_contents WHERE path=?1",
+                    params![key],
+                    |r| r.get::<_, i64>(0),
+                )
+                .optional()?
+                .unwrap_or(0)
+                .max(0) as usize;
+            let prospective = used.saturating_sub(old_bytes).saturating_add(data.len());
+            if prospective > budget {
+                break;
+            }
+            tx.execute("DELETE FROM file_contents WHERE path=?1", params![key])?;
+            let source_modified: i64 = tx
+                .query_row(
+                    "SELECT modified FROM files WHERE path_key=?1",
+                    params![key],
+                    |r| r.get(0),
+                )
+                .unwrap_or(0);
+            let indexed_at = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs() as i64;
+            tx.execute(
+                "INSERT INTO file_contents(path,body,byte_count,indexed_at,source_modified) VALUES(?1,?2,?3,?4,?5)",
+                params![key, data, data.len() as i64, indexed_at, source_modified],
+            )?;
+            used = prospective;
+            inserted += 1;
         }
-        tx.execute("DELETE FROM file_contents WHERE path=?1", params![key])?;
-        let source_modified: i64 = tx
-            .query_row(
-                "SELECT modified FROM files WHERE path_key=?1",
-                params![key],
-                |r| r.get(0),
-            )
-            .unwrap_or(0);
-        let indexed_at = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs() as i64;
-        tx.execute(
-            "INSERT INTO file_contents(path,body,byte_count,indexed_at,source_modified) VALUES(?1,?2,?3,?4,?5)",
-            params![key, data, data.len() as i64, indexed_at, source_modified],
-        )?;
         tx.commit()?;
-        Ok(true)
+        Ok(inserted)
     }
 
     pub fn content_remove(&self, path: &str) -> Result<()> {
@@ -1125,6 +1150,38 @@ mod tests {
                 .any(|detail| detail.contains("sqlite_autoindex_files_1")),
             "the candidate page must range-scan the path index, got {plan:?}"
         );
+
+        drop(index);
+        remove_index_files(&path);
+    }
+
+    #[test]
+    fn content_insert_batch_stores_and_replaces_rows() {
+        let path = test_path();
+        let index = DiskIndex::open(path.clone()).unwrap();
+        index
+            .replace(vec![
+                IndexedFile::new("/work/a.rs".into(), 5, 1, 2, 3, false, 100),
+                IndexedFile::new("/work/b.rs".into(), 7, 1, 2, 3, false, 101),
+            ])
+            .unwrap();
+
+        let batch = vec![
+            ("/work/a.rs".to_string(), b"hello".to_vec()),
+            ("/work/b.rs".to_string(), b"goodbye".to_vec()),
+            ("/work/orphan.rs".to_string(), b"orphan".to_vec()),
+        ];
+        assert_eq!(index.content_insert_batch(&batch).unwrap(), 3);
+        let (rows, bytes) = index.content_stats().unwrap();
+        assert_eq!(rows, 3, "every entry in the batch should be stored");
+        assert_eq!(bytes, 5 + 7 + 6);
+
+        // Re-inserting a known path replaces its row instead of adding one.
+        let again = vec![("/work/a.rs".to_string(), b"hi".to_vec())];
+        assert_eq!(index.content_insert_batch(&again).unwrap(), 1);
+        let (rows, bytes) = index.content_stats().unwrap();
+        assert_eq!(rows, 3, "replacing must not duplicate the row");
+        assert_eq!(bytes, 2 + 7 + 6);
 
         drop(index);
         remove_index_files(&path);
