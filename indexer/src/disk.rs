@@ -231,15 +231,39 @@ impl DiskIndex {
             != 0)
     }
 
-    pub fn content_candidates(&self, after: &str, limit: usize) -> Result<Vec<(String, u64)>> {
-        let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare(
-            "SELECT files.path,files.size FROM files
+    /// SQL for one page of content-index candidates.
+    ///
+    /// `files` carries the `path` primary key plus filter indexes on `is_dir`,
+    /// `size` and `excluded`. Given the extra predicates, SQLite prefers a
+    /// filter index and then satisfies `ORDER BY files.path` with a TEMP
+    /// B-TREE, so every page re-sorts the whole table. The content build pages
+    /// through the entire table, which makes it quadratic: measured at 0.71 s
+    /// per 512-row page over 1.86 M rows against 0.0004 s once the cursor range
+    /// and the ordering share the path index. Pinning the index keeps a page a
+    /// single range scan.
+    fn candidate_sql(pin_path_index: bool) -> String {
+        let index = if pin_path_index {
+            " INDEXED BY sqlite_autoindex_files_1"
+        } else {
+            ""
+        };
+        format!(
+            "SELECT files.path,files.size FROM files{index}
              LEFT JOIN file_contents fc ON fc.path=files.path_key AND fc.source_modified=files.modified
              WHERE files.path > ?1 AND files.is_dir=0 AND files.size > 0 AND files.size <= ?2 AND files.excluded=0
                AND fc.path IS NULL
-             ORDER BY files.path LIMIT ?3",
-        )?;
+             ORDER BY files.path LIMIT ?3"
+        )
+    }
+
+    pub fn content_candidates(&self, after: &str, limit: usize) -> Result<Vec<(String, u64)>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = match conn.prepare(&Self::candidate_sql(true)) {
+            Ok(stmt) => stmt,
+            // If the implicit primary-key index is ever renamed, keep working
+            // with the unpinned plan instead of failing the content build.
+            Err(_) => conn.prepare(&Self::candidate_sql(false))?,
+        };
         let rows = stmt.query_map(
             params![after, crate::content::MAX_FILE_BYTES as i64, limit as i64],
             |row| Ok((row.get(0)?, row.get::<_, i64>(1)? as u64)),
@@ -1054,6 +1078,56 @@ mod tests {
         let _ = std::fs::remove_file(path);
         let _ = std::fs::remove_file(path.with_extension("sqlite3-wal"));
         let _ = std::fs::remove_file(path.with_extension("sqlite3-shm"));
+    }
+
+    #[test]
+    fn content_candidates_pages_by_the_path_index_without_sorting() {
+        let path = test_path();
+        let index = DiskIndex::open(path.clone()).unwrap();
+        let entries: Vec<_> = (0..8_000)
+            .map(|i| {
+                IndexedFile::new(
+                    format!("/work/src/file{i}.rs"),
+                    10,
+                    1,
+                    2,
+                    3,
+                    false,
+                    10_000 + i as u64,
+                )
+            })
+            .collect();
+        index.replace(entries).unwrap();
+
+        let plan: Vec<String> = {
+            let conn = index.conn.lock().unwrap();
+            let mut stmt = conn
+                .prepare(&format!(
+                    "EXPLAIN QUERY PLAN {}",
+                    DiskIndex::candidate_sql(true)
+                ))
+                .unwrap();
+            let rows = stmt
+                .query_map(
+                    params!["", crate::content::MAX_FILE_BYTES as i64, 512i64],
+                    |row| row.get::<_, String>(3),
+                )
+                .unwrap();
+            rows.collect::<rusqlite::Result<Vec<_>>>().unwrap()
+        };
+
+        assert!(
+            !plan.iter().any(|detail| detail.contains("TEMP B-TREE")),
+            "the candidate page must not sort, got {plan:?}"
+        );
+        assert!(
+            plan.iter()
+                .any(|detail| detail.contains("sqlite_autoindex_files_1")),
+            "the candidate page must range-scan the path index, got {plan:?}"
+        );
+
+        drop(index);
+        remove_index_files(&path);
     }
 
     #[test]
