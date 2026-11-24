@@ -100,6 +100,14 @@ Linux:
 sudo bash scripts/install-linux.sh
 ```
 
+Invoke it through `bash`: the script is not executable in git, so `sudo
+./scripts/install-linux.sh` fails with `Permission denied`. If `sudo` resets
+`PATH` and your toolchain is in `~/.cargo/bin`, pass it through:
+
+```sh
+sudo env "PATH=$PATH" bash scripts/install-linux.sh
+```
+
 The automatic installer defaults to RAM saving mode and keeps content search
 enabled.
 

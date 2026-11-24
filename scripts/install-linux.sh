@@ -16,8 +16,10 @@
 #   - python3 (for comment-aware JSONC config patching)
 #   - run as root (sudo), or with sudo available
 #
-# Usage:
-#   sudo ./install-linux.sh [--index-mode memory|disk] [--content-mode auto|off|memory|disk] [--no-register] [--dry-run]
+# Usage (the file is not executable in git, so invoke it through bash; if
+# `sudo` resets PATH, pass the caller's PATH so cargo is reachable):
+#   sudo bash ./install-linux.sh [--index-mode memory|disk] [--content-mode auto|off|memory|disk] [--no-register] [--dry-run]
+#   sudo env "PATH=$PATH" bash ./install-linux.sh ...   # when cargo lives in ~/.cargo/bin
 
 set -euo pipefail
 
@@ -61,7 +63,7 @@ action() { if [ "$DRY_RUN" -eq 1 ]; then printf 'DRY RUN: %s\n' "$*"; fi }
 
 # ---- 0. Prerequisites -------------------------------------------------------
 if [ "$DRY_RUN" -eq 0 ] && [ "$(id -u)" -ne 0 ]; then
-    echo "error: run as root (sudo ./install-linux.sh)" >&2
+    echo "error: run as root (sudo bash ./scripts/install-linux.sh)" >&2
     exit 1
 fi
 
