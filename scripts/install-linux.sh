@@ -97,7 +97,7 @@ fi
 
 # ---- 3. systemd unit ---------------------------------------------------------
 step "Installing systemd unit $UNIT_NAME"
-action "write /etc/instant-file-search/indexer.env (index=$INDEX_MODE content=$CONTENT_MODE); cp $UNIT_SRC /etc/systemd/system/$UNIT_NAME && systemctl daemon-reload && systemctl enable --now $UNIT_NAME"
+action "write /etc/instant-file-search/indexer.env (index=$INDEX_MODE content=$CONTENT_MODE); cp $UNIT_SRC /etc/systemd/system/$UNIT_NAME && systemctl daemon-reload && systemctl enable $UNIT_NAME && systemctl restart $UNIT_NAME"
 if [ "$DRY_RUN" -eq 0 ]; then
     [ -f "$UNIT_SRC" ] || { echo "error: unit file missing: $UNIT_SRC" >&2; exit 1; }
     install -d -m 0755 "$(dirname "$ENV_FILE")"
@@ -108,7 +108,11 @@ if [ "$DRY_RUN" -eq 0 ]; then
     chmod 0644 "$ENV_FILE"
     cp "$UNIT_SRC" "/etc/systemd/system/$UNIT_NAME"
     systemctl daemon-reload
-    systemctl enable --now "$UNIT_NAME"
+    # restart, not `enable --now`: `--now` starts a stopped unit but leaves a
+    # running one alone, so an upgrade would deploy new binaries that only take
+    # effect at the next boot. restart covers both cases.
+    systemctl enable "$UNIT_NAME"
+    systemctl restart "$UNIT_NAME"
     echo "Service status:"
     systemctl --no-pager --full status "$UNIT_NAME" || true
 fi

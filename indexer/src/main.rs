@@ -252,8 +252,14 @@ fn serve_with_stop(stop: Arc<std::sync::atomic::AtomicBool>) -> Result<()> {
             let started = std::time::Instant::now();
             let mut count = 0usize;
             if fill_index.storage_mode() == "disk" {
+                // Write the cache in batches: one transaction and one budget read
+                // per batch instead of per file (#16). 64 files is at most 16 MB
+                // of buffered content, well under the 256 KB per-file cap.
+                const CONTENT_BATCH: usize = 64;
                 let mut after = String::new();
-                loop {
+                let mut batch: Vec<(String, Vec<u8>)> = Vec::new();
+                let mut budget_full = false;
+                while !budget_full {
                     let candidates = fill_index.content_candidates(&after, 512);
                     if candidates.is_empty() {
                         break;
@@ -264,10 +270,23 @@ fn serve_with_stop(stop: Arc<std::sync::atomic::AtomicBool>) -> Result<()> {
                             continue;
                         }
                         if let Ok(data) = std::fs::read(&path) {
-                            fill_content.insert(&path, &data);
-                            count += 1;
+                            batch.push((path, data));
+                            if batch.len() >= CONTENT_BATCH {
+                                let written = fill_content.insert_batch(&batch);
+                                count += written;
+                                // A full batch that stored nothing means the budget
+                                // is exhausted, so stop walking the whole table.
+                                budget_full = written == 0;
+                                batch.clear();
+                                if budget_full {
+                                    break;
+                                }
+                            }
                         }
                     }
+                }
+                if !batch.is_empty() {
+                    count += fill_content.insert_batch(&batch);
                 }
             } else {
                 let mut candidates = Vec::new();
