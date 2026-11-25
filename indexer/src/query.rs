@@ -1603,8 +1603,14 @@ fn date_match(op: &DateOp, value: i64, ts: i64) -> bool {
 /// helpers serve macOS paths.
 fn path_excluded(lp: &[u8], p: &[u8]) -> bool {
     if p.contains(&b'\\') || p.contains(&b'/') {
+        // A part that already ends with a separator is a root, so its descendants
+        // continue with a name character. The boundary check only applies to a
+        // part that ends in a name (#13).
+        let part_is_root = matches!(p.last(), Some(b'\\') | Some(b'/'));
         starts_with_ci_bytes(lp, p)
-            && (lp.len() == p.len() || matches!(lp.get(p.len()), Some(b'\\') | Some(b'/')))
+            && (part_is_root
+                || lp.len() == p.len()
+                || matches!(lp.get(p.len()), Some(b'\\') | Some(b'/')))
     } else {
         dir_name_match(lp, p)
     }
@@ -1737,7 +1743,15 @@ impl<'a> EntryFilter<'a> {
         if !self.scope_lower.is_empty() {
             let lp = entry.lower_path.as_str();
             if starts_with_ci(lp, &self.scope_lower) {
-                let ok = lp.len() == self.scope_lower.len()
+                // A scope that already ends with a separator is a root, and every
+                // path below it continues with a name character, not a separator.
+                // Requiring a separator there rejected every descendant, so
+                // `path: "/"` matched almost nothing (#13).
+                let scope_is_root = self.scope_lower.ends_with('\\')
+                    || self.scope_lower.ends_with('/')
+                    || self.scope_lower.ends_with(':');
+                let ok = scope_is_root
+                    || lp.len() == self.scope_lower.len()
                     || matches!(
                         lp.as_bytes().get(self.scope_lower.len()),
                         Some(b'\\') | Some(b'/') | Some(b':')

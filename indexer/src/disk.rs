@@ -822,20 +822,32 @@ fn candidate_plan(opts: &QueryOptions) -> CandidatePlan {
         // so every `path` and `exclude_path` value matched nothing there (#13).
         // `escape_like` runs over the separator too: `/` stays `/`, and `\`
         // becomes `\\`, so the Windows pattern is unchanged.
-        let sep = escape_like(&crate::platform::SEP.to_string());
+        let sep_char = crate::platform::SEP;
+        let sep = escape_like(&sep_char.to_string());
+        // A root scope already ends with the separator ("/" on Unix, "\" on
+        // Windows), and its descendants are matched by `/%`, not `//%`, so it must
+        // not get a second one (#13).
+        let descendant = |scope: &str| {
+            let escaped = escape_like(scope);
+            if scope.ends_with(sep_char) {
+                format!("{escaped}%")
+            } else {
+                format!("{escaped}{sep}%")
+            }
+        };
         if let Some(scope) = ascii_path_key(opts.path.as_deref()) {
-            let escaped = escape_like(&scope);
+            let pattern = descendant(&scope);
             clauses.push("(path_key = ? OR path_key LIKE ? ESCAPE '\\')".to_string());
             params.push(rusqlite::types::Value::Text(scope));
-            params.push(rusqlite::types::Value::Text(format!("{escaped}{sep}%")));
+            params.push(rusqlite::types::Value::Text(pattern));
         }
         if let Some(exclude) = opts.exclude_path.as_deref() {
             let mut excluded = Vec::new();
             for part in exclude.split(';').filter_map(|part| ascii_path_key(Some(part.trim()))) {
-                let escaped = escape_like(&part);
+                let pattern = descendant(&part);
                 excluded.push("(path_key = ? OR path_key LIKE ? ESCAPE '\\')".to_string());
                 params.push(rusqlite::types::Value::Text(part));
-                params.push(rusqlite::types::Value::Text(format!("{escaped}{sep}%")));
+                params.push(rusqlite::types::Value::Text(pattern));
             }
             if !excluded.is_empty() {
                 clauses.push(format!("NOT ({})", excluded.join(" OR ")));
@@ -1216,14 +1228,16 @@ mod tests {
     fn path_option_scopes_the_disk_backend_on_every_platform() {
         // Regression for #13: the descendant LIKE pattern hardcoded a backslash,
         // so `path` and `exclude_path` matched nothing on Linux and macOS. Build
-        // the fixture with the platform separator so the assertion means
-        // something on every target.
-        let native = |parts: &[&str]| parts.join(&crate::platform::SEP.to_string());
-        let root = native(&["work", "src"]);
+        // the fixture with the platform separator and from a rooted path so the
+        // root-scope case is covered too.
+        let sep = crate::platform::SEP.to_string();
+        let rooted = |parts: &[&str]| format!("{sep}{}", parts.join(&sep));
+        let root = sep.clone();
+        let scope = rooted(&["work", "src"]);
         let files = vec![
-            IndexedFile::new(native(&["work", "src", "a.rs"]), 10, 1, 2, 3, false, 1),
-            IndexedFile::new(native(&["work", "src", "deep", "b.rs"]), 10, 1, 2, 3, false, 2),
-            IndexedFile::new(native(&["work", "other", "c.rs"]), 10, 1, 2, 3, false, 3),
+            IndexedFile::new(rooted(&["work", "src", "a.rs"]), 10, 1, 2, 3, false, 1),
+            IndexedFile::new(rooted(&["work", "src", "deep", "b.rs"]), 10, 1, 2, 3, false, 2),
+            IndexedFile::new(rooted(&["work", "other", "c.rs"]), 10, 1, 2, 3, false, 3),
         ];
         let path = test_path();
         let index = DiskIndex::open(path.clone()).unwrap();
@@ -1231,7 +1245,7 @@ mod tests {
 
         let scoped = index.search(&QueryOptions {
             query: "*.rs".into(),
-            path: Some(root.clone()),
+            path: Some(scope.clone()),
             max_results: 100,
             ..Default::default()
         });
@@ -1240,9 +1254,22 @@ mod tests {
             "path must scope the candidate set, not empty it"
         );
 
+        // The root scope ends with the separator already, so its pattern is `/%`
+        // and must still select everything below it.
+        let at_root = index.search(&QueryOptions {
+            query: "*.rs".into(),
+            path: Some(root),
+            max_results: 100,
+            ..Default::default()
+        });
+        assert_eq!(
+            at_root.total, 3,
+            "a root scope must not build a `//%` pattern"
+        );
+
         let excluded = index.search(&QueryOptions {
             query: "*.rs".into(),
-            exclude_path: Some(root),
+            exclude_path: Some(scope),
             max_results: 100,
             ..Default::default()
         });
