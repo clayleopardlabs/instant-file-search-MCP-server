@@ -674,6 +674,25 @@ fn open_and_migrate(path: &Path) -> Result<Connection> {
         tx.commit()?;
     }
 
+    // `file_contents(byte_count)` backs the budget read in the content cache fill.
+    // Without it `SELECT SUM(byte_count) FROM file_contents` scans every row,
+    // including the `body` blobs, so the read costs O(table) and one per batch
+    // still made the fill quadratic (#19). The index makes it a covering scan,
+    // measured at 0.0006 s against 0.037 s on a 195 MB table.
+    //
+    // Created here rather than in a migration so databases already at
+    // SCHEMA_VERSION pick it up on the next start.
+    let has_contents: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='file_contents')",
+        [],
+        |row| row.get(0),
+    )?;
+    if has_contents {
+        conn.execute_batch(
+            "CREATE INDEX IF NOT EXISTS file_contents_bytes ON file_contents(byte_count);",
+        )?;
+    }
+
     let check: String = conn.query_row("PRAGMA quick_check(1)", [], |row| row.get(0))?;
     if check != "ok" {
         anyhow::bail!("sqlite integrity check failed: {check}");
@@ -1230,6 +1249,34 @@ mod tests {
         assert_eq!(
             excluded.total, 1,
             "exclude_path must drop the scoped subtree"
+        );
+
+        drop(index);
+        remove_index_files(&path);
+    }
+
+    #[test]
+    fn content_budget_read_uses_a_covering_index() {
+        let path = test_path();
+        let index = DiskIndex::open(path.clone()).unwrap();
+        // Enough rows that the planner prefers the covering index to a full scan
+        // of the table, which would have to read the bodies too.
+        let batch: Vec<(String, Vec<u8>)> = (0..4_000)
+            .map(|i| (format!("/work/file{i}.txt"), vec![b'x'; 512]))
+            .collect();
+        assert_eq!(index.content_insert_batch(&batch).unwrap(), 4_000);
+
+        let plan: Vec<String> = {
+            let conn = index.conn.lock().unwrap();
+            let mut stmt = conn
+                .prepare("EXPLAIN QUERY PLAN SELECT COALESCE(SUM(byte_count), 0) FROM file_contents")
+                .unwrap();
+            let rows = stmt.query_map([], |row| row.get::<_, String>(3)).unwrap();
+            rows.collect::<rusqlite::Result<Vec<_>>>().unwrap()
+        };
+        assert!(
+            plan.iter().any(|detail| detail.contains("file_contents_bytes")),
+            "the budget read must use the covering index, got {plan:?}"
         );
 
         drop(index);
