@@ -26,14 +26,18 @@ before now return the right one.
   - the batched budget read still scanned every blob, so throughput fell as the
     cache grew (#19).
 
-  On the Linux host, against a 1.94 M entry index, the pass went from "still
-  running after 80 minutes, never completed" to 229,569 files and 2.0 GB cached
-  in 42 s, followed by 0% CPU.
+  These three are in shared code, not platform code. They run whenever the index
+  is in disk mode, which is the default on every platform and what both the Linux
+  and Windows installers configure, so this was not a Linux-only defect. Only the
+  measurements are from the Linux host: against a 1.94 M entry index the pass went
+  from "still running after 80 minutes, never completed" to 229,569 files and
+  2.0 GB cached in 42 s, followed by 0% CPU.
 - **`path` and `exclude_path` returned zero rows on Linux and macOS.** The
   descendant LIKE pattern hardcoded a backslash, while `path_key` is
   slash-separated off Windows, so the pattern demanded a character that never
   exists. The separator now comes from `platform::SEP` through `escape_like`,
-  which leaves the Windows pattern byte-identical (#13).
+  which leaves the Windows pattern byte-identical; Windows was unaffected by this
+  one because the hardcoded backslash was its separator (#13).
 - **A root path scope matched almost nothing.** After the fix above, `path: "/"`
   built a `//%` pattern, and the in-memory boundary check required a separator
   after the scope, so it returned 14 rows instead of 1,399,741. Fixed in the SQL
