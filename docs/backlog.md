@@ -23,12 +23,19 @@ Make both errors. Keep the text short and actionable: name the mistake, show the
 corrected call, stop. An agent should be able to recover from the error alone
 without reading the docs or guessing.
 
-### 2. Content search covers about 10,000 of 3.9 million files (medium)
+### 2. Content search is budget limited, not exhaustive (medium)
 
-The content index is budget limited (2 GB configured, roughly 26 MB used), so
-`content:"..."` queries are near-useless for "find the save file containing X".
-A configuration decision rather than a parser bug, but agents will keep trying to
-use it.
+The content index is capped at 2 GB, so `content:"..."` queries only see the
+files that fit. On the Linux host that cap is 229,569 text files of 3.9 million,
+reached in about 42 s of background indexing. It is a configuration decision
+rather than a parser bug, but agents will keep trying to use it for "find the
+save file containing X" and get a false negative when the file is outside the
+cache.
+
+Before 1.0.23 the fill never completed on a large disk-mode index, because the
+candidate walk and the writes were both quadratic (see the closed entries
+below), so real coverage was far lower than the budget allowed and the process
+consumed a core for an hour or more.
 
 ### 3. No way to total an arbitrary list of paths (low)
 
@@ -79,15 +86,46 @@ surface.
 - The scope root was returned as its own child (`9f8f03a`). Excluded.
 - `aggregate_files` reported a different `total` than `count_files` for the same
   query (`25ff9eb`). Both now files-by-default.
+- The disk-mode content-candidate walk re-sorted the whole `files` table for every
+  512-row page, so filling the content cache was quadratic: 0.71 s per page, about
+  3,639 pages, roughly 43 CPU minutes per pass, repeated at every start because
+  `serve()` clears the cache. Pinned the `path` primary-key index, measured
+  0.0006 s per page (#14, `b67360e`).
+- Each content-cache write opened its own transaction and ran
+  `SELECT SUM(byte_count) FROM file_contents`, a full scan of the content table,
+  so the fill managed about 13 to 45 files per second. Writes are batched now, one
+  transaction and one byte-total read per 64 files (#16, `8cd8e8e`).
+- The batched budget read still scanned every blob. A covering index on
+  `file_contents(byte_count)` took the read from 0.0372 s to 0.0006 s on a 195 MB
+  table (#19, `b51f25a`). With all three, the Linux host builds 229,569 files /
+  2.0 GB in 42 s and then idles at 0% CPU; 1.0.22 never finished.
+- `path` and `exclude_path` returned zero rows on Linux and macOS because the
+  descendant LIKE pattern hardcoded a `\` and `path_key` is slash-separated off
+  Windows. The separator now comes from `platform::SEP` through `escape_like`,
+  which leaves the Windows pattern byte-identical (#13, `aa7863c`).
+- A root scope was still wrong after that fix: the pattern came out as `//%`, and
+  the in-memory boundary check demanded a separator after the scope, so
+  `path: "/"` returned 14 rows instead of 1,399,741. Fixed in the SQL builder, the
+  entry filter and `path_excluded` (#13 follow-up, `e8af553`).
+- The Linux installer deployed new binaries but left a running service alone,
+  because `systemctl enable --now` does not restart an active unit, so an upgrade
+  only took effect at the next boot. It now runs `enable` then `restart`
+  (`8cd8e8e`).
 
 ---
 
 ## Deployment state
 
-The Linux host runs the **1.0.22** pair (installed 2026-11-07): MCP server and
+The Linux host runs the **1.0.23** pair (installed 2026-11-24): MCP server and
 indexer both in `/usr/local/lib/instant-file-search/`, service
 `instant-file-search-indexer.service`, and `search_status` reporting matching
-versions 1.0.22.
+versions 1.0.23.
+
+That install is built from source by `scripts/install-linux.sh`, not from the
+release assets, so the host is only current once that script has run since the
+last merge. Confirm with `search_status`: the version comes from the binary, so a
+running process older than the installed file still reports the version it was
+built from.
 
 On Windows the deployment history was **1.0.19** running with **1.0.20** staged
 but not live, because swapping the indexer service needs elevation:

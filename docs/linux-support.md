@@ -218,10 +218,27 @@ the same files again and produced more events: two threads shared the work
 was the indexer's own files. Events for those paths are now dropped before they
 reach the index or the change ring buffer.
 
-While the loop was active a content-indexing pass was still running after
-80 minutes; it shares the same SQLite mutex, so it was likely competing with the
-loop, but it was not separately diagnosed. If content indexing is still slow
-after this fix, that is a separate follow-up.
+**Content cache fill: the third quadratic loop.** The previous paragraph left this
+open; it is now diagnosed and fixed. The fill was slow for three independent
+reasons, each superlinear in the size of the index or the cache:
+
+1. The candidate walk re-sorted the whole `files` table for every 512-row page,
+   because the extra predicates made SQLite pick `files_type` and satisfy
+   `ORDER BY files.path` with a TEMP B-TREE instead of range-scanning the `path`
+   primary key. That was 0.71 s per page over 1.86 M rows, about 3,639 pages, so
+   roughly 43 CPU minutes of scanning per pass (#14).
+2. Every stored file opened its own transaction and ran
+   `SELECT SUM(byte_count) FROM file_contents` to enforce the budget, a full scan
+   of the content table per file, which held the fill at 13 to 45 files per
+   second (#16).
+3. Batching removed the per-file cost, but the batched budget read still scanned
+   every blob, so throughput fell as the cache grew (#19).
+
+Fixed in 1.0.23: the candidate page is pinned to the `path` index, writes are
+batched 64 at a time behind one transaction and one budget read, and
+`file_contents(byte_count)` is covered by an index. Measured on the Linux host:
+229,569 files and 2.0 GB cached in 42 s, then 0% CPU. Under 1.0.22 the same pass
+was still running after 80 minutes and never completed.
 
 **Restart still means a full walk on Linux.** `checkpoints_can_resume()` returns
 false unconditionally on Linux (`#[cfg(not(any(windows, target_os = "macos")))]`):
