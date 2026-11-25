@@ -798,11 +798,17 @@ fn candidate_plan(opts: &QueryOptions) -> CandidatePlan {
     let mut params = Vec::new();
 
     if !opts.match_case {
+        // The descendant pattern has to use the platform separator. Hardcoding a
+        // backslash demanded a `\` that never exists in `path_key` off Windows,
+        // so every `path` and `exclude_path` value matched nothing there (#13).
+        // `escape_like` runs over the separator too: `/` stays `/`, and `\`
+        // becomes `\\`, so the Windows pattern is unchanged.
+        let sep = escape_like(&crate::platform::SEP.to_string());
         if let Some(scope) = ascii_path_key(opts.path.as_deref()) {
             let escaped = escape_like(&scope);
             clauses.push("(path_key = ? OR path_key LIKE ? ESCAPE '\\')".to_string());
             params.push(rusqlite::types::Value::Text(scope));
-            params.push(rusqlite::types::Value::Text(format!("{escaped}\\\\%")));
+            params.push(rusqlite::types::Value::Text(format!("{escaped}{sep}%")));
         }
         if let Some(exclude) = opts.exclude_path.as_deref() {
             let mut excluded = Vec::new();
@@ -810,7 +816,7 @@ fn candidate_plan(opts: &QueryOptions) -> CandidatePlan {
                 let escaped = escape_like(&part);
                 excluded.push("(path_key = ? OR path_key LIKE ? ESCAPE '\\')".to_string());
                 params.push(rusqlite::types::Value::Text(part));
-                params.push(rusqlite::types::Value::Text(format!("{escaped}\\\\%")));
+                params.push(rusqlite::types::Value::Text(format!("{escaped}{sep}%")));
             }
             if !excluded.is_empty() {
                 clauses.push(format!("NOT ({})", excluded.join(" OR ")));
@@ -1182,6 +1188,49 @@ mod tests {
         let (rows, bytes) = index.content_stats().unwrap();
         assert_eq!(rows, 3, "replacing must not duplicate the row");
         assert_eq!(bytes, 2 + 7 + 6);
+
+        drop(index);
+        remove_index_files(&path);
+    }
+
+    #[test]
+    fn path_option_scopes_the_disk_backend_on_every_platform() {
+        // Regression for #13: the descendant LIKE pattern hardcoded a backslash,
+        // so `path` and `exclude_path` matched nothing on Linux and macOS. Build
+        // the fixture with the platform separator so the assertion means
+        // something on every target.
+        let native = |parts: &[&str]| parts.join(&crate::platform::SEP.to_string());
+        let root = native(&["work", "src"]);
+        let files = vec![
+            IndexedFile::new(native(&["work", "src", "a.rs"]), 10, 1, 2, 3, false, 1),
+            IndexedFile::new(native(&["work", "src", "deep", "b.rs"]), 10, 1, 2, 3, false, 2),
+            IndexedFile::new(native(&["work", "other", "c.rs"]), 10, 1, 2, 3, false, 3),
+        ];
+        let path = test_path();
+        let index = DiskIndex::open(path.clone()).unwrap();
+        index.replace(files).unwrap();
+
+        let scoped = index.search(&QueryOptions {
+            query: "*.rs".into(),
+            path: Some(root.clone()),
+            max_results: 100,
+            ..Default::default()
+        });
+        assert_eq!(
+            scoped.total, 2,
+            "path must scope the candidate set, not empty it"
+        );
+
+        let excluded = index.search(&QueryOptions {
+            query: "*.rs".into(),
+            exclude_path: Some(root),
+            max_results: 100,
+            ..Default::default()
+        });
+        assert_eq!(
+            excluded.total, 1,
+            "exclude_path must drop the scoped subtree"
+        );
 
         drop(index);
         remove_index_files(&path);
